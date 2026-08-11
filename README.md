@@ -200,6 +200,17 @@ For the public build, the web process has no Docker socket, host filesystem moun
 
 State is stored in Docker named volumes. Closing the browser does not remove queued work, attachments, unsent composer drafts, or archived conversations.
 
+## Host mode without Docker
+
+Codex Web can also run directly on the host as root. In this mode every machine
+user is a tenant: tasks run under that user's Unix identity with
+`danger-full-access`, and `CODEX_HOME` points at the user's real `~/.codex`, so
+their global skills and host tools (for example Caddy/frp publishing) work as
+they do in a normal local Codex session. `add-tenant.mjs` creates missing
+system users (copying a `.codex` template) and reuses existing users' own
+`~/.codex`. See [Host mode](docs/DEPLOYMENT.md#host-mode-machine-users-as-tenants)
+for setup and the security trade-offs.
+
 ## Optional voice transcription
 
 Set `DASHSCOPE_API_KEY` and an HTTPS `PUBLIC_BASE_URL` in `.env` to enable the microphone button. The default model is `qwen3.5-omni-plus`; you can override it with `DASHSCOPE_ASR_MODEL`. Microphone access requires a secure browser context.

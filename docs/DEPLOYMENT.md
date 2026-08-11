@@ -65,6 +65,60 @@ model provider credentials and Codex login. Only grant accounts to people you
 trust; the container is not a complete security boundary for hostile
 workloads.
 
+## Host mode: machine users as tenants
+
+For a personal or small-team deployment on one machine, Codex Web can run
+directly on the host without Docker. Every machine user is then a Codex Web
+tenant: tasks run under that user's Unix identity, `CODEX_HOME` points at the
+user's real `~/.codex` (global skills, `config.toml`, credentials and model
+catalogs included), and the agent sandbox is `danger-full-access` so it can use
+host tools such as Caddy/frp publishing. The server process runs as root and
+drops privileges into the tenant user for every task.
+
+Start the service:
+
+```bash
+npm ci
+npm run build
+./scripts/setup-python.sh          # shared Python runtime under data/python
+HOST_MODE=true \
+  APP_USERNAME=<your-system-username> \
+  APP_DISPLAY_NAME="Owner" \
+  node dist-server/server/index.js
+```
+
+`APP_USERNAME` must be a real system account in host mode; that account is the
+owner tenant. Keep `CONTAINERIZED` and `TENANT_WORKER_ISOLATION` unset (host
+mode forces direct execution). `HOST`, `PORT`, `BASE_PATH`, `DATA_ROOT` and
+`TENANT_ROOT` behave as in the container deployment; web data still lives
+under `DATA_ROOT`/`TENANT_ROOT`, while `~/.codex` stays in each user's home.
+
+Add a tenant with one command (root required):
+
+```bash
+sudo node scripts/add-tenant.mjs <username> <password> [display-name]
+```
+
+- If `<username>` has no system account, the script creates it with
+  `useradd --create-home` and copies a `.codex` template into the new home
+  from `$CODEX_TEMPLATE_HOME`, or `/etc/skel/.codex` when the variable is not
+  set. Use a clean template; the copy includes whatever credentials the
+  template contains.
+- If the system user already exists, the script leaves its existing
+  `~/.codex` untouched and the user configures Codex themselves.
+- The script then creates the web account, prepares tenant storage under
+  `TENANT_ROOT/<user-id>`, and prints whether the user's `~/.codex` is
+  configured.
+
+The web UI shows a persistent banner when a user's `~/.codex` is missing
+`config.toml` or usable credentials (`auth.json`, `rightcode_auth.json`, or an
+inline `experimental_bearer_token` in `config.toml`), and sending tasks is
+blocked with the same hint until it is configured.
+
+Security trade-off: this mode runs the web service as root and gives each
+tenant full host access under its own Unix identity. Only add users you trust;
+this is not a boundary for hostile workloads.
+
 ## Reverse proxy
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
