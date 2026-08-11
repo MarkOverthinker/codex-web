@@ -541,7 +541,7 @@ test("production binding permits public bind only when explicitly containerized"
   assert.throws(() => assertProductionConfig({ ...base, host: "0.0.0.0", containerized: false }), /hardened container/);
 });
 
-test("agent options use the live image-capable catalog and default to Sol with extra-high reasoning", (context) => {
+test("agent options use the live catalog (image-capable and text-only) and default to Sol with extra-high reasoning", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-model-options-test-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({
@@ -567,7 +567,7 @@ test("agent options use the live image-capable catalog and default to Sol with e
     ],
   }), "utf8");
   const options = loadAgentOptions(loadConfig({ codexHome: root, codexModel: undefined }));
-  assert.deepEqual(options.models.map((model) => model.id), ["gpt-5.5", "gpt-5.6-sol"]);
+  assert.deepEqual(options.models.map((model) => model.id), ["gpt-5.5", "gpt-5.6-sol", "text-only"]);
   assert.deepEqual(options.models[1].reasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(options.reasoningEfforts.at(-1), { id: "max", label: "最大" });
   assert.deepEqual(options.defaults, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
