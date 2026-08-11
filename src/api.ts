@@ -41,6 +41,8 @@ export type AgentOptions = {
   reasoningEfforts: Array<{ id: ReasoningEffort; label: string }>;
   defaults: { model: string; reasoningEffort: ReasoningEffort };
   selection: AgentSelection;
+  codexConfigured?: boolean;
+  codexConfigHint?: string;
 };
 export type AgentSelection = { model: string; reasoningEffort: ReasoningEffort };
 export type JobEvent = {
