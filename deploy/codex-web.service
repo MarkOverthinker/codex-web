@@ -1,0 +1,25 @@
+[Unit]
+Description=Codex Web (host mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/<user>/repo/codex-web
+Environment=NODE_ENV=production
+# Host mode drops into per-tenant users, so the service runs as root. Include
+# the host Codex CLI directory in PATH and pin it explicitly so tasks find
+# `codex` even when the root environment lacks it:
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/<user>/.nvm/versions/node/v24.12.0/bin
+Environment=CODEX_RUNTIME_PATH=/home/<user>/.nvm/versions/node/v24.12.0/bin/codex
+ExecStart=/usr/bin/node dist-server/server/index.js
+Restart=always
+RestartSec=5
+# Codex Web drains in-flight jobs for up to 30 minutes after SIGTERM; keep the
+# stop timeout long enough to avoid killing active work.
+TimeoutStopSec=1800
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
