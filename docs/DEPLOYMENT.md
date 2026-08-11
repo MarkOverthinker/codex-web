@@ -44,6 +44,27 @@ The web model picker reads `models_cache.json`; when the CLI has not created one
 yet, the supervisor seeds it from the host `models.json` catalog so text-only
 custom providers (for example DeepSeek) appear in the UI.
 
+## Adding tenants
+
+Every tenant shares the host Codex config seeded above, so adding a user is a
+single container command (no image rebuild):
+
+```bash
+docker compose exec app node scripts/add-tenant.mjs <username> <password> [display-name]
+```
+
+The script inserts the user into SQLite, assigns the next tenant Unix UID
+(stored in `DATA_ROOT/tenant-identities.json`), creates the tenant directories,
+applies the same ACLs as startup, and seeds the host Codex config for the new
+tenant. The new user logs in with the username and password at the same web
+URL. Tasks for each tenant run under its own Unix UID with isolated
+`/app/tenants/<user-id>/` state.
+
+Because every tenant shares one host Codex config, all tenants use the same
+model provider credentials and Codex login. Only grant accounts to people you
+trust; the container is not a complete security boundary for hostile
+workloads.
+
 ## Reverse proxy
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
