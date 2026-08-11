@@ -7,7 +7,7 @@ import {
   CornerUpLeft, GripVertical, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile } from "./api";
+import { api, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile } from "./api";
 import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
@@ -115,6 +115,11 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [archivedDialogOpen, setArchivedDialogOpen] = useState(false);
   const [archivedConversations, setArchivedConversations] = useState<Conversation[]>([]);
   const [archivedLoading, setArchivedLoading] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importableSessions, setImportableSessions] = useState<ImportableSession[] | null>(null);
+  const [importSessionsLoading, setImportSessionsLoading] = useState(false);
+  const [importingSessions, setImportingSessions] = useState(false);
+  const [selectedSessionThreadIds, setSelectedSessionThreadIds] = useState<ReadonlySet<string>>(new Set());
   const [chatFontSize, setChatFontSize] = useState(() => normalizeChatFontSize(session.chatFontSize, CHAT_FONT_SIZE_DEFAULT));
   const [fontSizeSaving, setFontSizeSaving] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
@@ -752,6 +757,56 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
+  async function openImportDialog() {
+    setAccountSettingsOpen(false);
+    setImportDialogOpen(true);
+    setError("");
+    if (importableSessions !== null) return;
+    setImportSessionsLoading(true);
+    try {
+      const result = await api.importableSessions();
+      setImportableSessions(result.sessions);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "读取本地历史会话失败");
+    } finally {
+      setImportSessionsLoading(false);
+    }
+  }
+
+  function toggleImportSession(threadId: string) {
+    setSelectedSessionThreadIds((current) => {
+      const next = new Set(current);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }
+
+  async function importSelectedSessions() {
+    if (selectedSessionThreadIds.size === 0) return;
+    setImportingSessions(true);
+    setError("");
+    try {
+      const result = await api.importSessions([...selectedSessionThreadIds]);
+      setImportDialogOpen(false);
+      setSelectedSessionThreadIds(new Set());
+      setImportableSessions(null);
+      await refreshList();
+      if (result.conversations.length > 0) {
+        setSelectedId(result.conversations[0].id);
+        setNotice(result.skipped.length > 0
+          ? `已导入 ${result.conversations.length} 个历史会话，${result.skipped.length} 个已跳过`
+          : `已导入 ${result.conversations.length} 个历史会话`);
+      } else if (result.skipped.length > 0) {
+        setNotice("所选会话无法导入或已经导入");
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "导入历史会话失败");
+    } finally {
+      setImportingSessions(false);
+    }
+  }
+
   async function archiveConversation(conversation: Conversation) {
     setTaskMenu(null);
     try {
@@ -848,6 +903,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭"><X size={19} /></button>
       </div>
       <button className="new-task" onClick={() => void newConversation()}><Plus size={17} />新建任务</button>
+      <button className="import-sessions-button" onClick={() => void openImportDialog()} title="导入本地 Codex 历史会话"><Download size={15} />导入历史会话</button>
       <div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索任务" /></div>
       <div className="conversation-section"><div className="section-label"><span>任务</span><strong>{filtered.length}</strong></div>
         <div className="conversation-list" onScroll={() => setTaskMenu(null)}>
@@ -922,6 +978,31 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
                 <button type="button" className="archived-conversation-restore" aria-label={`恢复 ${conversation.title}`} title="恢复" onClick={() => void restoreConversation(conversation)}><RotateCcw size={16} /></button>
               </div>)}
         </div>
+      </section>
+    </div>, document.body)}
+
+    {importDialogOpen && createPortal(<div className="import-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setImportDialogOpen(false); }}>
+      <section className="import-dialog" role="dialog" aria-modal="true" aria-label="导入历史会话">
+        <header><div><Download size={19} /><strong>导入历史会话</strong></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setImportDialogOpen(false)}><X size={18} /></button></header>
+        <p className="import-dialog-hint">扫描当前执行器的 Codex Home，把尚未接入网页的本地 Codex 会话导入为网页任务。导入后可以继续对话；删除任务时也会清理对应的 Codex 会话文件。</p>
+        <div className="import-session-list">
+          {importSessionsLoading ? <div className="import-session-empty"><LoaderCircle className="spin" size={18} /><span>正在扫描本地会话…</span></div>
+            : importableSessions === null || importableSessions.length === 0
+              ? <div className="import-session-empty"><Download size={18} /><span>没有发现可导入的本地 Codex 会话</span></div>
+              : importableSessions.map((session) => {
+                const selected = selectedSessionThreadIds.has(session.threadId);
+                return <label className={`import-session-row ${selected ? "selected" : ""}`} key={session.threadId}>
+                  <input type="checkbox" checked={selected} onChange={() => toggleImportSession(session.threadId)} />
+                  <span className="import-session-copy"><strong>{session.title}</strong><small>{formatMessageDateTime(session.updatedAt)} · {session.model || "未知模型"}{session.cwd ? ` · ${session.cwd}` : ""} · {formatSize(session.fileSize)}</small></span>
+                </label>;
+              })}
+        </div>
+        <footer className="import-dialog-footer">
+          <button type="button" className="import-dialog-cancel" onClick={() => setImportDialogOpen(false)}>取消</button>
+          <button type="button" className="primary-button" disabled={selectedSessionThreadIds.size === 0 || importingSessions} onClick={() => void importSelectedSessions()}>
+            {importingSessions ? <><LoaderCircle className="spin" size={15} />正在导入…</> : <>导入选中（{selectedSessionThreadIds.size}）</>}
+          </button>
+        </footer>
       </section>
     </div>, document.body)}
 

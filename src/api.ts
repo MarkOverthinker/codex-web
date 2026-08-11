@@ -74,6 +74,16 @@ export type ConversationDetail = {
 };
 export type MessagePage = { hasMore: boolean; nextCursor: string | null };
 export type ConversationMessagesPage = { messages: Message[]; messagePage: MessagePage };
+export type ImportableSession = {
+  threadId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  fileSize: number;
+  cwd: string | null;
+  originator: string | null;
+  model: string | null;
+};
 export type PendingMutationResponse = {
   job?: Job;
   pendingPrompt?: PendingPrompt | null;
@@ -104,6 +114,11 @@ export const api = {
   logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
   conversations: () => request<{ conversations: Conversation[] }>("/conversations"),
   archivedConversations: (query = "") => request<{ conversations: Conversation[] }>(`/conversations/archived${query ? `?query=${encodeURIComponent(query)}` : ""}`),
+  importableSessions: () => request<{ sessions: ImportableSession[] }>("/conversations/importable-sessions"),
+  importSessions: (threadIds: string[]) => request<{ conversations: Conversation[]; skipped: string[] }>(
+    "/conversations/import-sessions",
+    { method: "POST", body: JSON.stringify({ threadIds }) },
+  ),
   agentOptions: () => request<AgentOptions>("/agent-options"),
   updateAgentSelection: (selection: AgentSelection, conversationId?: string) => request<{ selection: AgentSelection }>(
     conversationId ? `/conversations/${conversationId}/agent-selection` : "/agent-selection",
