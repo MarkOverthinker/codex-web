@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -8,16 +9,18 @@ import { loadConfig } from "../dist-server/server/config.js";
 import { AppDatabase } from "../dist-server/server/db.js";
 import { ensureTenant } from "../dist-server/server/paths.js";
 import { assignTenantIdentity } from "../dist-server/server/tenant-identities.js";
+import { isCodexConfigured, resolveSystemUser } from "../dist-server/server/host-mode.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const containerized = process.env.CONTAINERIZED === "true";
 
-if (process.env.CONTAINERIZED !== "true" || !process.env.DATA_ROOT || !process.env.TENANT_ROOT) {
+if (containerized && (!process.env.DATA_ROOT || !process.env.TENANT_ROOT)) {
   console.error("Run this inside the codex-web container, for example:");
   console.error("  docker compose exec app node scripts/add-tenant.mjs <username> <password> [display-name]");
   process.exit(1);
 }
 if (process.getuid?.() !== 0) {
-  console.error("add-tenant must run as root (docker compose exec uses root by default).");
+  console.error("add-tenant must run as root (host mode creates system users; container mode uses docker compose exec).");
   process.exit(1);
 }
 
@@ -29,6 +32,10 @@ if (!username || !password) {
 }
 if (password.length < 12) {
   console.error("Password must be at least 12 characters.");
+  process.exit(1);
+}
+if (!/^[a-z_][a-z0-9._-]{0,31}$/i.test(username)) {
+  console.error("Username must match a valid POSIX account name ([a-z_][a-z0-9._-]{0,31}).");
   process.exit(1);
 }
 
@@ -44,6 +51,7 @@ try {
     console.error(`User "${username}" already exists.`);
     process.exit(1);
   }
+  const hostUser = containerized ? null : addHostSystemUser(username);
   const now = new Date().toISOString();
   const userId = crypto.randomUUID();
   db.createUser({
@@ -56,13 +64,48 @@ try {
     created_at: now,
     updated_at: now,
   });
-  const identity = assignTenantIdentity(userId, username);
-  ensureTenant(config.tenantRoot, userId);
-  console.log(`User created: ${username} (${userId}), tenant uid ${identity.uid}.`);
+
+  if (hostUser) {
+    ensureTenant(config.tenantRoot, userId, { skipCodexHome: true });
+    execFileSync("chown", ["-R", `${hostUser.uid}:${hostUser.gid}`, path.join(config.tenantRoot, userId)]);
+    const codexHome = path.join(hostUser.home, ".codex");
+    const configured = isCodexConfigured(codexHome);
+    console.log(`User created: ${username} (${userId}) as machine user ${username} (uid ${hostUser.uid}).`);
+    console.log(configured
+      ? `Codex config: configured at ${codexHome}.`
+      : `Codex config: NOT configured at ${codexHome}. The user will see a web hint until they configure codex login as ${username}.`);
+  } else {
+    const identity = assignTenantIdentity(userId, username);
+    ensureTenant(config.tenantRoot, userId);
+    console.log(`User created: ${username} (${userId}), tenant uid ${identity.uid}.`);
+  }
 } finally {
   db.close();
 }
 
-execFileSync(process.execPath, [path.join(scriptDir, "apply-tenant-permissions.mjs")], { stdio: "inherit" });
-execFileSync(process.execPath, [path.join(scriptDir, "seed-host-codex.mjs")], { stdio: "inherit" });
-console.log(`Done. ${username} can log in at /codex-web/ now.`);
+if (containerized) {
+  execFileSync(process.execPath, [path.join(scriptDir, "apply-tenant-permissions.mjs")], { stdio: "inherit" });
+  execFileSync(process.execPath, [path.join(scriptDir, "seed-host-codex.mjs")], { stdio: "inherit" });
+}
+console.log(`Done. ${username} can log in at ${config.basePath || "/"}/ now.`);
+
+function addHostSystemUser(username) {
+  let system = resolveSystemUser(username);
+  if (system) {
+    console.log(`System user ${username} already exists; keeping existing ~/.codex unchanged.`);
+    return system;
+  }
+  execFileSync("useradd", ["--create-home", "--shell", "/bin/bash", username], { stdio: "inherit" });
+  system = resolveSystemUser(username);
+  if (!system) throw new Error(`Failed to create system user ${username}`);
+  const template = process.env.CODEX_TEMPLATE_HOME || "/etc/skel/.codex";
+  const target = path.join(system.home, ".codex");
+  if (fs.existsSync(template)) {
+    fs.cpSync(template, target, { recursive: true, force: true });
+    execFileSync("chown", ["-R", `${system.uid}:${system.gid}`, target]);
+    console.log(`New system user ${username} created; ~/.codex copied from ${template}.`);
+  } else {
+    console.log(`New system user ${username} created; no template at ${template}, so ~/.codex must be configured later by ${username}.`);
+  }
+  return system;
+}
