@@ -216,9 +216,10 @@ export function removeWorkspace(workspaceRoot: string, conversationId: string): 
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-export function removeCodexThreadFiles(codexHome: string, threadId: string): number {
+/** Locate the Codex rollout files that belong to one thread, inside sessions/ and archived_sessions/. */
+export function findCodexThreadFiles(codexHome: string, threadId: string): string[] {
   if (!/^[0-9a-f-]{36}$/i.test(threadId)) throw new Error("Invalid Codex thread id");
-  let removed = 0;
+  const matches: string[] = [];
   for (const directoryName of ["sessions", "archived_sessions"]) {
     const root = path.resolve(codexHome, directoryName);
     if (!fs.existsSync(root)) continue;
@@ -227,35 +228,28 @@ export function removeCodexThreadFiles(codexHome: string, threadId: string): num
         const absolute = path.resolve(directory, entry.name);
         if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error("Refusing to inspect unexpected Codex session path");
         if (entry.isDirectory()) visit(absolute);
-        if (entry.isFile() && entry.name.includes(threadId)) {
-          fs.rmSync(absolute, { force: true });
-          removed += 1;
-        }
+        if (entry.isFile() && entry.name.includes(threadId)) matches.push(absolute);
       }
     };
     visit(root);
+  }
+  return matches;
+}
+
+export function removeCodexThreadFiles(codexHome: string, threadId: string): number {
+  let removed = 0;
+  for (const absolute of findCodexThreadFiles(codexHome, threadId)) {
+    fs.rmSync(absolute, { force: true });
+    removed += 1;
   }
   return removed;
 }
 
 export function codexThreadRolloutBytes(codexHome: string, threadId: string): number | null {
-  if (!/^[0-9a-f-]{36}$/i.test(threadId)) throw new Error("Invalid Codex thread id");
   let largest: number | null = null;
-  for (const directoryName of ["sessions", "archived_sessions"]) {
-    const root = path.resolve(codexHome, directoryName);
-    if (!fs.existsSync(root)) continue;
-    const visit = (directory: string): void => {
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        const absolute = path.resolve(directory, entry.name);
-        if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) throw new Error("Refusing to inspect unexpected Codex session path");
-        if (entry.isDirectory()) visit(absolute);
-        if (entry.isFile() && entry.name.includes(threadId)) {
-          const size = fs.statSync(absolute).size;
-          largest = largest === null ? size : Math.max(largest, size);
-        }
-      }
-    };
-    visit(root);
+  for (const absolute of findCodexThreadFiles(codexHome, threadId)) {
+    const size = fs.statSync(absolute).size;
+    largest = largest === null ? size : Math.max(largest, size);
   }
   return largest;
 }

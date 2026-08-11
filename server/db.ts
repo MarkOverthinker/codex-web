@@ -423,6 +423,40 @@ export class AppDatabase {
     return this.getConversation(id)!;
   }
 
+  listCodexThreadIds(): string[] {
+    return (this.sqlite.prepare("SELECT codex_thread_id FROM conversations WHERE codex_thread_id IS NOT NULL").all() as Array<{ codex_thread_id: string }>)
+      .map((row) => row.codex_thread_id);
+  }
+
+  createImportedConversation(input: {
+    id: string;
+    userId: string;
+    title: string;
+    threadId: string;
+    createdAt: string;
+    updatedAt: string;
+    agentModel: string | null;
+    reasoningEffort: string | null;
+    messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+  }): ConversationRow {
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      this.sqlite.prepare(`
+        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,agent_model,reasoning_effort,status,created_at,updated_at)
+        VALUES(?,?,?,'legacy',?,?,?,'idle',?,?)
+      `).run(input.id, input.userId, input.title, input.threadId, input.agentModel, input.reasoningEffort, input.createdAt, input.updatedAt);
+      const insertMessage = this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,?,?,NULL,?)");
+      for (const message of input.messages) {
+        insertMessage.run(crypto.randomUUID(), input.id, message.role, message.content, message.createdAt);
+      }
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getConversation(input.id)!;
+  }
+
   updateConversation(id: string, fields: { title?: string; titleSource?: ConversationTitleSource; codexThreadId?: string; agentSelection?: StoredAgentSelection; status?: "idle" | "running" }): void {
     if (fields.title !== undefined) this.sqlite.prepare("UPDATE conversations SET title=?, title_source=COALESCE(?,title_source), updated_at=? WHERE id=?")
       .run(fields.title, fields.titleSource ?? null, new Date().toISOString(), id);

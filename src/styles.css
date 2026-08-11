@@ -164,6 +164,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   transition: transform .14s ease, box-shadow .16s ease, filter .16s ease;
 }
 .new-task:hover { transform: translateY(-1px); filter: brightness(1.035); box-shadow: 0 11px 24px rgba(0, 0, 0, .19); }
+.import-sessions-button {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 11px;
+  color: #dfe3f2;
+  background: rgba(255, 255, 255, .06);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  transition: background .16s ease, border-color .16s ease, color .16s ease;
+}
+.import-sessions-button:hover { color: #fff; border-color: rgba(255, 255, 255, .26); background: rgba(255, 255, 255, .11); }
 .search-box {
   display: flex;
   align-items: center;
@@ -208,11 +226,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .task-menu-panel button.danger:hover { color: #ffd2d2; background: rgba(239, 68, 68, .15); }
 .task-menu-panel svg { flex: 0 0 auto; color: #c8ccdc; }
 .task-menu-panel button.danger svg { color: #ff9292; }
-.archive-dialog-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 18px; background: rgba(15, 17, 32, .5); backdrop-filter: blur(3px); }
-.archive-dialog { width: min(620px, 100%); max-height: min(680px, calc(100dvh - 36px)); overflow: hidden; border: 1px solid #dfe2ec; border-radius: 16px; color: var(--ink); background: var(--paper); box-shadow: 0 24px 70px rgba(15, 17, 32, .26); }
-.archive-dialog > header { min-height: 57px; display: flex; align-items: center; justify-content: space-between; padding: 9px 12px 9px 17px; border-bottom: 1px solid #e5e7ee; }
-.archive-dialog > header > div { display: flex; align-items: center; gap: 9px; }
-.archive-dialog > header svg { color: var(--indigo); }
+.archive-dialog-backdrop, .import-dialog-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 18px; background: rgba(15, 17, 32, .5); backdrop-filter: blur(3px); }
+.archive-dialog, .import-dialog { width: min(620px, 100%); max-height: min(680px, calc(100dvh - 36px)); overflow: hidden; border: 1px solid #dfe2ec; border-radius: 16px; color: var(--ink); background: var(--paper); box-shadow: 0 24px 70px rgba(15, 17, 32, .26); }
+.archive-dialog > header, .import-dialog > header { min-height: 57px; display: flex; align-items: center; justify-content: space-between; padding: 9px 12px 9px 17px; border-bottom: 1px solid #e5e7ee; }
+.archive-dialog > header > div, .import-dialog > header > div { display: flex; align-items: center; gap: 9px; }
+.archive-dialog > header svg, .import-dialog > header svg { color: var(--indigo); }
+.import-dialog-hint { margin: 0; padding: 11px 17px 0; color: #6c7080; font-size: 12px; line-height: 1.6; }
+.import-session-list { min-height: 170px; max-height: min(480px, calc(100dvh - 230px)); display: flex; flex-direction: column; gap: 7px; padding: 13px; overflow-y: auto; }
+.import-session-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e1e3eb; border-radius: 11px; background: #fafbfe; cursor: pointer; }
+.import-session-row.selected { border-color: #aab4e8; background: #f2f4fd; }
+.import-session-row input { flex: 0 0 auto; accent-color: var(--indigo); }
+.import-session-copy { min-width: 0; display: grid; gap: 4px; }
+.import-session-copy strong, .import-session-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-session-copy strong { font-size: 13px; }
+.import-session-copy small { color: #858a9b; font-size: 10px; }
+.import-session-empty { min-height: 170px; display: flex; align-items: center; justify-content: center; gap: 7px; color: #8a8e9e; font-size: 12px; }
+.import-dialog-footer { min-height: 62px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 11px 15px; border-top: 1px solid #e5e7ee; }
+.import-dialog-footer .primary-button { min-width: 138px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.import-dialog-cancel { min-height: 40px; padding: 0 15px; border: 1px solid #d4d8e5; border-radius: 10px; color: #5b6074; background: #fff; cursor: pointer; font-weight: 700; font-size: 13px; }
+.import-dialog-cancel:hover { border-color: #b9bfd4; background: #f6f7fb; }
 .archived-conversation-list { min-height: 170px; max-height: min(560px, calc(100dvh - 112px)); display: flex; flex-direction: column; gap: 7px; padding: 13px; overflow-y: auto; }
 .archived-conversation-row { display: flex; align-items: center; gap: 6px; border: 1px solid #e1e3eb; border-radius: 11px; background: #fafbfe; }
 .archived-conversation-open { min-width: 0; min-height: 58px; flex: 1; display: flex; align-items: center; gap: 11px; padding: 9px 11px; border: 0; color: #3b4053; background: transparent; cursor: pointer; text-align: left; }

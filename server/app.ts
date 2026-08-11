@@ -18,6 +18,7 @@ import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode
 import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveInside, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
+import { discoverImportableSessions, importSessionThread } from "./session-importer.js";
 
 const COOKIE_NAME = "cww_session";
 const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
@@ -378,6 +379,46 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const session = res.locals.session as SessionRow;
     const query = typeof req.query.query === "string" ? req.query.query : "";
     return res.json({ conversations: db.listArchivedConversations(session.user_id, query) });
+  });
+
+  api.get("/conversations/importable-sessions", async (_req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (config.hostMode && !hostTenantFor(config, db, session.user_id)) return res.json({ sessions: [] });
+    const existingThreadIds = new Set(db.listCodexThreadIds());
+    const sessions = await discoverImportableSessions(codexHomeFor(session.user_id), existingThreadIds);
+    return res.json({ sessions });
+  });
+
+  api.post("/conversations/import-sessions", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (config.hostMode && !hostTenantFor(config, db, session.user_id)) {
+      return res.status(409).json({ error: "该用户没有对应的系统账户和 Codex Home，无法导入会话。" });
+    }
+    const rawThreadIds = Array.isArray(req.body?.threadIds) ? req.body.threadIds as unknown : [];
+    const threadIds = (Array.isArray(rawThreadIds) ? rawThreadIds : [])
+      .filter((value): value is string => typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value))
+      .slice(0, 50);
+    if (threadIds.length === 0) return res.status(400).json({ error: "请选择要导入的历史会话。" });
+    const codexHome = codexHomeFor(session.user_id);
+    const existingThreadIds = new Set(db.listCodexThreadIds());
+    const discovered = await discoverImportableSessions(codexHome, existingThreadIds);
+    const discoveredById = new Map(discovered.map((item) => [item.threadId, item]));
+    const conversations: ConversationRow[] = [];
+    const skipped: string[] = [];
+    for (const threadId of threadIds) {
+      if (!discoveredById.has(threadId)) {
+        skipped.push(threadId);
+        continue;
+      }
+      try {
+        const conversation = await importSessionThread(db, codexHome, threadId, session.user_id);
+        if (conversation) conversations.push(conversation);
+        else skipped.push(threadId);
+      } catch {
+        skipped.push(threadId);
+      }
+    }
+    return res.json({ conversations, skipped });
   });
 
   api.get("/agent-options", (_req, res) => {

@@ -6,6 +6,8 @@ The web process runs as UID 10001. A local supervisor launches Codex work as UID
 
 Each conversation has an `uploads`, `outputs`, and temporary runtime area. Generated deliverables are copied to durable application storage. Archiving only hides an idle conversation and keeps its complete history and files available for restoration. Deleting is separate: it cancels queued/running jobs, removes the workspace and deliverables, and soft-deletes the database row so messages and events remain available for administrative diagnosis.
 
+Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
+
 Queued prompts and their attachments are stored by the server. The browser is only a view of that state. A queued prompt can be reordered, edited, deleted, or converted into a live steering instruction for the currently running Codex turn. Running and queued states are derived independently so an idle-but-queued conversation is not presented as actively executing.
 
 On graceful shutdown, dispatch stops first and the process waits for active Codex executions to finish; queued work remains durable. If the process disappears while a job is running, startup marks that job interrupted and appends a visible message/event. It does not automatically retry a possibly side-effecting turn.

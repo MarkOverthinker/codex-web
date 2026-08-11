@@ -20,6 +20,7 @@ import { listTenantIdentities, tenantIdentityForUser } from "../server/tenant-id
 import { consumeTenantTurnEvents, validateTenantWorkerRequest } from "../server/tenant-worker-execution.js";
 import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js";
 import { isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
+import { deriveImportedTitle, discoverImportableSessions } from "../server/session-importer.js";
 import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
@@ -976,6 +977,120 @@ test("conversation stop cancels every active job and deletion preserves audit ro
   await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(404);
   await agent.get(`/codex-web/api/files/${fileId}`).expect(404);
   await agent.get(`/codex-web/api/jobs/${deletionJobId}/events`).expect(404);
+});
+
+function writeSyntheticCodexSession(codexHome: string, threadId: string, options: { dir?: string; message?: string; finalReply?: string } = {}): string {
+  const directory = path.join(codexHome, options.dir ?? "sessions", "2026", "04", "20");
+  fs.mkdirSync(directory, { recursive: true });
+  const filePath = path.join(directory, `rollout-2026-04-20T19-01-08-${threadId}.jsonl`);
+  const lines = [
+    JSON.stringify({
+      timestamp: "2026-04-20T11:01:20.633Z",
+      type: "session_meta",
+      payload: { id: threadId, timestamp: "2026-04-20T11:01:08.567Z", cwd: "/home/test/project", originator: "codex_cli", cli_version: "0.107.0" },
+    }),
+    JSON.stringify({
+      timestamp: "2026-04-20T11:01:20.630Z",
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions for /home/test/project\n\n- Follow the repo conventions." }] },
+    }),
+    JSON.stringify({ timestamp: "2026-04-20T11:01:20.633Z", type: "event_msg", payload: { type: "user_message", message: options.message ?? "请检查这个项目", images: [], text_elements: [] } }),
+    JSON.stringify({
+      timestamp: "2026-04-20T11:01:20.648Z",
+      type: "turn_context",
+      payload: { turn_id: "turn-1", model: "gpt-5.4", collaboration_mode: { mode: "default", settings: { model: "gpt-5.4", reasoning_effort: "high" } } },
+    }),
+    JSON.stringify({ timestamp: "2026-04-20T11:05:39.422Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "中间回复" }] } }),
+    JSON.stringify({ timestamp: "2026-04-20T11:06:00.000Z", type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: options.finalReply ?? "**最终回复**：项目已检查。" } }),
+  ];
+  fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
+  return filePath;
+}
+
+test("session importer discovers Codex rollouts, derives titles, and skips already imported threads", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-session-importer-test-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const codexHome = path.join(root, "codex-home");
+  const threadId = crypto.randomUUID();
+  writeSyntheticCodexSession(codexHome, threadId, { dir: "archived_sessions" });
+  // A legacy rollout with only response_item user records must skip the injected
+  // AGENTS.md context and use the real prompt as the title source.
+  const legacyThreadId = crypto.randomUUID();
+  const legacyFile = path.join(codexHome, "sessions", "2025", "01", "02", `rollout-2025-01-02T10-00-00-${legacyThreadId}.jsonl`);
+  fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+  fs.writeFileSync(legacyFile, [
+    JSON.stringify({ timestamp: "2025-01-02T10:00:00.000Z", type: "session_meta", payload: { id: legacyThreadId, timestamp: "2025-01-02T10:00:00.000Z", cwd: "/tmp", originator: "codex_cli" } }),
+    JSON.stringify({ timestamp: "2025-01-02T10:00:01.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions for /tmp" }] } }),
+    JSON.stringify({ timestamp: "2025-01-02T10:00:02.000Z", type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "旧版会话的真实问题" }] } }),
+    JSON.stringify({ timestamp: "2025-01-02T10:00:03.000Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "旧版回复" }] } }),
+  ].join("\n"), "utf8");
+
+  assert.equal(deriveImportedTitle("  第一条用户消息  "), "第一条用户消息");
+  assert.equal(deriveImportedTitle("   "), "导入的历史会话");
+  const discovered = await discoverImportableSessions(codexHome, new Set());
+  assert.equal(discovered.length, 2);
+  const imported = discovered.find((session) => session.threadId === threadId);
+  const legacy = discovered.find((session) => session.threadId === legacyThreadId);
+  assert.ok(imported && legacy);
+  assert.equal(imported.model, "gpt-5.4");
+  assert.equal(imported.title, "请检查这个项目");
+  assert.equal(legacy.title, "旧版会话的真实问题");
+  assert.equal((await discoverImportableSessions(codexHome, new Set([threadId]))).length, 1);
+  assert.equal((await discoverImportableSessions(codexHome, new Set([threadId, legacyThreadId]))).length, 0);
+});
+
+test("importable-sessions API discovers local Codex threads and imports them as conversations", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-import-api-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Import-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const codexHome = ensureTenant(tenantRoot, LEGACY_USER_ID).codexHome;
+  const threadId = crypto.randomUUID();
+  writeSyntheticCodexSession(codexHome, threadId);
+
+  const browser = request.agent(instance.app);
+  const login = await browser.post("/codex-web/api/auth/login").send({ username: "owner", password: "Import-Password-2026!" }).expect(200);
+
+  const listed = await browser.get("/codex-web/api/conversations/importable-sessions").expect(200);
+  assert.equal(listed.body.sessions.length, 1);
+  assert.equal(listed.body.sessions[0].threadId, threadId);
+  assert.equal(listed.body.sessions[0].model, "gpt-5.4");
+
+  await browser.post("/codex-web/api/conversations/import-sessions")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ threadIds: ["not-a-uuid"] })
+    .expect(400);
+
+  const imported = await browser.post("/codex-web/api/conversations/import-sessions")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ threadIds: [threadId] })
+    .expect(200);
+  assert.equal(imported.body.conversations.length, 1);
+  assert.deepEqual(imported.body.skipped, []);
+  const conversationId = imported.body.conversations[0].id as string;
+  assert.equal(instance.db.getConversation(conversationId)?.codex_thread_id, threadId);
+
+  const detail = await browser.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  assert.deepEqual(detail.body.messages.map((message: { role: string; content: string }) => [message.role, message.content]), [
+    ["user", "请检查这个项目"],
+    ["assistant", "**最终回复**：项目已检查。"],
+  ]);
+
+  const listedAgain = await browser.get("/codex-web/api/conversations/importable-sessions").expect(200);
+  assert.deepEqual(listedAgain.body.sessions, []);
+  const list = await browser.get("/codex-web/api/conversations").expect(200);
+  assert.ok(list.body.conversations.some((conversation: { id: string }) => conversation.id === conversationId));
+
+  const importedAgain = await browser.post("/codex-web/api/conversations/import-sessions")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ threadIds: [threadId] })
+    .expect(200);
+  assert.deepEqual(importedAgain.body.conversations, []);
+  assert.deepEqual(importedAgain.body.skipped, [threadId]);
 });
 
 test("web users have isolated conversations, files, jobs, settings, and tenant directories", async (context) => {
