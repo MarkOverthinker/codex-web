@@ -37,6 +37,10 @@ import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES, buildOptionalCapabilityConfig, det
 import { USER_CANCELLED_TASK_MARKER, latestUserCancellationContext } from "../server/cancellation-summary.js";
 import { formatRolloutBytes, ROLLOUT_WARNING_BYTES, shouldWarnAboutRollout } from "../src/rollout-capacity.js";
 
+// A developer .env (loaded by server/config.ts) must not leak deployment mode
+// flags into the suite; the tests control these through createApp overrides.
+for (const key of ["HOST_MODE", "CONTAINERIZED", "TENANT_WORKER_ISOLATION"]) delete process.env[key];
+
 test("user-visible branding uses Codex Web without the private product name", () => {
   const index = fs.readFileSync(path.join(process.cwd(), "index.html"), "utf8");
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8")
