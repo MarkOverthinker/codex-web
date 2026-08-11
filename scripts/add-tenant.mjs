@@ -67,7 +67,7 @@ try {
 
   if (hostUser) {
     ensureTenant(config.tenantRoot, userId, { skipCodexHome: true });
-    execFileSync("chown", ["-R", `${hostUser.uid}:${hostUser.gid}`, path.join(config.tenantRoot, userId)]);
+    execFileSync(toolPath("chown"), ["-R", `${hostUser.uid}:${hostUser.gid}`, path.join(config.tenantRoot, userId)]);
     const codexHome = path.join(hostUser.home, ".codex");
     const configured = isCodexConfigured(codexHome);
     console.log(`User created: ${username} (${userId}) as machine user ${username} (uid ${hostUser.uid}).`);
@@ -95,17 +95,32 @@ function addHostSystemUser(username) {
     console.log(`System user ${username} already exists; keeping existing ~/.codex unchanged.`);
     return system;
   }
-  execFileSync("useradd", ["--create-home", "--shell", "/bin/bash", username], { stdio: "inherit" });
+  try {
+    execFileSync(toolPath("useradd"), ["--create-home", "--shell", "/bin/bash", username], { stdio: "inherit" });
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      throw new Error(`未找到 useradd（通常在 /usr/sbin）。请确认系统安装了 passwd/shadow 工具包，或带完整 PATH 重试：PATH=$PATH:/usr/sbin node scripts/add-tenant.mjs ${username} ...`);
+    }
+    throw error;
+  }
   system = resolveSystemUser(username);
   if (!system) throw new Error(`Failed to create system user ${username}`);
   const template = process.env.CODEX_TEMPLATE_HOME || "/etc/skel/.codex";
   const target = path.join(system.home, ".codex");
   if (fs.existsSync(template)) {
     fs.cpSync(template, target, { recursive: true, force: true });
-    execFileSync("chown", ["-R", `${system.uid}:${system.gid}`, target]);
+    execFileSync(toolPath("chown"), ["-R", `${system.uid}:${system.gid}`, target]);
     console.log(`New system user ${username} created; ~/.codex copied from ${template}.`);
   } else {
     console.log(`New system user ${username} created; no template at ${template}, so ~/.codex must be configured later by ${username}.`);
   }
   return system;
+}
+
+function toolPath(name) {
+  const candidates = [`/usr/sbin/${name}`, `/sbin/${name}`, `/usr/bin/${name}`, `/bin/${name}`];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return name;
 }
