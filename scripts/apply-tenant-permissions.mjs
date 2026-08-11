@@ -36,11 +36,24 @@ run(["chmod", "0711", tenantRoot]);
 
 for (const identity of listTenantIdentities()) {
   const tenant = path.join(tenantRoot, identity.userId);
-  if (!fs.existsSync(tenant)) continue;
+  // The web process normally creates tenant directories at startup, but the
+  // permission migration and host-config seeding run before it, so create the
+  // full tenant skeleton here when missing.
+  for (const relative of [
+    "",
+    "codex-home",
+    "library",
+    path.join("library", "inbox"),
+    path.join("library", "projects"),
+    path.join("library", "archive"),
+    "conversations",
+  ]) {
+    fs.mkdirSync(path.join(tenant, relative), { recursive: true });
+  }
   run(["chown", "-R", `${identity.uid}:${identity.gid}`, tenant]);
   run(["chmod", "-R", "go-rwx", tenant]);
 
-  const directories = [];
+  const directories = [tenant];
   const files = [];
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {

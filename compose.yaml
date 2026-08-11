@@ -30,6 +30,9 @@ services:
     cap_drop:
       - ALL
     cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
       - SETUID
       - SETGID
       - KILL
