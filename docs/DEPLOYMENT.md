@@ -119,6 +119,24 @@ Security trade-off: this mode runs the web service as root and gives each
 tenant full host access under its own Unix identity. Only add users you trust;
 this is not a boundary for hostile workloads.
 
+### Systemd autostart (host mode)
+
+The repository ships a systemd unit template at
+`deploy/codex-web.service`. Replace `<user>` with the account that owns the
+checkout and the host Codex CLI location, then install it:
+
+```bash
+sudo cp deploy/codex-web.service /etc/systemd/system/codex-web.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now codex-web
+journalctl -u codex-web -f
+```
+
+Stop any manually started `node dist-server/server/index.js` process first,
+otherwise the new service fails to bind the port (the unit restarts and binds
+as soon as the port frees up). `TimeoutStopSec=1800` preserves the graceful
+30-minute drain for in-flight Codex jobs on shutdown/restart.
+
 ## Reverse proxy
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
