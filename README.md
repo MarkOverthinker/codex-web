@@ -192,6 +192,10 @@ For the public build, the web process has no Docker socket, host filesystem moun
      app codex login --device-auth
    ```
 
+   To reuse the host machine's existing Codex login and model catalog instead of
+   signing in manually, see "Reusing the host Codex login" in
+   [Deployment](docs/DEPLOYMENT.md).
+
 6. Open [http://localhost:37821/codex-web/](http://localhost:37821/codex-web/).
 
 State is stored in Docker named volumes. Closing the browser does not remove queued work, attachments, unsent composer drafts, or archived conversations.
