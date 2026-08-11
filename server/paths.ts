@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { syncManagedSkills } from "./managed-skills.js";
 
 const LEGACY_WORKSPACE_AGENTS = `# Conversation workspace\n\n- Work only inside this conversation directory unless the user explicitly asks otherwise.\n- User uploads are in uploads/. Save only finished deliverables in outputs/.\n- Put intermediate files, extracted assets, caches, and temporary environments in .runtime/; the service deletes it after every turn.\n- Prefer replying in Chinese unless the user requests another language.\n- Never reveal credentials, authentication files, browser profiles, or unrelated local data.\n- When a task creates useful files, mention only the final filenames the user needs. Do not list process files.\n`;
@@ -16,6 +16,19 @@ ${MANAGED_INSTRUCTIONS_START}
 - User uploads are in uploads/. Save only finished deliverables in outputs/.
 - Put intermediate files, extracted assets, caches, and temporary environments in .runtime/; the service deletes it after every turn.
 - Never reveal credentials, authentication files, browser profiles, or unrelated local data.
+- In replies, mention only final filenames the user needs. Never expose absolute paths or list process files.
+- Use the interpreter in \`CWW_SHARED_PYTHON\`; keep temporary scripts and caches in \`CWW_JOB_RUNTIME\`. Never install into the shared environment. If a required package is missing, invoke \`CWW_PYTHON_RUNNER\` in temporary mode instead.
+${MANAGED_INSTRUCTIONS_END}
+`;
+
+const HOST_WORKSPACE_AGENTS = `# Conversation workspace (host mode)
+
+${MANAGED_INSTRUCTIONS_START}
+- You act as this machine user's local Codex agent with danger-full-access, equivalent to a normal Codex session on this host.
+- User uploads are in uploads/. Save finished deliverables in outputs/ unless the task asks otherwise.
+- You may read and write anywhere this host user can, including the host home directory and ~/.codex, when the task requires it (for example global skills, Caddy/frp publishing, or host services).
+- Keep throwaway files, caches, and temporary environments in .runtime/; the service deletes it after every turn.
+- Never reveal credentials, authentication files, browser profiles, or unrelated users' data.
 - In replies, mention only final filenames the user needs. Never expose absolute paths or list process files.
 - Use the interpreter in \`CWW_SHARED_PYTHON\`; keep temporary scripts and caches in \`CWW_JOB_RUNTIME\`. Never install into the shared environment. If a required package is missing, invoke \`CWW_PYTHON_RUNNER\` in temporary mode instead.
 ${MANAGED_INSTRUCTIONS_END}
@@ -66,14 +79,40 @@ export function tenantPaths(tenantRoot: string, userId: string): TenantPaths {
   };
 }
 
-export function ensureTenant(tenantRoot: string, userId: string): TenantPaths {
+/**
+ * Host mode drops the codex child process into the machine user's uid/gid, so
+ * web-created storage must be owned by that user. Only chowns when running as
+ * root and when the top-level directory is not already owned by the tenant.
+ */
+export function chownTenantStorageIfNeeded(root: string, uid: number, gid: number): void {
+  if (process.getuid?.() !== 0) return;
+  try {
+    const stat = fs.statSync(root);
+    if (stat.uid === uid && stat.gid === gid) return;
+  } catch {
+    return;
+  }
+  execFileSync("chown", ["-R", `${uid}:${gid}`, root]);
+}
+
+export function ensureTenant(tenantRoot: string, userId: string, options: { skipCodexHome?: boolean } = {}): TenantPaths {
   const paths = tenantPaths(tenantRoot, userId);
-  for (const directory of [paths.codexHome, paths.library, paths.conversations, path.join(paths.library, "inbox"), path.join(paths.library, "projects"), path.join(paths.library, "archive")]) {
+  const storageDirs = [
+    ...(options.skipCodexHome ? [] : [paths.codexHome]),
+    paths.library,
+    paths.conversations,
+    path.join(paths.library, "inbox"),
+    path.join(paths.library, "projects"),
+    path.join(paths.library, "archive"),
+  ];
+  for (const directory of storageDirs) {
     fs.mkdirSync(directory, { recursive: true });
   }
-  const globalAgents = path.join(paths.codexHome, "AGENTS.md");
-  if (!fs.existsSync(globalAgents)) fs.writeFileSync(globalAgents, GLOBAL_AGENTS, "utf8");
-  syncManagedSkills(paths.codexHome);
+  if (!options.skipCodexHome) {
+    const globalAgents = path.join(paths.codexHome, "AGENTS.md");
+    if (!fs.existsSync(globalAgents)) fs.writeFileSync(globalAgents, GLOBAL_AGENTS, "utf8");
+    syncManagedSkills(paths.codexHome);
+  }
   const libraryAgents = path.join(paths.library, "AGENTS.md");
   if (!fs.existsSync(libraryAgents)) fs.writeFileSync(libraryAgents, LIBRARY_AGENTS, "utf8");
   const profile = path.join(paths.library, "PROFILE.md");
@@ -83,18 +122,18 @@ export function ensureTenant(tenantRoot: string, userId: string): TenantPaths {
   return paths;
 }
 
-export function ensureTenantWorkspace(tenantRoot: string, userId: string, conversationId: string): string {
-  return ensureWorkspace(ensureTenant(tenantRoot, userId).conversations, conversationId);
+export function ensureTenantWorkspace(tenantRoot: string, userId: string, conversationId: string, hostMode = false): string {
+  return ensureWorkspace(ensureTenant(tenantRoot, userId, { skipCodexHome: hostMode }).conversations, conversationId, hostMode);
 }
 
-export function ensureWorkspace(workspaceRoot: string, conversationId: string): string {
+export function ensureWorkspace(workspaceRoot: string, conversationId: string, hostMode = false): string {
   if (!/^[0-9a-f-]{36}$/i.test(conversationId)) throw new Error("Invalid conversation id");
   const root = path.resolve(workspaceRoot, conversationId);
   fs.mkdirSync(path.join(root, "uploads"), { recursive: true });
   fs.mkdirSync(path.join(root, "outputs"), { recursive: true });
   fs.mkdirSync(path.join(root, ".runtime"), { recursive: true });
   const agentsPath = path.join(root, "AGENTS.md");
-  syncWorkspaceInstructions(agentsPath);
+  syncWorkspaceInstructions(agentsPath, hostMode);
   const gitignorePath = path.join(root, ".gitignore");
   if (!fs.existsSync(gitignorePath)) fs.writeFileSync(gitignorePath, ".codex/\n.runtime/\n", "utf8");
   if (!fs.existsSync(path.join(root, ".git"))) {
@@ -104,14 +143,15 @@ export function ensureWorkspace(workspaceRoot: string, conversationId: string): 
   return root;
 }
 
-function syncWorkspaceInstructions(agentsPath: string): void {
+function syncWorkspaceInstructions(agentsPath: string, hostMode: boolean): void {
+  const template = hostMode ? HOST_WORKSPACE_AGENTS : WORKSPACE_AGENTS;
   if (!fs.existsSync(agentsPath)) {
-    fs.writeFileSync(agentsPath, WORKSPACE_AGENTS, "utf8");
+    fs.writeFileSync(agentsPath, template, "utf8");
     return;
   }
   const existing = fs.readFileSync(agentsPath, "utf8");
   if (existing === LEGACY_WORKSPACE_AGENTS) {
-    fs.writeFileSync(agentsPath, WORKSPACE_AGENTS, "utf8");
+    fs.writeFileSync(agentsPath, template, "utf8");
     return;
   }
   const start = existing.indexOf(MANAGED_INSTRUCTIONS_START);
@@ -119,12 +159,12 @@ function syncWorkspaceInstructions(agentsPath: string): void {
   if (start >= 0 && end > start) {
     const before = existing.slice(0, start);
     const after = existing.slice(end + MANAGED_INSTRUCTIONS_END.length);
-    const managed = WORKSPACE_AGENTS.slice(WORKSPACE_AGENTS.indexOf(MANAGED_INSTRUCTIONS_START), WORKSPACE_AGENTS.indexOf(MANAGED_INSTRUCTIONS_END) + MANAGED_INSTRUCTIONS_END.length);
+    const managed = template.slice(template.indexOf(MANAGED_INSTRUCTIONS_START), template.indexOf(MANAGED_INSTRUCTIONS_END) + MANAGED_INSTRUCTIONS_END.length);
     const updated = `${before}${managed}${after}`;
     if (updated !== existing) fs.writeFileSync(agentsPath, updated, "utf8");
     return;
   }
-  const managed = WORKSPACE_AGENTS.slice(WORKSPACE_AGENTS.indexOf(MANAGED_INSTRUCTIONS_START));
+  const managed = template.slice(template.indexOf(MANAGED_INSTRUCTIONS_START));
   fs.writeFileSync(agentsPath, `${existing.trimEnd()}\n\n${managed}`, "utf8");
 }
 

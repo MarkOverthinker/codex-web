@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import type { AppConfig } from "./config.js";
 import { AppDatabase, type FileRow } from "./db.js";
-import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, newId, normalizeStoredRelativePath, persistDeliverable, resolveInside, snapshotDeliverables } from "./paths.js";
+import { chownTenantStorageIfNeeded, codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, newId, normalizeStoredRelativePath, persistDeliverable, resolveInside, snapshotDeliverables } from "./paths.js";
 import { cleanupJobRuntime, prepareJobRuntime, resolvePythonRuntime } from "./python-runtime.js";
 import { assessTaskPolicy } from "./task-policy.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -16,6 +16,7 @@ import { isRetryableUpstreamError, runWithTransientRetries } from "./retry-polic
 import { buildAgentSteerPrompt, buildAgentTurnPrompt, type AgentAttachmentContext } from "./agent-context.js";
 import { detectOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { latestUserCancellationContext } from "./cancellation-summary.js";
+import { hostTenantFor } from "./host-mode.js";
 
 type Publish = (jobId: string, eventType: string, payload: unknown) => void;
 
@@ -103,7 +104,7 @@ export class CodexRunner {
   conversationRolloutBytes(conversationId: string): number | null {
     const conversation = this.db.getConversation(conversationId);
     if (!conversation?.codex_thread_id) return null;
-    return codexThreadRolloutBytes(ensureTenant(this.config.tenantRoot, conversation.user_id).codexHome, conversation.codex_thread_id);
+    return codexThreadRolloutBytes(this.codexHomeFor(conversation.user_id), conversation.codex_thread_id);
   }
 
   async steer(jobId: string, prompt: string, uploads: FileRow[]): Promise<string> {
@@ -111,7 +112,11 @@ export class CodexRunner {
     if (!job || job.status !== "running") throw new Error("当前任务已经结束，无法引导");
     const conversation = this.db.getConversation(job.conversation_id);
     if (!conversation) throw new Error("会话不存在");
-    const workspace = ensureTenantWorkspace(this.config.tenantRoot, conversation.user_id, conversation.id);
+    const workspace = ensureTenantWorkspace(this.config.tenantRoot, conversation.user_id, conversation.id, this.config.hostMode);
+    if (this.config.hostMode) {
+      const hostTenant = hostTenantFor(this.config, this.db, conversation.user_id);
+      if (hostTenant) chownTenantStorageIfNeeded(workspace, hostTenant.uid, hostTenant.gid);
+    }
     const effectivePrompt = buildAgentSteerPrompt(
       prompt,
       this.attachmentContext(uploads, workspace),
@@ -137,10 +142,18 @@ export class CodexRunner {
       const job = this.db.getJob(jobId);
       const shouldGenerateTitle = conversation.title_source === "default"
         && Boolean(job?.message_id && this.db.isFirstUserMessage(conversationId, job.message_id));
-      const tenant = ensureTenant(this.config.tenantRoot, conversation.user_id);
-      const workspace = ensureTenantWorkspace(this.config.tenantRoot, conversation.user_id, conversationId);
+      const hostTenant = this.config.hostMode ? hostTenantFor(this.config, this.db, conversation.user_id) : null;
+      if (this.config.hostMode && !hostTenant) {
+        throw new Error("该用户没有对应的系统账户，无法运行 Codex 任务。请先由管理员添加系统用户并完成 Codex 配置。");
+      }
+      const tenant = hostTenant ?? ensureTenant(this.config.tenantRoot, conversation.user_id, { skipCodexHome: this.config.hostMode });
+      const workspace = ensureTenantWorkspace(this.config.tenantRoot, conversation.user_id, conversationId, this.config.hostMode);
+      if (hostTenant) {
+        chownTenantStorageIfNeeded(tenant.root, hostTenant.uid, hostTenant.gid);
+        chownTenantStorageIfNeeded(workspace, hostTenant.uid, hostTenant.gid);
+      }
       const before = await snapshotDeliverables(workspace);
-      runtimeRoot = prepareJobRuntime(workspace, jobId);
+      runtimeRoot = prepareJobRuntime(workspace, jobId, hostTenant ? { uid: hostTenant.uid, gid: hostTenant.gid } : undefined);
       const pythonRuntime = resolvePythonRuntime(this.config);
       const taskPolicy = assessTaskPolicy(prompt, uploads);
       const conversationMessages = this.db.listMessages(conversationId);
@@ -171,7 +184,7 @@ export class CodexRunner {
         tenantRoot: tenant.root,
         workspace,
         runtimeRoot,
-        codexHome: tenant.codexHome,
+        codexHome: hostTenant?.codexHome ?? tenant.codexHome,
         library: tenant.library,
         codexThreadId: conversation.codex_thread_id,
         effectivePrompt,
@@ -184,6 +197,10 @@ export class CodexRunner {
         webSearchMode: taskPolicy.isolated ? "cached" : "live",
         codexWindowsSandbox: this.config.codexWindowsSandbox,
         optionalCapabilities,
+        hostMode: Boolean(hostTenant),
+        home: hostTenant?.home,
+        uid: hostTenant?.uid,
+        gid: hostTenant?.gid,
       };
       const callbacks = {
         onThreadStarted: (threadId: string) => {
@@ -275,6 +292,13 @@ export class CodexRunner {
       mimeType: file.mime_type,
       path: normalizeStoredRelativePath(path.relative(workspace, resolveInside(workspace, file.relative_path))),
     }));
+  }
+
+  private codexHomeFor(userId: string): string {
+    if (this.config.hostMode) {
+      return hostTenantFor(this.config, this.db, userId)?.codexHome ?? this.config.codexHome;
+    }
+    return ensureTenant(this.config.tenantRoot, userId).codexHome;
   }
 }
 

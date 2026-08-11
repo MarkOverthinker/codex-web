@@ -29,6 +29,8 @@ export type AppServerTurnOptions = {
   sandbox?: "workspace-write" | "danger-full-access";
   runtimeWorkspaceRoots?: string[];
   optionalCapabilities: OptionalAgentCapabilities;
+  uid?: number;
+  gid?: number;
 };
 
 export type AppServerTurnExecution = {
@@ -63,10 +65,12 @@ class AppServerTurnClient {
       this.resolveCompletion = resolve;
       this.rejectCompletion = reject;
     });
+    const dropPrivileges = options.uid !== undefined && options.gid !== undefined && process.getuid?.() === 0;
     this.child = spawn(options.executablePath || process.env.CODEX_RUNTIME_PATH || "codex", ["app-server", "--listen", "stdio://"], {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(dropPrivileges ? { uid: options.uid, gid: options.gid } : {}),
     });
     const output = readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity });
     output.on("line", (line) => this.handleLine(line));

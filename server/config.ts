@@ -21,6 +21,7 @@ export type AppConfig = {
   pythonVersion: string;
   codexWindowsSandbox: "elevated" | "unelevated";
   containerized: boolean;
+  hostMode: boolean;
   codexHome: string;
   codexModel?: string;
   queueAutoStart: boolean;
@@ -65,10 +66,11 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     pythonVersion: overrides.pythonVersion ?? (process.env.PYTHON_VERSION || "3.12"),
     codexWindowsSandbox: overrides.codexWindowsSandbox ?? (process.env.CODEX_WINDOWS_SANDBOX === "unelevated" ? "unelevated" : "elevated"),
     containerized: overrides.containerized ?? process.env.CONTAINERIZED === "true",
+    hostMode: overrides.hostMode ?? process.env.HOST_MODE === "true",
     codexHome: overrides.codexHome ?? (process.env.CODEX_HOME || path.join(os.homedir(), ".codex")),
     codexModel: overrides.codexModel ?? (process.env.CODEX_MODEL || undefined),
     queueAutoStart: overrides.queueAutoStart ?? process.env.QUEUE_AUTO_START !== "false",
-    tenantWorkerIsolation: overrides.tenantWorkerIsolation ?? process.env.TENANT_WORKER_ISOLATION === "true",
+    tenantWorkerIsolation: overrides.tenantWorkerIsolation ?? (process.env.TENANT_WORKER_ISOLATION === "true" && process.env.HOST_MODE !== "true"),
     publicBaseUrl: overrides.publicBaseUrl ?? (process.env.PUBLIC_BASE_URL || ""),
     dashscopeApiKey: overrides.dashscopeApiKey ?? (process.env.DASHSCOPE_API_KEY || ""),
     dashscopeBaseUrl: (overrides.dashscopeBaseUrl ?? process.env.DASHSCOPE_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, ""),

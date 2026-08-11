@@ -14,7 +14,8 @@ import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSel
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
-import { ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveInside, safeUploadName } from "./paths.js";
+import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
+import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveInside, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 
@@ -28,12 +29,31 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   fs.mkdirSync(config.dataRoot, { recursive: true });
   fs.mkdirSync(config.tenantRoot, { recursive: true });
   const db = new AppDatabase(config.dataRoot, { username: config.username, passwordHash: config.passwordHash, displayName: config.displayName });
-  for (const user of db.listUsers()) ensureTenant(config.tenantRoot, user.id);
+  for (const user of db.listUsers()) storageFor(user.id);
   migrateExistingOutputFiles(config, db);
   const subscribers = new Map<string, Set<Response>>();
 
   function optionsForUser(userId: string): AgentOptions {
-    return loadAgentOptions(config, ensureTenant(config.tenantRoot, userId).codexHome);
+    return loadAgentOptions(config, codexHomeFor(userId));
+  }
+
+  function codexHomeFor(userId: string): string {
+    if (config.hostMode) return hostTenantFor(config, db, userId)?.codexHome ?? config.codexHome;
+    return storageFor(userId).codexHome;
+  }
+
+  function storageFor(userId: string): TenantPaths {
+    const paths = ensureTenant(config.tenantRoot, userId, { skipCodexHome: config.hostMode });
+    const host = config.hostMode ? hostTenantFor(config, db, userId) : null;
+    if (host) chownTenantStorageIfNeeded(paths.root, host.uid, host.gid);
+    return paths;
+  }
+
+  function workspaceFor(userId: string, conversationId: string): string {
+    const workspace = ensureTenantWorkspace(config.tenantRoot, userId, conversationId, config.hostMode);
+    const host = config.hostMode ? hostTenantFor(config, db, userId) : null;
+    if (host) chownTenantStorageIfNeeded(workspace, host.uid, host.gid);
+    return workspace;
   }
 
   function userAgentSelection(userId: string, options: AgentOptions = optionsForUser(userId)): AgentSelection {
@@ -102,7 +122,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   let shuttingDown = false;
 
   function removePendingPromptFiles(prompt: PendingPromptWithFiles, userId: string): void {
-    const workspace = ensureTenantWorkspace(config.tenantRoot, userId, prompt.conversation_id);
+    const workspace = workspaceFor(userId, prompt.conversation_id);
     for (const file of prompt.files) {
       try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); }
       catch { /* Missing or already-cleaned drafts must not block queue cleanup. */ }
@@ -110,7 +130,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   }
 
   function removeComposerDraftFiles(draft: ComposerDraftWithFiles, userId: string): void {
-    const workspace = ensureTenantWorkspace(config.tenantRoot, userId, draft.conversation_id);
+    const workspace = workspaceFor(userId, draft.conversation_id);
     for (const file of draft.files) {
       try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); }
       catch { /* Missing draft files must not block explicit draft cleanup. */ }
@@ -363,7 +383,18 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   api.get("/agent-options", (_req, res) => {
     const session = res.locals.session as SessionRow;
     const options = optionsForUser(session.user_id);
-    return res.json({ ...options, selection: userAgentSelection(session.user_id, options) });
+    const hostTenant = config.hostMode ? hostTenantFor(config, db, session.user_id) : null;
+    const configured = !config.hostMode || Boolean(hostTenant && isCodexConfigured(hostTenant.codexHome));
+    return res.json({
+      ...options,
+      selection: userAgentSelection(session.user_id, options),
+      codexConfigured: configured,
+      codexConfigHint: configured
+        ? undefined
+        : hostTenant
+          ? CODEX_CONFIG_HINT
+          : "该用户没有对应的系统账户，无法运行 Codex 任务。请先由管理员添加系统用户。",
+    });
   });
 
   api.put("/agent-selection", (req, res) => {
@@ -385,7 +416,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   api.post("/conversations", (_req, res) => {
     const session = res.locals.session as SessionRow;
     const id = newId();
-    ensureTenantWorkspace(config.tenantRoot, session.user_id, id);
+    workspaceFor(session.user_id, id);
     const agentSelection = userAgentSelection(session.user_id);
     res.status(201).json({ conversation: db.createConversation(id, "新任务", agentSelection, session.user_id), agentSelection });
   });
@@ -517,9 +548,9 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       // into a real message/job while the conversation is being deleted.
       await stopConversationJobs(conversation.id, false);
       for (const file of db.listFiles(conversation.id)) removePersistedDeliverable(config.dataRoot, file.relative_path);
-      const tenant = ensureTenant(config.tenantRoot, session.user_id);
+      const tenant = storageFor(session.user_id);
       if (conversation.codex_thread_id && !db.isCodexThreadUsedByAnotherActiveConversation(conversation.codex_thread_id, conversation.id)) {
-        removeCodexThreadFiles(tenant.codexHome, conversation.codex_thread_id);
+        removeCodexThreadFiles(codexHomeFor(session.user_id), conversation.codex_thread_id);
       }
       removeWorkspace(tenant.conversations, conversation.id);
       db.softDeleteConversation(conversation.id);
@@ -539,7 +570,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
           const conversationId = String(req.params.id);
           const conversation = session ? db.getConversationForUser(conversationId, session.user_id) : undefined;
           if (!session || deletingConversations.has(conversationId) || !conversation || conversation.archived_at) throw new Error("会话不存在或已归档");
-          callback(null, path.join(ensureTenantWorkspace(config.tenantRoot, session.user_id, String(req.params.id)), "uploads"));
+          callback(null, path.join(workspaceFor(session.user_id, String(req.params.id)), "uploads"));
         } catch (error) { callback(error as Error, ""); }
       },
       filename(_req, file, callback) { callback(null, safeUploadName(file.originalname).diskName); },
@@ -584,7 +615,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     if (!file || file.conversation_id !== conversation.id || file.composer_draft_id !== conversation.id) {
       return res.status(404).json({ error: "草稿附件不存在。" });
     }
-    const workspace = ensureTenantWorkspace(config.tenantRoot, session.user_id, conversation.id);
+    const workspace = workspaceFor(session.user_id, conversation.id);
     try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); } catch {}
     db.removeFile(file.id);
     db.pruneEmptyComposerDraft(conversation.id);
@@ -645,7 +676,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
         ? db.listMessages(conversation.id).slice(-4).map((message) => ({ role: message.role, content: message.content }))
         : [];
       const attachments = conversation ? (() => {
-        const workspace = ensureTenantWorkspace(config.tenantRoot, session.user_id, conversation.id);
+        const workspace = workspaceFor(session.user_id, conversation.id);
         const available = db.listFiles(conversation.id).filter((candidate) => candidate.kind === "upload").reverse();
         const used = new Set<string>();
         return attachmentNames.flatMap((name) => {
@@ -690,6 +721,15 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const uploaded = (req.files as Express.Multer.File[] | undefined) ?? [];
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) { removeUnregisteredUploads(uploaded); return res.status(404).json({ error: "会话不存在。" }); }
+    if (config.hostMode) {
+      const hostTenant = hostTenantFor(config, db, session.user_id);
+      if (!hostTenant || !isCodexConfigured(hostTenant.codexHome)) {
+        removeUnregisteredUploads(uploaded);
+        return res.status(409).json({
+          error: hostTenant ? CODEX_CONFIG_HINT : "该用户没有对应的系统账户，无法运行 Codex 任务。请先由管理员添加系统用户。",
+        });
+      }
+    }
     if (conversation.archived_at) { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "会话已归档，请恢复后再继续发送。" }); }
     if (deletingConversations.has(conversation.id)) { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "会话正在删除。" }); }
     const prompt = typeof req.body?.message === "string" ? req.body.message.trim().slice(0, 100_000) : "";
@@ -839,7 +879,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       removeUnregisteredUploads(uploaded);
       return res.status(400).json({ error: "请至少保留一个文件，或者输入具体操作。" });
     }
-    const workspace = ensureTenantWorkspace(config.tenantRoot, session.user_id, conversation.id);
+    const workspace = workspaceFor(session.user_id, conversation.id);
     for (const file of removed) {
       try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); } catch {}
       db.removeFile(file.id);
@@ -948,7 +988,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const session = res.locals.session as SessionRow;
     const file = db.getFileForUser(String(req.params.id), session.user_id);
     if (!file) return res.status(404).json({ error: "文件不存在。" });
-    const workspace = ensureTenantWorkspace(config.tenantRoot, session.user_id, file.conversation_id);
+    const workspace = workspaceFor(session.user_id, file.conversation_id);
     const storageRoot = file.kind === "output" && isPersistedDeliverablePath(file.relative_path) ? config.dataRoot : workspace;
     let absolute: string;
     try { absolute = resolveInside(storageRoot, file.relative_path); }
@@ -990,7 +1030,11 @@ export function migrateExistingOutputFiles(config: AppConfig, db: AppDatabase): 
     if (file.kind !== "output" || isPersistedDeliverablePath(file.relative_path)) continue;
     const conversation = db.getConversation(file.conversation_id);
     if (!conversation) continue;
-    const workspace = ensureTenantWorkspace(config.tenantRoot, conversation.user_id, file.conversation_id);
+    const workspace = ensureTenantWorkspace(config.tenantRoot, conversation.user_id, file.conversation_id, config.hostMode);
+    if (config.hostMode) {
+      const host = hostTenantFor(config, db, conversation.user_id);
+      if (host) chownTenantStorageIfNeeded(workspace, host.uid, host.gid);
+    }
     let source: string;
     try { source = resolveInside(workspace, file.relative_path); }
     catch { continue; }
