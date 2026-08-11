@@ -21,6 +21,10 @@ export type TenantWorkerRunRequest = {
   webSearchMode: "cached" | "live";
   codexWindowsSandbox: "elevated" | "unelevated";
   optionalCapabilities: OptionalAgentCapabilities;
+  hostMode?: boolean;
+  home?: string;
+  uid?: number;
+  gid?: number;
 };
 
 export type TenantWorkerEvent =

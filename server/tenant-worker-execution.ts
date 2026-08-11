@@ -22,7 +22,8 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     pythonRuntimeRoot: request.pythonRuntimeRoot,
   });
   const codexEnvironment = buildCodexEnvironment(pythonRuntime, request.runtimeRoot);
-  codexEnvironment.HOME = request.tenantRoot;
+  const hostMode = Boolean(request.hostMode);
+  codexEnvironment.HOME = hostMode && request.home ? request.home : request.tenantRoot;
   codexEnvironment.CODEX_HOME = request.codexHome;
   if (process.platform === "win32") {
     codexEnvironment.CODEX_WINDOWS_SANDBOX = request.codexWindowsSandbox;
@@ -38,10 +39,13 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     model: request.selection.model,
     reasoningEffort: request.selection.reasoningEffort,
     library: request.library,
-    shellEnvironment: buildShellEnvironment(pythonRuntime, request.runtimeRoot),
+    shellEnvironment: buildShellEnvironment(pythonRuntime, request.runtimeRoot, hostMode ? request.home : undefined),
     networkAccessEnabled: request.networkAccessEnabled,
     webSearchMode: request.webSearchMode,
     optionalCapabilities: request.optionalCapabilities,
+    sandbox: hostMode ? "danger-full-access" : undefined,
+    uid: hostMode ? request.uid : undefined,
+    gid: hostMode ? request.gid : undefined,
   }, callbacks);
 }
 

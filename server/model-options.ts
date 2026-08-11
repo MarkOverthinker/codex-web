@@ -82,25 +82,29 @@ function orderedEfforts(efforts: ModelReasoningEffort[]): ModelReasoningEffort[]
 }
 
 function catalogModels(config: AppConfig, codexHome = config.codexHome): AgentModelOption[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models?: CatalogModel[] };
-    if (!Array.isArray(parsed.models)) return [];
-    return parsed.models
-      .filter((model) => model.visibility === "list")
-      .filter((model) => Array.isArray(model.input_modalities) && model.input_modalities.some((modality) => modality === "text" || modality === "image"))
-      .map((model) => ({
-        id: typeof model.slug === "string" ? model.slug : "",
-        label: typeof model.display_name === "string" ? model.display_name : String(model.slug ?? ""),
-        description: typeof model.description === "string" ? model.description : "",
-        reasoningEfforts: reasoningEfforts(model.supported_reasoning_levels),
-        priority: typeof model.priority === "number" ? model.priority : Number.MAX_SAFE_INTEGER,
-      }))
-      .filter((model) => /^[a-z0-9][a-z0-9._-]{1,80}$/i.test(model.id) && model.reasoningEfforts.length > 0)
-      .sort((left, right) => left.priority - right.priority)
-      .map(({ priority: _priority, ...model }) => model);
-  } catch {
-    return [];
+  const candidates = ["models_cache.json", "models.json"];
+  for (const name of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(codexHome, name), "utf8")) as { models?: CatalogModel[] };
+      if (!Array.isArray(parsed.models)) continue;
+      return parsed.models
+        .filter((model) => model.visibility === "list")
+        .filter((model) => Array.isArray(model.input_modalities) && model.input_modalities.some((modality) => modality === "text" || modality === "image"))
+        .map((model) => ({
+          id: typeof model.slug === "string" ? model.slug : "",
+          label: typeof model.display_name === "string" ? model.display_name : String(model.slug ?? ""),
+          description: typeof model.description === "string" ? model.description : "",
+          reasoningEfforts: reasoningEfforts(model.supported_reasoning_levels),
+          priority: typeof model.priority === "number" ? model.priority : Number.MAX_SAFE_INTEGER,
+        }))
+        .filter((model) => /^[a-z0-9][a-z0-9._-]{1,80}$/i.test(model.id) && model.reasoningEfforts.length > 0)
+        .sort((left, right) => left.priority - right.priority)
+        .map(({ priority: _priority, ...model }) => model);
+    } catch {
+      // Try the next catalog candidate; fall back to built-in models when none parse.
+    }
   }
+  return [];
 }
 
 function strongestModel(models: AgentModelOption[]): string {

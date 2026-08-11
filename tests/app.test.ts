@@ -746,6 +746,7 @@ test("single-user login and CSRF protection", async (context) => {
   assert.equal(options.body.defaults.model, "gpt-5.6-sol");
   assert.equal(options.body.defaults.reasoningEffort, "xhigh");
   assert.deepEqual(options.body.selection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+  assert.equal(options.body.codexConfigured, true);
 
   await agent.post("/codex-web/api/conversations").expect(403);
   const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
@@ -810,6 +811,33 @@ test("single-user login and CSRF protection", async (context) => {
     .field("message", "请制作一份很长很长的家长会成绩分析演示文稿").expect(202);
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.title, "新任务");
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.title_source, "default");
+});
+
+test("host mode reports unconfigured tenants and blocks task sends until ~/.codex exists", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-mode-api-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot,
+    username: "no-such-system-user-zzz",
+    passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: true,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "no-such-system-user-zzz", password: "Correct-Horse-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const options = await agent.get("/codex-web/api/agent-options").expect(200);
+  assert.equal(options.body.codexConfigured, false);
+  assert.match(options.body.codexConfigHint, /系统账户/);
+
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  await agent.post(`/codex-web/api/conversations/${created.body.conversation.id}/messages`)
+    .set("X-CSRF-Token", csrf).field("message", "hello").expect(409);
 });
 
 test("quoted selections stay outside the visible message body and survive the pending queue", async (context) => {

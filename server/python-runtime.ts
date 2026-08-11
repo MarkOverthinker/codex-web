@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import type { AppConfig } from "./config.js";
 
 export type PythonRuntime = {
@@ -21,11 +22,16 @@ export function resolvePythonRuntime(config: Pick<AppConfig, "projectRoot" | "py
   };
 }
 
-export function prepareJobRuntime(workspace: string, jobId: string): string {
+export function prepareJobRuntime(workspace: string, jobId: string, ownership?: { uid: number; gid: number }): string {
   if (!/^[0-9a-f-]{36}$/i.test(jobId)) throw new Error("Invalid job id");
   const runtimeRoot = path.join(workspace, ".runtime", "jobs", jobId);
   for (const directory of ["uv-cache", "pip-cache", "tmp", "home", "xdg-cache", "xdg-config", "xdg-state", "xdg-runtime"]) {
     fs.mkdirSync(path.join(runtimeRoot, directory), { recursive: true });
+  }
+  if (ownership && process.getuid?.() === 0) {
+    // A root web server drops privileges into the tenant worker, so the job
+    // runtime must be owned by the tenant before the child codex process runs.
+    execFileSync("chown", ["-R", `${ownership.uid}:${ownership.gid}`, runtimeRoot]);
   }
   return runtimeRoot;
 }
@@ -62,7 +68,7 @@ export function buildCodexEnvironment(runtime: PythonRuntime, runtimeRoot: strin
   return env;
 }
 
-export function buildShellEnvironment(runtime: PythonRuntime, runtimeRoot: string): Record<string, string> {
+export function buildShellEnvironment(runtime: PythonRuntime, runtimeRoot: string, home?: string): Record<string, string> {
   return {
     CWW_SHARED_PYTHON: runtime.pythonPath,
     CWW_UV: runtime.uvPath,
@@ -70,7 +76,7 @@ export function buildShellEnvironment(runtime: PythonRuntime, runtimeRoot: strin
     CWW_JOB_RUNTIME: runtimeRoot,
     UV_CACHE_DIR: path.join(runtimeRoot, "uv-cache"),
     PIP_CACHE_DIR: path.join(runtimeRoot, "pip-cache"),
-    HOME: path.join(runtimeRoot, "home"),
+    HOME: home ?? path.join(runtimeRoot, "home"),
     TMPDIR: path.join(runtimeRoot, "tmp"),
     TMP: path.join(runtimeRoot, "tmp"),
     TEMP: path.join(runtimeRoot, "tmp"),
