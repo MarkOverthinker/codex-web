@@ -36,4 +36,47 @@ if [[ "$should_seed" -eq 1 ]]; then
 fi
 
 test -x "$runtime_root/current/bin/codex"
+
+# Reuse the host Codex login and model catalog for the owner tenant instead of
+# requiring an interactive `codex login --device-auth` inside the container.
+# HOST_CODEX_HOME is an optional read-only mount of the host ~/.codex.
+seed_host_codex() {
+  local host_home="${HOST_CODEX_HOME:-}"
+  local owner_id="00000000-0000-4000-8000-000000000001"
+  local tenant_home="/app/tenants/$owner_id/codex-home"
+  if [[ -z "$host_home" || ! -d "$host_home" ]]; then
+    return 0
+  fi
+  mkdir -p "$tenant_home"
+  local name source dest
+  for name in config.toml auth.json models.json rightcode_auth.json models_cache.json; do
+    source="$host_home/$name"
+    dest="$tenant_home/$name"
+    if [[ ! -f "$source" ]]; then
+      continue
+    fi
+    if [[ "$name" == "config.toml" ]]; then
+      # The tenant worker's HOME is the tenant root, not the codex home, so
+      # rewrite ~/.codex/ references to the tenant-absolute location.
+      sed "s|~/.codex/|$tenant_home/|g" "$source" > "$dest"
+    else
+      cp -a "$source" "$dest"
+    fi
+    chown 11001:11001 "$dest"
+    if [[ "$name" == "models.json" || "$name" == "models_cache.json" ]]; then
+      chmod 0644 "$dest"
+    else
+      chmod 0600 "$dest"
+    fi
+  done
+  # The web model picker reads models_cache.json; derive it from the host
+  # catalog when the CLI has not produced its own cache yet.
+  if [[ ! -f "$tenant_home/models_cache.json" && -f "$tenant_home/models.json" ]]; then
+    cp -a "$tenant_home/models.json" "$tenant_home/models_cache.json"
+    chown 11001:11001 "$tenant_home/models_cache.json"
+    chmod 0644 "$tenant_home/models_cache.json"
+  fi
+}
+seed_host_codex
+
 exec node dist-server/server/supervisor.js
