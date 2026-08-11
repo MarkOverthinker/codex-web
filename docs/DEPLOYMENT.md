@@ -110,6 +110,13 @@ sudo node scripts/add-tenant.mjs <username> <password> [display-name]
   `TENANT_ROOT/<user-id>`, and prints whether the user's `~/.codex` is
   configured.
 
+Removing a tenant reverses the process (root required; `--system` also deletes
+the machine user and its home, `--force` proceeds despite queued/running jobs):
+
+```bash
+sudo node scripts/remove-tenant.mjs <username> --system
+```
+
 The web UI shows a persistent banner when a user's `~/.codex` is missing
 `config.toml` or usable credentials (`auth.json`, `rightcode_auth.json`, or an
 inline `experimental_bearer_token` in `config.toml`), and sending tasks is
