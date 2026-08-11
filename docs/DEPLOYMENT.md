@@ -139,6 +139,13 @@ sudo systemctl enable --now codex-web
 journalctl -u codex-web -f
 ```
 
+`CODEX_RUNTIME_PATH` must point to a Codex CLI that every tenant Unix user can
+traverse and execute. A CLI inside the checkout owner's home is not usable:
+when the home directory is mode `0700`, tenant workers (for example a machine
+user named `zzlei`) fail with `spawn .../codex EACCES`. Prefer a system-wide
+install such as `/usr/bin/codex` (the `npm install -g` prefix), or verify that
+every directory on the CLI path is world-searchable.
+
 Stop any manually started `node dist-server/server/index.js` process first,
 otherwise the new service fails to bind the port (the unit restarts and binds
 as soon as the port frees up). `TimeoutStopSec=1800` preserves the graceful
