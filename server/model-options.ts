@@ -87,7 +87,7 @@ function catalogModels(config: AppConfig, codexHome = config.codexHome): AgentMo
     if (!Array.isArray(parsed.models)) return [];
     return parsed.models
       .filter((model) => model.visibility === "list")
-      .filter((model) => Array.isArray(model.input_modalities) && model.input_modalities.includes("image"))
+      .filter((model) => Array.isArray(model.input_modalities) && model.input_modalities.some((modality) => modality === "text" || modality === "image"))
       .map((model) => ({
         id: typeof model.slug === "string" ? model.slug : "",
         label: typeof model.display_name === "string" ? model.display_name : String(model.slug ?? ""),
