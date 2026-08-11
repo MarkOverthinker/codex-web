@@ -107,14 +107,50 @@ function addHostSystemUser(username) {
   if (!system) throw new Error(`Failed to create system user ${username}`);
   const template = process.env.CODEX_TEMPLATE_HOME || "/etc/skel/.codex";
   const target = path.join(system.home, ".codex");
-  if (fs.existsSync(template)) {
-    fs.cpSync(template, target, { recursive: true, force: true });
+  if (fs.existsSync(target)) {
+    // useradd -m already copied /etc/skel (including .codex) into the new
+    // home; re-copying onto it would fail with EEXIST and re-create
+    // root-owned entries. Just fix ownership.
     execFileSync(toolPath("chown"), ["-R", `${system.uid}:${system.gid}`, target]);
-    console.log(`New system user ${username} created; ~/.codex copied from ${template}.`);
+    console.log(`New system user ${username} created; ~/.codex already provisioned from the system skeleton, ownership fixed.`);
+    return system;
+  }
+  if (fs.existsSync(template)) {
+    try {
+      copyCodexTemplate(template, target, system);
+      console.log(`New system user ${username} created; ~/.codex copied from ${template} (runtime files excluded).`);
+    } catch (error) {
+      try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+      throw new Error(`Failed to copy Codex template to ${target}: ${error.message}`);
+    }
   } else {
     console.log(`New system user ${username} created; no template at ${template}, so ~/.codex must be configured later by ${username}.`);
   }
   return system;
+}
+
+const TEMPLATE_SKIP_DIRS = new Set(["tmp", ".tmp", "ipc", "logs", "sessions", "archived_sessions", "shell_snapshots", "thread-writer-locks", "memories"]);
+const TEMPLATE_SKIP_PATTERN = /\.sqlite(?:-shm|-wal)?$/;
+
+function copyCodexTemplate(source, target, system) {
+  fs.mkdirSync(target, { recursive: true });
+  const walk = (srcDir, destDir) => {
+    for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      if (TEMPLATE_SKIP_DIRS.has(entry.name) || TEMPLATE_SKIP_PATTERN.test(entry.name)) continue;
+      const src = path.join(srcDir, entry.name);
+      const dest = path.join(destDir, entry.name);
+      if (entry.isDirectory()) {
+        fs.mkdirSync(dest, { recursive: true });
+        walk(src, dest);
+      } else if (entry.isSymbolicLink()) {
+        fs.symlinkSync(fs.readlinkSync(src), dest);
+      } else if (entry.isFile()) {
+        fs.copyFileSync(src, dest);
+      }
+    }
+  };
+  walk(source, target);
+  execFileSync(toolPath("chown"), ["-R", `${system.uid}:${system.gid}`, target]);
 }
 
 function toolPath(name) {
