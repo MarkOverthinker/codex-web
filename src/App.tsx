@@ -1259,6 +1259,7 @@ function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, 
       placeholder="独立工作区"
       title="选择本对话的 Codex 工作目录"
       disabled={workingDirSaving || detail.conversation.status === "running" || detail.conversation.has_pending_work > 0}
+      direction="down"
       onChange={(value) => onWorkingDirChange(value || null)}
     />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
     <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
@@ -1692,7 +1693,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
 
 type SettingMenuOption = { id: string; label: string; description?: string };
 
-function SettingMenu({ className, label, value, options, placeholder, title, disabled, onChange }: {
+function SettingMenu({ className, label, value, options, placeholder, title, disabled, onChange, direction = "up" }: {
   className: string;
   label: string;
   value: string;
@@ -1701,6 +1702,7 @@ function SettingMenu({ className, label, value, options, placeholder, title, dis
   title: string;
   disabled: boolean;
   onChange: (value: string) => void;
+  direction?: "up" | "down";
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -1757,7 +1759,7 @@ function SettingMenu({ className, label, value, options, placeholder, title, dis
     <button type="button" className="setting-select" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId} disabled={disabled} title={title} onClick={() => setOpen((current) => !current)} onKeyDown={keyDown}>
       <span>{label}</span><strong className="setting-value">{(selected?.label ?? value) || placeholder}</strong><ChevronDown size={13} />
     </button>
-    {open && <div id={menuId} className="setting-menu-panel" role="listbox" aria-label={label}>
+    {open && <div id={menuId} className={`setting-menu-panel ${direction === "down" ? "open-down" : ""}`} role="listbox" aria-label={label}>
       {options.map((option, index) => <button key={option.id} type="button" role="option" aria-selected={option.id === value} className={`${option.id === value ? "selected" : ""} ${index === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(option)}>
         <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>{option.id === value && <Check size={14} />}
       </button>)}
