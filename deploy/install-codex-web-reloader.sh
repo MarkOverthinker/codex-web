@@ -39,6 +39,7 @@ if ! id "$client_user" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$config_dir"
+chown root:"$client_user" "$config_dir"
 chmod 0750 "$config_dir"
 
 token="$(openssl rand -hex 32)"
