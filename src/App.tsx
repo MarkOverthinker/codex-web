@@ -67,10 +67,42 @@ function composerDraftSignature(content: string, quoteExcerpt: string): string {
   return `${content}\u0000${quoteExcerpt}`;
 }
 
-function readCategoryDisplayState(key: string): Record<string, boolean> {
+/**
+ * localStorage is only a convenience cache. Some browsers expose the
+ * property but throw while resolving it (for example when storage is blocked
+ * by a privacy policy), so all access must stay behind this best-effort API.
+ */
+export function readLocalStorageValue(key: string, storage?: Pick<Storage, "getItem">): string | null {
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return {};
+    const source = storage ?? (typeof window === "undefined" ? undefined : window.localStorage);
+    return source?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLocalStorageValue(key: string, value: string, storage?: Pick<Storage, "setItem">): void {
+  try {
+    const source = storage ?? (typeof window === "undefined" ? undefined : window.localStorage);
+    source?.setItem(key, value);
+  } catch {
+    // A disabled or full cache must never prevent the UI from rendering.
+  }
+}
+
+export function removeLocalStorageValue(key: string, storage?: Pick<Storage, "removeItem">): void {
+  try {
+    const source = storage ?? (typeof window === "undefined" ? undefined : window.localStorage);
+    source?.removeItem(key);
+  } catch {
+    // Clearing an optional cache is also best effort.
+  }
+}
+
+function readCategoryDisplayState(key: string): Record<string, boolean> {
+  const raw = readLocalStorageValue(key);
+  if (!raw) return {};
+  try {
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, boolean> : {};
   } catch {
@@ -79,18 +111,39 @@ function readCategoryDisplayState(key: string): Record<string, boolean> {
 }
 
 function persistCategoryDisplayState(key: string, value: Record<string, boolean>): void {
-  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be unavailable in private browsing. */ }
+  writeLocalStorageValue(key, JSON.stringify(value));
 }
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => readStoredThemePreference());
   const [systemPrefersDark, setSystemPrefersDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
 
   useEffect(() => {
-    api.session().then((value) => { setCsrf(value.csrfToken); setSession(value); }).finally(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+    setLoading(true);
+    setSessionError(null);
+    void api.session()
+      .then((value) => {
+        if (cancelled) return;
+        setCsrf(value.csrfToken);
+        setSession(value);
+      })
+      .catch((reason) => {
+        if (cancelled) return;
+        setCsrf();
+        setSession(null);
+        const detail = reason instanceof Error ? reason.message.trim() : "";
+        setSessionError(detail ? `无法连接到服务：${detail}` : "无法连接到服务，请检查服务状态后重试。");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [sessionAttempt]);
   useEffect(() => {
     const query = window.matchMedia?.("(prefers-color-scheme: dark)");
     if (!query) return;
@@ -100,10 +153,19 @@ export default function App() {
   }, []);
   useEffect(() => {
     applyThemePreference(themePreference, systemPrefersDark);
-    try { window.localStorage.setItem(THEME_PREFERENCE_KEY, themePreference); } catch { /* Storage can be unavailable in private browsing. */ }
+    writeLocalStorageValue(THEME_PREFERENCE_KEY, themePreference);
   }, [systemPrefersDark, themePreference]);
 
   if (loading) return <div className="boot"><div className="brand-mark"><Zap size={20} /></div><LoaderCircle className="spin" /></div>;
+  if (sessionError) {
+    return <main className="login-page"><section className="login-card" role="alert">
+      <div className="login-heading"><h1>服务连接失败</h1><p>{sessionError}</p></div>
+      <button className="primary-button" type="button" onClick={() => {
+        setLoading(true);
+        setSessionAttempt((attempt) => attempt + 1);
+      }}>重试</button>
+    </section></main>;
+  }
   if (!session?.authenticated) return <Login onLogin={(value) => { setCsrf(value.csrfToken); setSession(value); }} />;
   return <Workspace session={session} onLogout={() => { setCsrf(); setSession({ authenticated: false }); }} themePreference={themePreference} onThemePreferenceChange={setThemePreference} />;
 }
@@ -138,7 +200,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
 
 function Workspace({ session, onLogout, themePreference, onThemePreferenceChange }: { session: Session; onLogout: () => void; themePreference: ThemePreference; onThemePreferenceChange: (preference: ThemePreference) => void }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(() => window.localStorage.getItem(SELECTED_CONVERSATION_KEY));
+  const [selectedId, setSelectedId] = useState<string | null>(() => readLocalStorageValue(SELECTED_CONVERSATION_KEY));
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -419,8 +481,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     return () => window.clearInterval(timer);
   }, [refreshList]);
   useEffect(() => {
-    window.localStorage.removeItem("codex-web:model");
-    window.localStorage.removeItem("codex-web:reasoning");
+    removeLocalStorageValue("codex-web:model");
+    removeLocalStorageValue("codex-web:reasoning");
     void api.agentOptions().then((options) => {
       setAgentOptions(options);
       if (!selectedIdRef.current) {
@@ -491,7 +553,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     prependScrollRestoreRef.current = null;
     setLoadingOlderMessages(false);
     if (!selectedId) {
-      window.localStorage.removeItem(SELECTED_CONVERSATION_KEY);
+      removeLocalStorageValue(SELECTED_CONVERSATION_KEY);
       eventSourceRef.current?.close(); connectedJobRef.current = null;
       clearActivitiesBuffer();
       setDetail(null); setJob(null); setSending(false); setActivities([]);
@@ -504,7 +566,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       }
       return;
     }
-    window.localStorage.setItem(SELECTED_CONVERSATION_KEY, selectedId);
+    writeLocalStorageValue(SELECTED_CONVERSATION_KEY, selectedId);
     eventSourceRef.current?.close(); connectedJobRef.current = null; setActivities([]);
     clearActivitiesBuffer();
     editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]); setFiles([]); setDraftUploads([]);
@@ -681,7 +743,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       if (selectedIdRef.current !== id) return;
       const items = await refreshList().catch(() => [] as Conversation[]);
       if (!items.some((conversation) => conversation.id === id)) {
-        window.localStorage.removeItem(SELECTED_CONVERSATION_KEY);
+        removeLocalStorageValue(SELECTED_CONVERSATION_KEY);
         setSelectedId(chooseSelectedConversation(null, items));
       } else {
         setError(reason instanceof Error ? reason.message : "状态刷新失败");
