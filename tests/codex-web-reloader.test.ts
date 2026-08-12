@@ -65,6 +65,7 @@ test("codex-web-reloader rebuilds, restarts, and rejects unauthenticated request
   const restartLog = path.join(tmp, "restart.log");
   const failMarker = path.join(tmp, "fail");
   const busyMarker = path.join(tmp, "busy");
+  const unreadableMarker = path.join(tmp, "unreadable");
   const tokenFile = path.join(tmp, "token");
 
   const mockBuild = path.join(tmp, "mock-build.mjs");
@@ -91,7 +92,9 @@ console.log("mock restart ok");
   await fs.promises.writeFile(
     mockIdleCheck,
     `import fs from "node:fs";
-if (process.env.CODEX_WEB_RELOADER_BUSY_MARKER && fs.existsSync(process.env.CODEX_WEB_RELOADER_BUSY_MARKER)) {
+if (process.env.CODEX_WEB_RELOADER_UNREADABLE_MARKER && fs.existsSync(process.env.CODEX_WEB_RELOADER_UNREADABLE_MARKER)) {
+  console.log(JSON.stringify({ idle: false, running: -1, error: "db missing" }));
+} else if (process.env.CODEX_WEB_RELOADER_BUSY_MARKER && fs.existsSync(process.env.CODEX_WEB_RELOADER_BUSY_MARKER)) {
   console.log(JSON.stringify({ idle: false, running: 1 }));
 } else {
   console.log(JSON.stringify({ idle: true, running: 0 }));
@@ -112,6 +115,8 @@ if (process.env.CODEX_WEB_RELOADER_BUSY_MARKER && fs.existsSync(process.env.CODE
       CODEX_WEB_RELOADER_RESTART_LOG: restartLog,
       CODEX_WEB_RELOADER_FAIL_MARKER: failMarker,
       CODEX_WEB_RELOADER_BUSY_MARKER: busyMarker,
+      CODEX_WEB_RELOADER_UNREADABLE_MARKER: unreadableMarker,
+      CODEX_WEB_RELOADER_POLL_MS: "50",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -172,24 +177,39 @@ if (process.env.CODEX_WEB_RELOADER_BUSY_MARKER && fs.existsSync(process.env.CODE
 
   const restartLogAfterFailure = await fs.promises.readFile(restartLog, "utf8");
   assert.equal(restartLogAfterFailure.match(/restart ok/g)?.length ?? 0, 2);
+  await fs.promises.rm(failMarker);
 
-  const buildRunsBeforeBusy = (await fs.promises.readFile(buildLog, "utf8")).match(/build ok/g)?.length ?? 0;
-  const restartRunsBeforeBusy = (await fs.promises.readFile(restartLog, "utf8")).match(/restart ok/g)?.length ?? 0;
+  const buildRunsBeforeQueue = (await fs.promises.readFile(buildLog, "utf8")).match(/build ok/g)?.length ?? 0;
+  const restartRunsBeforeQueue = (await fs.promises.readFile(restartLog, "utf8")).match(/restart ok/g)?.length ?? 0;
+
+  await fs.promises.writeFile(unreadableMarker, "unreadable");
+  const unreadable = await fetch(`${baseUrl}/restart`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ command: "restart" }),
+  });
+  assert.equal(unreadable.status, 409);
+  const unreadableBody = await unreadable.json();
+  assert.equal(unreadableBody.state, "busy");
+  assert.equal(unreadableBody.ok, false);
+  assert.match(unreadableBody.error, /db missing/);
+  await fs.promises.rm(unreadableMarker);
+
   await fs.promises.writeFile(busyMarker, "busy");
   const busy = await fetch(`${baseUrl}/restart`, {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}` },
     body: JSON.stringify({ command: "restart" }),
   });
-  assert.equal(busy.status, 409);
+  assert.equal(busy.status, 202);
   const busyBody = await busy.json();
-  assert.equal(busyBody.state, "busy");
-  assert.equal(busyBody.ok, false);
+  assert.equal(busyBody.state, "waiting");
+  assert.equal(busyBody.ok, true);
   assert.equal(busyBody.lastResult.command, "idle-check");
   const buildLogAfterBusy = await fs.promises.readFile(buildLog, "utf8");
   const restartLogAfterBusy = await fs.promises.readFile(restartLog, "utf8");
-  assert.equal(buildLogAfterBusy.match(/build ok/g)?.length ?? 0, buildRunsBeforeBusy);
-  assert.equal(restartLogAfterBusy.match(/restart ok/g)?.length ?? 0, restartRunsBeforeBusy);
+  assert.equal(buildLogAfterBusy.match(/build ok/g)?.length ?? 0, buildRunsBeforeQueue);
+  assert.equal(restartLogAfterBusy.match(/restart ok/g)?.length ?? 0, restartRunsBeforeQueue);
 
   const busyClient = await runWithOutput(process.execPath, [path.join(process.cwd(), "scripts", "reload-codex-web.mjs")], {
     cwd: process.cwd(),
@@ -200,6 +220,22 @@ if (process.env.CODEX_WEB_RELOADER_BUSY_MARKER && fs.existsSync(process.env.CODE
       CODEX_WEB_RELOADER_BUSY_MARKER: busyMarker,
     },
   });
-  assert.notEqual(busyClient.code, 0);
-  assert.match(busyClient.stderr, /本次未重启/);
+  assert.equal(busyClient.code, 0, busyClient.stderr);
+  assert.match(busyClient.stdout, /排队/);
+
+  await fs.promises.rm(busyMarker);
+  let finalState = "";
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const status = await (await fetch(`${baseUrl}/status`)).json();
+    if (status.state === "idle" && status.lastResult?.command === "restart") {
+      finalState = status.state;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(finalState, "idle");
+  const buildLogAfterQueue = await fs.promises.readFile(buildLog, "utf8");
+  const restartLogAfterQueue = await fs.promises.readFile(restartLog, "utf8");
+  assert.ok((buildLogAfterQueue.match(/build ok/g)?.length ?? 0) > buildRunsBeforeQueue);
+  assert.ok((restartLogAfterQueue.match(/restart ok/g)?.length ?? 0) > restartRunsBeforeQueue);
 });

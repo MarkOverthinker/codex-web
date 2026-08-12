@@ -34,4 +34,10 @@ if (!response.ok) {
   }
   process.exit(1);
 }
-console.log(text);
+let body = null;
+try { body = JSON.parse(text); } catch { /* Non-JSON success body. */ }
+if (body?.state === "waiting") {
+  console.log(body.message || "Codex Web 仍有任务运行，已排队等待自动重启。");
+} else {
+  console.log(text);
+}
