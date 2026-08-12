@@ -23,12 +23,16 @@ fi
 
 service_path="$(sed -n 's/^WorkingDirectory=//p' "$service_unit" | head -n 1)"
 service_env_path="$(sed -n 's/^Environment=PATH=//p' "$service_unit" | head -n 1)"
+service_data_root="$(sed -n 's/^Environment=DATA_ROOT=//p' "$service_unit" | head -n 1)"
 if [[ -z "$service_path" ]]; then
   echo "no WorkingDirectory= found in $service_unit" >&2
   exit 1
 fi
 if [[ -z "$service_env_path" ]]; then
   service_env_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+fi
+if [[ -z "$service_data_root" ]]; then
+  service_data_root="$service_path/data"
 fi
 if [[ "$repo_root" != "$service_path" ]]; then
   echo "warning: repo root ($repo_root) differs from codex-web.service WorkingDirectory ($service_path)" >&2
@@ -51,6 +55,8 @@ fi
 umask 077
 printf 'CODEX_WEB_RELOADER_TOKEN=%s\n' "$token" > "$config_dir/env"
 printf 'CODEX_WEB_RELOADER_ROOT=%s\n' "$repo_root" >> "$config_dir/env"
+printf 'CODEX_WEB_RELOADER_IDLE_CHECK_CMD="node scripts/check-codex-web-idle.mjs"\n' >> "$config_dir/env"
+printf 'CODEX_WEB_DATA_ROOT=%s\n' "$service_data_root" >> "$config_dir/env"
 printf 'CODEX_WEB_RELOADER_BUILD_CMD="npm run build"\n' >> "$config_dir/env"
 printf 'CODEX_WEB_RELOADER_RESTART_CMD="systemctl restart codex-web.service"\n' >> "$config_dir/env"
 chown root:root "$config_dir/env"
