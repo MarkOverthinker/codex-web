@@ -459,6 +459,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .markdown li + li { margin-top: .25em; }
 .markdown blockquote { margin-inline: 0; padding: .0625em 0 .0625em .8125em; border-left: 3px solid #c5cae2; color: var(--ink-soft); }
 .markdown pre { overflow-x: auto; padding: .875em; border: 1px solid #e3e5ed; border-radius: .625em; color: #e9ebf4; background: #171b32; }
+.markdown pre code.hljs { display: block; padding: 0; background: transparent; }
+.markdown .hljs-comment, .markdown .hljs-quote { color: #8a93a5; font-style: italic; }
+.markdown .hljs-keyword, .markdown .hljs-selector-tag, .markdown .hljs-literal { color: #c792ea; }
+.markdown .hljs-string, .markdown .hljs-attr, .markdown .hljs-attribute, .markdown .hljs-template-tag { color: #a5d6a7; }
+.markdown .hljs-number, .markdown .hljs-symbol, .markdown .hljs-bullet { color: #f78c6c; }
+.markdown .hljs-title, .markdown .hljs-section, .markdown .hljs-function .hljs-title { color: #82aaff; }
+.markdown .hljs-type, .markdown .hljs-built_in, .markdown .hljs-class .hljs-title { color: #ffcb6b; }
+.markdown .hljs-variable, .markdown .hljs-template-variable, .markdown .hljs-params { color: #e6e6e6; }
+.markdown .hljs-meta, .markdown .hljs-doctag { color: #89ddff; }
+.markdown .hljs-emphasis { font-style: italic; }
+.markdown .hljs-strong { font-weight: 700; }
 .markdown code { font-family: "Cascadia Code", Consolas, monospace; font-size: .9em; }
 .markdown :not(pre) > code { padding: .125em .3125em; border-radius: .3125em; color: #29356f; background: var(--indigo-pale); }
 .markdown .katex { font-size: 1.05em; }
