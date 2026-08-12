@@ -1,0 +1,19 @@
+[Unit]
+Description=Codex Web reload controller (host mode)
+After=network-online.target codex-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__WORKING_DIRECTORY__
+EnvironmentFile=/etc/codex-web-reloader/env
+Environment=PATH=__PATH__
+ExecStart=__NODE_BIN__ __WORKING_DIRECTORY__/scripts/codex-web-reloader.mjs
+Restart=always
+RestartSec=3
+# The controlled unit can drain in-flight Codex jobs for up to 30 minutes.
+TimeoutStopSec=1800
+
+[Install]
+WantedBy=multi-user.target
