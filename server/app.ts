@@ -20,7 +20,9 @@ import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from 
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { discoverImportableSessions, importSessionThread } from "./session-importer.js";
 import {
+  autoDirCategoryKey,
   customCategoryKey,
+  listValidHiddenCategoryKeys,
   listValidPinnedCategoryKeys,
   type TaskListCategorySettings,
 } from "../src/task-categories.js";
@@ -528,6 +530,12 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       const removed = favorites.filter((favorite) => favorite.path !== target);
       db.setFavoriteWorkingDirectories(removed, session.user_id);
       if (db.getDefaultWorkingDir(session.user_id) === target) db.setDefaultWorkingDir(null, session.user_id);
+      const settings = taskListCategorySettingsFor(session.user_id);
+      const hiddenWithoutDir = settings.hidden.filter((key) => key !== autoDirCategoryKey(target));
+      if (hiddenWithoutDir.length !== settings.hidden.length) {
+        settings.hidden = hiddenWithoutDir;
+        saveTaskListCategorySettings(session.user_id, settings);
+      }
       return res.json({ settings: workingDirSettingsFor(session.user_id) });
     } else {
       const favorite = favorites.find((candidate) => candidate.path === target);
@@ -612,6 +620,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     settings.customCategories = settings.customCategories.filter((category) => category.id !== id);
     if (settings.customCategories.length === before) return res.status(404).json({ error: "自定义分类不存在。" });
     settings.pinned = settings.pinned.filter((key) => key !== customCategoryKey(id));
+    settings.hidden = settings.hidden.filter((key) => key !== customCategoryKey(id));
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 
@@ -654,6 +663,22 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const settings = taskListCategorySettingsFor(session.user_id);
     const favoritePaths = db.getFavoriteWorkingDirectories(session.user_id).map((favorite) => favorite.path);
     settings.pinned = listValidPinnedCategoryKeys({ customCategories: settings.customCategories, pinned: rawKeys.filter((key): key is string => typeof key === "string") }, favoritePaths);
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
+  });
+
+  api.put("/task-categories/hidden", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "任务列表分类仅支持已映射系统账户的 host 模式。" });
+    }
+    const rawKeys = req.body?.keys;
+    if (!Array.isArray(rawKeys)) return res.status(400).json({ error: "隐藏分类列表无效。" });
+    const settings = taskListCategorySettingsFor(session.user_id);
+    const favoritePaths = db.getFavoriteWorkingDirectories(session.user_id).map((favorite) => favorite.path);
+    settings.hidden = listValidHiddenCategoryKeys(
+      { customCategories: settings.customCategories, hidden: rawKeys.filter((key): key is string => typeof key === "string") },
+      favoritePaths,
+    );
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 

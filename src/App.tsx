@@ -4,12 +4,12 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
-  CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
+  Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
-  buildDirectoryAssignments, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
+  buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
@@ -1173,6 +1173,33 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
+  async function saveCategoryHidden(keys: string[]) {
+    setCategorySaving(true); setError("");
+    try {
+      const { settings: saved } = await api.updateTaskCategoryHidden(keys);
+      setTaskCategorySettings(saved);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "更新隐藏分类失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function toggleCategoryHidden(view: TaskListCategoryView) {
+    const settings = taskCategorySettings;
+    if (!settings || categorySaving) return;
+    const next = settings.hidden.includes(view.key)
+      ? settings.hidden.filter((key) => key !== view.key)
+      : [...settings.hidden, view.key];
+    await saveCategoryHidden(next);
+  }
+
+  async function restoreHiddenCategory(key: string) {
+    const settings = taskCategorySettings;
+    if (!settings || categorySaving) return;
+    await saveCategoryHidden(settings.hidden.filter((candidate) => candidate !== key));
+  }
+
   async function movePinnedCategory(key: string, delta: number) {
     const settings = taskCategorySettings;
     if (!settings || categorySaving) return;
@@ -1256,7 +1283,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
     const bounds = button.getBoundingClientRect();
     const width = 186;
-    const height = 132;
+    const height = 172;
     const top = bounds.bottom + 6 + height <= window.innerHeight - 8
       ? bounds.bottom + 6
       : Math.max(8, bounds.top - height - 6);
@@ -1281,6 +1308,13 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     () => categoryViews.filter((category) => category.pinned).sort((left, right) => left.pinIndex - right.pinIndex),
     [categoryViews],
   );
+  const hiddenCategoryInfos = useMemo(
+    () => buildHiddenCategoryInfos(taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS, workingDirSettings?.favorites ?? []),
+    [taskCategorySettings, workingDirSettings],
+  );
+  const visibleTaskCount = workingDirSettings?.enabled && taskCategorySettings
+    ? categoryViews.reduce((sum, category) => sum + category.conversations.length, 0)
+    : filtered.length;
   const currentDetail = detail?.conversation.id === selectedId ? detail : null;
   const loadingConversation = Boolean(selectedId && !currentDetail);
   const taskMenuConversation = taskMenu ? conversations.find((conversation) => conversation.id === taskMenu.conversationId) : undefined;
@@ -1325,7 +1359,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       <button className="import-sessions-button" onClick={() => void openImportDialog()} title="导入本地 Codex 历史会话"><Download size={15} />导入历史会话</button>
       <div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索任务" /></div>
       <div className="conversation-section">
-        <div className="section-label"><span>任务</span><span className="section-label-actions"><strong>{filtered.length}</strong>{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
+        <div className="section-label"><span>任务</span><span className="section-label-actions"><strong>{visibleTaskCount}</strong>{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
         <div className="conversation-list" onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
           {workingDirSettings?.enabled && taskCategorySettings
             ? categoryViews.map((category) => {
@@ -1357,7 +1391,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
                 </section>;
               })
             : filtered.map(renderConversationRow)}
-          {filtered.length === 0 && <div className="empty-list">{query ? "没有匹配任务" : "还没有任务"}</div>}
+          {visibleTaskCount === 0 && <div className="empty-list">{query ? "没有匹配任务" : filtered.length > 0 ? "所有任务都在隐藏分类中" : "还没有任务"}</div>}
         </div>
       </div>
       <div className="account-area">
@@ -1412,6 +1446,9 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       <button type="button" role="menuitem" onClick={() => { setCategoryMenu(null); void toggleCategoryPinned(categoryMenuCategory); }}>
         {categoryMenuCategory.pinned ? <PinOff size={16} /> : <Pin size={16} />}
         <span>{categoryMenuCategory.pinned ? "取消置顶" : "置顶"}</span>
+      </button>
+      <button type="button" role="menuitem" onClick={() => { setCategoryMenu(null); void toggleCategoryHidden(categoryMenuCategory); }}>
+        <EyeOff size={16} /><span>隐藏分类</span>
       </button>
       {categoryMenuCategory.kind === "auto" && <button type="button" role="menuitem" onClick={() => { setCategoryMenu(null); setCategoryManagerOpen(true); }}>
         <FolderInput size={16} /><span>移动目录…</span>
@@ -1542,6 +1579,17 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
                 </div>
               ))}
           </div>
+          {hiddenCategoryInfos.length > 0 && <div className="category-manager-section">
+            <div className="category-manager-heading"><EyeOff size={14} /><strong>已隐藏分类</strong></div>
+            {hiddenCategoryInfos.map((info) => (
+              <div className="category-custom-row" key={info.key}>
+                <span className="category-custom-copy"><strong>{info.name}</strong><small title={info.detail}>{info.detail}</small></span>
+                <span className="category-custom-actions">
+                  <button type="button" title="恢复显示" aria-label={`恢复显示 ${info.name}`} disabled={categorySaving} onClick={() => void restoreHiddenCategory(info.key)}><Eye size={14} /></button>
+                </span>
+              </div>
+            ))}
+          </div>}
           <div className="category-manager-section">
             <div className="category-manager-heading"><FolderOpen size={14} /><strong>目录归类</strong></div>
             <small className="category-manager-hint">选择“自动归类”时，已收藏目录回到自己的分类，其他目录回到临时工作区。</small>
@@ -1558,7 +1606,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
               ))}
           </div>
         </div>
-        <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；删除分类不会删除任务。</small></footer>
+        <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；隐藏的分类可从上方恢复，删除分类不会删除任务。</small></footer>
       </section>
     </div>, document.body)}
 

@@ -957,10 +957,10 @@ export class AppDatabase {
 
   getTaskListCategorySettings(userId = LEGACY_USER_ID): TaskListCategorySettings {
     const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='task_list_categories'").get(userId) as { value: string } | undefined;
-    if (!row) return { customCategories: [], pinned: [] };
+    if (!row) return { customCategories: [], pinned: [], hidden: [] };
     try {
       const parsed = JSON.parse(row.value) as Partial<TaskListCategorySettings> | null;
-      if (!parsed || typeof parsed !== "object") return { customCategories: [], pinned: [] };
+      if (!parsed || typeof parsed !== "object") return { customCategories: [], pinned: [], hidden: [] };
       const customCategories: TaskListCustomCategory[] = [];
       if (Array.isArray(parsed.customCategories)) {
         for (const item of parsed.customCategories.slice(0, 100)) {
@@ -976,9 +976,12 @@ export class AppDatabase {
       const pinned = Array.isArray(parsed.pinned)
         ? [...new Set(parsed.pinned.filter((key): key is string => typeof key === "string" && key.length > 0))].slice(0, 100)
         : [];
-      return { customCategories, pinned };
+      const hidden = Array.isArray(parsed.hidden)
+        ? [...new Set(parsed.hidden.filter((key): key is string => typeof key === "string" && key.length > 0))].slice(0, 100)
+        : [];
+      return { customCategories, pinned, hidden };
     } catch {
-      return { customCategories: [], pinned: [] };
+      return { customCategories: [], pinned: [], hidden: [] };
     }
   }
 
@@ -990,6 +993,7 @@ export class AppDatabase {
         assignedDirs: [...new Set(category.assignedDirs.filter((dir) => dir.startsWith("/")))].slice(0, 500),
       })),
       pinned: [...new Set(settings.pinned.filter((key) => key.length > 0))].slice(0, 100),
+      hidden: [...new Set(settings.hidden.filter((key) => key.length > 0))].slice(0, 100),
     };
     this.sqlite.prepare(`
       INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'task_list_categories',?,?)

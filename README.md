@@ -225,10 +225,12 @@ running work asks for your confirmation first, and proceeds once you confirm.
 The sidebar groups these tasks by working directory: standalone workspaces,
 favorite directories, and an automatic “temporary workspace” bucket for
 unfavorited paths. You can create custom categories, move a directory into one,
-pin categories, and reorder pinned categories; category definitions, directory
-assignment, and pin order are persisted on the server while expanded/collapsed
-state stays in the browser. This feature is deliberately unavailable in the
-isolated tenant deployment.
+pin categories, reorder pinned categories, and hide categories you do not want
+in the sidebar; category definitions, directory assignment, pin order, and
+hidden categories are persisted on the server while expanded/collapsed state
+stays in the browser. Hidden categories can be restored from the category
+manager. This feature is deliberately unavailable in the isolated tenant
+deployment.
 
 ## Optional voice transcription
 
