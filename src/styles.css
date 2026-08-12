@@ -490,8 +490,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .chat-output-chip svg { flex: 0 0 auto; color: var(--indigo); }
 .chat-output-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-output-chip small { flex: 0 0 auto; color: #9599aa; font-size: 9px; }
-.file-preview-pane { flex: 0 0 auto; width: clamp(320px, 38vw, 720px); height: 100%; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid #dfe2ec; color: var(--ink); background: var(--paper); box-shadow: 12px 0 28px rgba(15, 17, 32, .07); animation: file-preview-pane-in .18s ease; }
-@keyframes file-preview-pane-in { from { transform: translateX(-14px); opacity: .4; } to { transform: none; opacity: 1; } }
+.file-preview-pane { flex: 0 0 auto; width: clamp(320px, 38vw, 720px); height: 100%; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid #dfe2ec; color: var(--ink); background: var(--paper); box-shadow: -12px 0 28px rgba(15, 17, 32, .07); animation: file-preview-pane-in .18s ease; }
+@keyframes file-preview-pane-in { from { transform: translateX(14px); opacity: .4; } to { transform: none; opacity: 1; } }
 .file-preview-pane > header { min-height: 60px; flex: 0 0 60px; display: flex; align-items: center; gap: 11px; padding: 8px 10px 8px 16px; border-bottom: 1px solid #e5e7ee; }
 .file-preview-pane > header > svg { color: var(--indigo); }
 .file-preview-title { min-width: 0; display: grid; gap: 2px; }
@@ -650,7 +650,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 @media (max-width: 920px) {
   .suggestions { grid-template-columns: repeat(2, 1fr); }
   .welcome { padding-bottom: 190px; }
-  .file-preview-pane { position: fixed; inset: 0 auto 0 0; z-index: 95; width: min(88vw, 680px); box-shadow: 16px 0 36px rgba(15, 17, 32, .18); }
+  .file-preview-pane { position: fixed; inset: 0 0 0 auto; z-index: 95; width: min(88vw, 680px); box-shadow: -16px 0 36px rgba(15, 17, 32, .18); }
 }
 
 @media (hover: none) {
@@ -830,7 +830,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 :root[data-theme="dark"] .chat-outputs-heading strong { color: #d9deff; }
 :root[data-theme="dark"] .chat-output-chip { border-color: #3d3f47; color: #c7c9d0; background: #24262b; }
 :root[data-theme="dark"] .chat-output-chip:hover { border-color: #5d6275; color: #d9deff; background: #2e3036; }
-:root[data-theme="dark"] .file-preview-pane { border-right-color: #3b3e47; color: #f0f1f4; background: #24262b; box-shadow: 12px 0 28px rgba(0, 0, 0, .24); }
+:root[data-theme="dark"] .file-preview-pane { border-left-color: #3b3e47; color: #f0f1f4; background: #24262b; box-shadow: -12px 0 28px rgba(0, 0, 0, .24); }
 :root[data-theme="dark"] .file-preview-pane > header { border-bottom-color: #3b3e47; }
 :root[data-theme="dark"] .file-preview-pane > header > svg { color: #aeb9f5; }
 :root[data-theme="dark"] .file-preview-actions .icon-button { color: #a9abb4; }
