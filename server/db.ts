@@ -446,6 +446,7 @@ export class AppDatabase {
     userId: string;
     title: string;
     threadId: string;
+    workingDir: string | null;
     createdAt: string;
     updatedAt: string;
     agentModel: string | null;
@@ -455,9 +456,9 @@ export class AppDatabase {
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
       this.sqlite.prepare(`
-        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,agent_model,reasoning_effort,status,created_at,updated_at)
-        VALUES(?,?,?,'legacy',?,?,?,'idle',?,?)
-      `).run(input.id, input.userId, input.title, input.threadId, input.agentModel, input.reasoningEffort, input.createdAt, input.updatedAt);
+        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,working_dir,agent_model,reasoning_effort,status,created_at,updated_at)
+        VALUES(?,?,?,'legacy',?,?,?,?,'idle',?,?)
+      `).run(input.id, input.userId, input.title, input.threadId, input.workingDir, input.agentModel, input.reasoningEffort, input.createdAt, input.updatedAt);
       const insertMessage = this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,?,?,NULL,?)");
       for (const message of input.messages) {
         insertMessage.run(crypto.randomUUID(), input.id, message.role, message.content, message.createdAt);

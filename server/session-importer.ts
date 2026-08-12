@@ -207,12 +207,37 @@ export async function discoverImportableSessions(codexHome: string, existingThre
 }
 
 /**
+ * Turn a rollout's recorded cwd into a persisted working directory. The
+ * resolver performs the same canonicalization and safety checks as a
+ * user-supplied directory; any failure falls back to `null` so an imported
+ * conversation is still usable even when its original directory is gone or
+ * now points into managed storage.
+ */
+export function normalizeImportedWorkingDir(
+  cwd: string | null | undefined,
+  resolveWorkingDir: (raw: string) => string,
+): string | null {
+  if (!cwd) return null;
+  try {
+    return resolveWorkingDir(cwd);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Import one Codex thread as a web conversation. The rollout file is reused as
  * the single source of truth: the conversation records the thread id and a
  * readable user/assistant message history so the UI can list and open it, while
  * later turns continue the same thread inside the executor's Codex Home.
  */
-export async function importSessionThread(db: AppDatabase, codexHome: string, threadId: string, userId: string) {
+export async function importSessionThread(
+  db: AppDatabase,
+  codexHome: string,
+  threadId: string,
+  userId: string,
+  workingDir: string | null = null,
+) {
   const files = findCodexThreadFiles(codexHome, threadId).sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
   if (files.length === 0) return null;
   const filePath = files[0];
@@ -229,6 +254,7 @@ export async function importSessionThread(db: AppDatabase, codexHome: string, th
     userId,
     title: deriveImportedTitle(scan.firstUserMessage ?? messages[0]?.content ?? null),
     threadId,
+    workingDir,
     createdAt: scan.createdAt ?? messages[0]?.createdAt ?? new Date(stat.birthtimeMs).toISOString(),
     updatedAt: scan.updatedAt ?? messages[messages.length - 1]?.createdAt ?? new Date(stat.mtimeMs).toISOString(),
     agentModel: scan.model,

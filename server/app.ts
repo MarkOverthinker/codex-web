@@ -18,7 +18,7 @@ import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode
 import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
-import { discoverImportableSessions, importSessionThread } from "./session-importer.js";
+import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir } from "./session-importer.js";
 import {
   autoDirCategoryKey,
   customCategoryKey,
@@ -446,12 +446,17 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const conversations: ConversationRow[] = [];
     const skipped: string[] = [];
     for (const threadId of threadIds) {
-      if (!discoveredById.has(threadId)) {
+      const discovered = discoveredById.get(threadId);
+      if (!discovered) {
         skipped.push(threadId);
         continue;
       }
+      const workingDir = config.hostMode
+        ? normalizeImportedWorkingDir(discovered.cwd, (raw) =>
+          resolveHostWorkingDir(raw, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot }))
+        : null;
       try {
-        const conversation = await importSessionThread(db, codexHome, threadId, session.user_id);
+        const conversation = await importSessionThread(db, codexHome, threadId, session.user_id, workingDir);
         if (conversation) conversations.push(conversation);
         else skipped.push(threadId);
       } catch {

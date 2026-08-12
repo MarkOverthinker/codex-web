@@ -21,7 +21,7 @@ import { listTenantIdentities, tenantIdentityForUser } from "../server/tenant-id
 import { consumeTenantTurnEvents, validateTenantWorkerRequest } from "../server/tenant-worker-execution.js";
 import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js";
 import { isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
-import { deriveImportedTitle, discoverImportableSessions } from "../server/session-importer.js";
+import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir } from "../server/session-importer.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
@@ -1401,6 +1401,24 @@ test("session importer discovers Codex rollouts, derives titles, and skips alrea
   assert.equal((await discoverImportableSessions(codexHome, new Set([threadId, legacyThreadId]))).length, 0);
 });
 
+test("session importer persists a provided working directory and falls back to null on normalization failure", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-import-working-dir-test-"));
+  const db = new AppDatabase(path.join(root, "data"));
+  context.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const codexHome = path.join(root, "codex-home");
+  const threadId = crypto.randomUUID();
+  writeSyntheticCodexSession(codexHome, threadId);
+
+  const imported = await importSessionThread(db, codexHome, threadId, LEGACY_USER_ID, "/srv/imported-project");
+  assert.equal(imported?.working_dir, "/srv/imported-project");
+  assert.equal(db.getConversation(imported!.id)?.working_dir, "/srv/imported-project");
+
+  assert.equal(normalizeImportedWorkingDir("/srv/project", (raw) => raw), "/srv/project");
+  assert.equal(normalizeImportedWorkingDir(null, (raw) => raw), null);
+  assert.equal(normalizeImportedWorkingDir(undefined, (raw) => raw), null);
+  assert.equal(normalizeImportedWorkingDir("/gone", () => { throw new Error("missing"); }), null);
+});
+
 test("importable-sessions API discovers local Codex threads and imports them as conversations", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-import-api-test-"));
   const tenantRoot = path.join(root, "tenants");
@@ -1435,6 +1453,7 @@ test("importable-sessions API discovers local Codex threads and imports them as 
   assert.deepEqual(imported.body.skipped, []);
   const conversationId = imported.body.conversations[0].id as string;
   assert.equal(instance.db.getConversation(conversationId)?.codex_thread_id, threadId);
+  assert.equal(instance.db.getConversation(conversationId)?.working_dir, null);
 
   const detail = await browser.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
   assert.deepEqual(detail.body.messages.map((message: { role: string; content: string }) => [message.role, message.content]), [
