@@ -73,8 +73,12 @@ test("frontend installs an error boundary and client error reporting", () => {
   assert.match(mainSource, /installClientErrorReporting\(\)/);
   assert.match(boundarySource, /componentDidCatch/);
   assert.match(boundarySource, /getDerivedStateFromError/);
+  assert.match(boundarySource, /window\.location\.reload\(\)/);
+  assert.match(boundarySource, /AUTO_RELOAD_COOLDOWN_MS/);
+  assert.match(boundarySource, /this\.autoRetried/);
   assert.match(reportingSource, /unhandledrejection/);
   assert.match(reportingSource, /reportClientError/);
+  assert.match(reportingSource, /REACT_RECOVERY_NOTICE/);
 });
 
 test("client error endpoint records authenticated reports and rejects anonymous ones", async (context) => {

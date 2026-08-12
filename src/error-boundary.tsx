@@ -1,18 +1,51 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { reportBoundaryError } from "./client-errors";
 
+const AUTO_RELOAD_COOLDOWN_MS = 60_000;
+const LAST_AUTO_RELOAD_KEY = "codex-web:error-boundary:last-auto-reload";
+
 type ErrorBoundaryState = {
   error: Error | null;
   componentStack: string;
 };
 
+function readLastAutoReload(): number | null {
+  try {
+    const raw = window.sessionStorage.getItem(LAST_AUTO_RELOAD_KEY);
+    const value = raw === null ? Number.NaN : Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastAutoReload(timestamp: number): void {
+  try {
+    window.sessionStorage.setItem(LAST_AUTO_RELOAD_KEY, String(timestamp));
+  } catch {
+    /* Storage can be unavailable in private browsing. */
+  }
+}
+
+function clearLastAutoReload(): void {
+  try {
+    window.sessionStorage.removeItem(LAST_AUTO_RELOAD_KEY);
+  } catch {
+    /* Storage can be unavailable in private browsing. */
+  }
+}
+
 /**
  * Catches render/lifecycle errors so a single bad render cannot unmount the
- * whole app into a blank page. The fallback stays fully self-contained with
- * inline styles because the app's CSS may itself be in an inconsistent state.
+ * whole app into a blank page. Recovery is automatic: the first failure tries
+ * a silent re-render, a repeated failure reloads the page, and only a reload
+ * that crashes again within the cooldown shows the manual fallback. The
+ * fallback stays fully self-contained with inline styles because the app's
+ * CSS may itself be in an inconsistent state.
  */
 export class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null, componentStack: "" };
+  private autoRetried = false;
 
   static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error };
@@ -21,10 +54,33 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBo
   componentDidCatch(error: Error, info: ErrorInfo): void {
     this.setState({ componentStack: info.componentStack ?? "" });
     reportBoundaryError(error);
+    if (!this.autoRetried) {
+      // Transient render failures (e.g. a single bad streamed event) often
+      // recover without losing the SSE connection or editor state.
+      this.autoRetried = true;
+      this.setState({ error: null, componentStack: "" });
+      return;
+    }
+    const now = Date.now();
+    const lastAutoReload = readLastAutoReload();
+    if (lastAutoReload === null || now - lastAutoReload > AUTO_RELOAD_COOLDOWN_MS) {
+      writeLastAutoReload(now);
+      window.location.reload();
+    }
+  }
+
+  componentDidUpdate(): void {
+    if (!this.state.error && this.autoRetried) this.autoRetried = false;
   }
 
   private readonly retry = (): void => {
+    this.autoRetried = false;
     this.setState({ error: null, componentStack: "" });
+  };
+
+  private readonly reload = (): void => {
+    clearLastAutoReload();
+    window.location.reload();
   };
 
   render(): ReactNode {
@@ -63,13 +119,13 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBo
             <h1 style={{ margin: 0, fontSize: 22 }}>页面遇到问题</h1>
           </div>
           <p style={{ margin: "0 0 14px", lineHeight: 1.6 }}>
-            界面渲染时发生异常，任务与消息数据不会丢失。请刷新页面恢复；
-            如果问题反复出现，可保留此页面并查看下方的错误详情。
+            界面渲染时发生异常，任务与消息数据不会丢失。已自动尝试恢复，
+            若问题持续出现，请刷新页面或查看下方的错误详情。
           </p>
           <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              onClick={this.reload}
               style={{
                 padding: "9px 18px",
                 border: 0,
