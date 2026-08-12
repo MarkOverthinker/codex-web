@@ -473,10 +473,40 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .file-card:hover { transform: translateY(-1px); border-color: #aeb6d7; background: #eef1fa; }
 .file-card > a:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: inherit; text-decoration: none; }
 .file-card > a:first-child > svg { color: var(--indigo); }
+.file-card > .file-preview-trigger { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0; color: inherit; background: transparent; cursor: pointer; text-align: left; font: inherit; }
+.file-card > .file-preview-trigger > svg { color: var(--indigo); }
+.file-card > .file-preview-trigger:hover strong { color: var(--indigo); }
 .file-card span { min-width: 0; display: grid; gap: 3px; }
 .file-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .file-card small { color: var(--muted); font-size: 10px; }
 .download-button { display: grid; place-items: center; padding: 10px; border-left: 1px solid #dfe2ec; color: var(--indigo); }
+.chat-outputs { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; min-height: 43px; padding: 6px 27px; border-bottom: 1px solid rgba(15, 17, 32, .08); background: rgba(250, 251, 255, .66); }
+.chat-outputs-heading { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: #6f7486; font-size: 10px; white-space: nowrap; }
+.chat-outputs-heading svg { color: var(--indigo); }
+.chat-outputs-heading strong { color: #313a70; font-size: 11px; }
+.chat-outputs-list { min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 1px; scrollbar-width: thin; }
+.chat-output-chip { flex: 0 0 auto; max-width: 230px; min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid #d5d9e8; border-radius: 999px; color: #4c5269; background: #fff; cursor: pointer; text-decoration: none; font-size: 11px; }
+.chat-output-chip:hover { border-color: #aab4e0; color: var(--indigo); background: #f2f4fd; }
+.chat-output-chip svg { flex: 0 0 auto; color: var(--indigo); }
+.chat-output-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-output-chip small { flex: 0 0 auto; color: #9599aa; font-size: 9px; }
+.file-preview-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 18px; background: rgba(15, 17, 32, .58); backdrop-filter: blur(4px); }
+.file-preview-panel { width: min(980px, calc(100vw - 36px)); height: min(780px, calc(100dvh - 36px)); min-height: 360px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dfe2ec; border-radius: 16px; color: var(--ink); background: var(--paper); box-shadow: 0 24px 70px rgba(15, 17, 32, .3); }
+.file-preview-panel > header { min-height: 60px; flex: 0 0 60px; display: flex; align-items: center; gap: 11px; padding: 8px 10px 8px 16px; border-bottom: 1px solid #e5e7ee; }
+.file-preview-panel > header > svg { color: var(--indigo); }
+.file-preview-title { min-width: 0; display: grid; gap: 2px; }
+.file-preview-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.file-preview-title small { color: var(--muted); font-size: 11px; }
+.file-preview-actions { margin-left: auto; display: flex; align-items: center; gap: 3px; }
+.file-preview-actions .icon-button { color: #5b6074; }
+.file-preview-body { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; padding: 18px; background: #fbfcfe; }
+.file-preview-body.fit { display: flex; padding: 10px; }
+.file-preview-frame { width: 100%; height: 100%; min-height: 300px; border: 0; border-radius: 10px; background: #fff; }
+.file-preview-image { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; margin: auto; border-radius: 10px; background: #fff; object-fit: contain; }
+.file-preview-plain { margin: 0; padding: 16px; border: 1px solid #e1e3eb; border-radius: 12px; color: #262a38; background: #fff; font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-preview-markdown { max-width: 860px; margin: 0 auto; padding: 2px; }
+.file-preview-loading, .file-preview-error { min-height: 220px; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.file-preview-error svg { color: #c07d10; }
 .activity-card { width: min(680px, 100%); padding: 15px 16px 14px; border: 1px solid #d5d9e8; border-radius: 5px 14px 14px 14px; background: #f7f8fc; box-shadow: 0 7px 22px rgba(15, 17, 32, .045); }
 .activity-title { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: #29356f; font-size: 12px; }
 .activity-title > span { margin-left: auto; color: #9599aa; font-size: 10px; font-weight: 500; }
@@ -793,6 +823,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 :root[data-theme="dark"] .activity-card { border-color: #3d3f47; background: #27282d; box-shadow: 0 7px 22px rgba(0, 0, 0, .14); }
 :root[data-theme="dark"] .file-card:hover { border-color: #5d6275; background: #2e3036; }
 :root[data-theme="dark"] .download-button { border-left-color: #44464e; }
+:root[data-theme="dark"] .file-card > .file-preview-trigger small { color: #94969f; }
+:root[data-theme="dark"] .chat-outputs { border-bottom-color: #303238; background: rgba(23, 24, 27, .55); }
+:root[data-theme="dark"] .chat-outputs-heading { color: #94969f; }
+:root[data-theme="dark"] .chat-outputs-heading strong { color: #d9deff; }
+:root[data-theme="dark"] .chat-output-chip { border-color: #3d3f47; color: #c7c9d0; background: #24262b; }
+:root[data-theme="dark"] .chat-output-chip:hover { border-color: #5d6275; color: #d9deff; background: #2e3036; }
+:root[data-theme="dark"] .file-preview-panel { border-color: #3b3e47; color: #f0f1f4; background: #24262b; }
+:root[data-theme="dark"] .file-preview-panel > header { border-bottom-color: #3b3e47; }
+:root[data-theme="dark"] .file-preview-panel > header > svg { color: #aeb9f5; }
+:root[data-theme="dark"] .file-preview-actions .icon-button { color: #a9abb4; }
+:root[data-theme="dark"] .file-preview-body { background: #1d1e22; }
+:root[data-theme="dark"] .file-preview-frame,
+:root[data-theme="dark"] .file-preview-image { background: #17181c; }
+:root[data-theme="dark"] .file-preview-plain { border-color: #40434d; color: #e2e3e8; background: #17181c; }
 :root[data-theme="dark"] .activity-title { color: #d9deff; }
 :root[data-theme="dark"] .activity-title > span,
 :root[data-theme="dark"] .process-section-title > span,

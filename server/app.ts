@@ -754,6 +754,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       : [];
     const messagePage = db.listMessagesPage(conversation.id, undefined, CONVERSATION_MESSAGE_PAGE_SIZE)!;
     const safeMessages = safeConversationMessages(conversation, messagePage.messages);
+    const outputFiles = db.listFiles(conversation.id).filter((file) => file.kind === "output");
     const agentSelection = conversationAgentSelection(conversation);
     const activeJob = latestJob && ["queued", "running"].includes(latestJob.status)
       ? { ...latestJob, queuePosition: db.getQueuePosition(latestJob.id) }
@@ -765,6 +766,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       conversation,
       agentSelection,
       messages: safeMessages,
+      outputFiles,
       messagePage: { hasMore: messagePage.hasMore, nextCursor: messagePage.nextCursor },
       pendingPrompts,
       editingPrompt,

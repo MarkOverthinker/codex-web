@@ -1,6 +1,6 @@
 # Codex Web
 
-An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, server-side task queues, live steering, resumable interruption history, conversation archiving, automatic titles, adjustable reading size, light/dark/system appearance modes, and optional voice transcription.
+An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, in-page floating previews for generated files, server-side task queues, live steering, resumable interruption history, conversation archiving, automatic titles, adjustable reading size, light/dark/system appearance modes, and optional voice transcription.
 
 > Codex Web is an independent community project. It is not affiliated with, endorsed by, or supported by OpenAI.
 
@@ -11,6 +11,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - A responsive React chat interface for Codex CLI
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions
 - Persistent attachments and generated deliverables
+- In-page floating previews for Markdown, text, CSV, PDF, and image outputs, with a per-conversation output-file strip
 - Server-persistent unsent text, quotes, and attachments, restored across conversations, browsers, and devices
 - Codex thread persistence across browser restarts
 - Import existing local Codex CLI sessions (rollout files in the executor's `sessions/` and `archived_sessions/`) as web conversations, then continue them from the browser
