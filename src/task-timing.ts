@@ -5,7 +5,7 @@ import type { JobEvent } from "./api";
  * `running` status event to the terminal `done`/`failed` event.
  */
 export function taskElapsedSeconds(activities: JobEvent[]): number | null {
-  const startedAt = activities.find((activity) => activity.kind === "status" && activity.status === "running")?.created_at;
+  const startedAt = activities.find((activity) => (activity.kind === "status" || activity.type === "status") && activity.status === "running")?.created_at;
   const endedAt = activities.findLast((activity) => activity.type === "done" || activity.type === "failed")?.created_at;
   if (!startedAt || !endedAt) return null;
   const start = new Date(startedAt).getTime();
