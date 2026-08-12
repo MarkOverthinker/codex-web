@@ -159,3 +159,11 @@ console.log("mock restart ok");
   const restartLogAfterFailure = await fs.promises.readFile(restartLog, "utf8");
   assert.equal(restartLogAfterFailure.match(/restart ok/g)?.length ?? 0, 2);
 });
+
+test("host reload waits for running jobs instead of interrupting them", () => {
+  const indexSource = fs.readFileSync(path.join(process.cwd(), "server", "index.ts"), "utf8");
+  const serviceUnit = fs.readFileSync(path.join(process.cwd(), "deploy", "codex-web.service"), "utf8");
+  assert.doesNotMatch(indexSource, /SHUTDOWN_DRAIN_TIMEOUT_MS|Shutdown drain timed out/);
+  assert.match(indexSource, /while \(db\.runningJobCount\(\) > 0 \|\| runner\.activeJobCount > 0\)/);
+  assert.match(serviceUnit, /TimeoutStopSec=infinity/);
+});
