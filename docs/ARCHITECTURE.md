@@ -21,6 +21,13 @@ that settings record; only expanded/collapsed state is kept in `localStorage`.
 The working-dir feature is host-mode only; isolated tenants keep the
 per-conversation workspace model and the tenant boundary is unchanged.
 
+The browser keeps the long-running task view responsive by batching SSE
+progress events into short render frames and by memoizing the message list,
+individual Markdown messages, and conversation rows. Conversation polling
+compares list fields before replacing state, search uses a deferred value, and
+off-screen sidebar rows use `content-visibility` so idle tasks do not repaint
+the whole sidebar on every progress event.
+
 Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
 
 Queued prompts and their attachments are stored by the server. The browser is only a view of that state. A queued prompt can be reordered, edited, deleted, or converted into a live steering instruction for the currently running Codex turn. Running and queued states are derived independently so an idle-but-queued conversation is not presented as actively executing.

@@ -219,6 +219,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .conversation-list { min-height: 0; overflow-y: auto; padding-right: 2px; scrollbar-color: rgba(255, 255, 255, .18) transparent; scrollbar-width: thin; }
 .conversation-list::-webkit-scrollbar { width: 5px; }
 .conversation-list::-webkit-scrollbar-thumb { border-radius: 99px; background: rgba(255, 255, 255, .18); }
+.conversation-row { content-visibility: auto; contain-intrinsic-size: auto 46px; }
+.task-category-body { content-visibility: auto; contain-intrinsic-size: auto 46px; }
 .task-category { margin: 2px 0 4px; }
 .task-category-header { min-height: 38px; display: flex; align-items: center; border: 1px solid transparent; border-radius: 10px; transition: background .14s ease, border-color .14s ease; }
 .task-category-header:hover, .task-category:focus-within .task-category-header { border-color: rgba(255, 255, 255, .07); background: rgba(255, 255, 255, .05); }
