@@ -15,9 +15,14 @@ export function resolveTheme(preference: ThemePreference, systemPrefersDark: boo
   return preference === "system" ? (systemPrefersDark ? "dark" : "light") : preference;
 }
 
-export function readStoredThemePreference(storage: Pick<Storage, "getItem"> = window.localStorage): ThemePreference {
+export function readStoredThemePreference(storage?: Pick<Storage, "getItem">): ThemePreference {
   try {
-    return normalizeThemePreference(storage.getItem(THEME_PREFERENCE_KEY));
+    // Resolve localStorage inside the guarded block.  Browsers may expose the
+    // property but throw SecurityError when it is read (for example in a
+    // blocked/partitioned storage context); a default-parameter expression
+    // would be evaluated before this try/catch and could abort bootstrap.
+    const source = storage ?? (typeof window === "undefined" ? undefined : window.localStorage);
+    return normalizeThemePreference(source?.getItem(THEME_PREFERENCE_KEY));
   } catch {
     return "light";
   }

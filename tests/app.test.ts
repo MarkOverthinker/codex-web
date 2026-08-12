@@ -33,7 +33,7 @@ import { mergeMessagePages, preservePrependedScrollTop } from "../src/message-hi
 import { resolveScrollFollow } from "../src/scroll-follow.js";
 import { CHAT_FONT_SIZE_DEFAULT, CHAT_FONT_SIZE_MAX, CHAT_FONT_SIZE_MIN, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { chooseSelectedConversation, isTerminalJob, mergeJobEvents } from "../src/recovery.js";
-import { normalizeThemePreference, resolveTheme, THEME_PREFERENCE_KEY } from "../src/theme.js";
+import { normalizeThemePreference, readStoredThemePreference, resolveTheme, THEME_PREFERENCE_KEY } from "../src/theme.js";
 import type { Conversation, WorkFile } from "../src/api.js";
 import { buildAgentSteerPrompt, buildAgentTurnPrompt } from "../server/agent-context.js";
 import { buildProcessJournal } from "../src/process-journal.js";
@@ -42,6 +42,7 @@ import { formatElapsed, taskElapsedSeconds } from "../src/task-timing.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES, buildOptionalCapabilityConfig, detectOptionalAgentCapabilities } from "../server/optional-capabilities.js";
 import { USER_CANCELLED_TASK_MARKER, latestUserCancellationContext } from "../server/cancellation-summary.js";
 import { formatRolloutBytes, ROLLOUT_WARNING_BYTES, shouldWarnAboutRollout } from "../src/rollout-capacity.js";
+import { readLocalStorageValue, removeLocalStorageValue, writeLocalStorageValue } from "../src/App.js";
 
 // A developer .env (loaded by server/config.ts) must not leak deployment mode
 // flags into the suite; the tests control these through createApp overrides.
@@ -71,6 +72,10 @@ test("frontend installs an error boundary and client error reporting", () => {
   const reportingSource = fs.readFileSync(path.join(process.cwd(), "src", "client-errors.ts"), "utf8");
   assert.match(mainSource, /AppErrorBoundary/);
   assert.match(mainSource, /installClientErrorReporting\(\)/);
+  assert.match(mainSource, /function renderBootstrapFallback/);
+  assert.match(mainSource, /if \(!rootElement\)/);
+  assert.match(mainSource, /rootElement\)\.render/);
+  assert.ok(mainSource.indexOf("installClientErrorReporting();") < mainSource.indexOf("applyThemePreference("));
   assert.match(boundarySource, /componentDidCatch/);
   assert.match(boundarySource, /getDerivedStateFromError/);
   assert.match(boundarySource, /window\.location\.reload\(\)/);
@@ -86,6 +91,25 @@ test("frontend installs an error boundary and client error reporting", () => {
   assert.match(reportingSource, /reportClientError/);
   assert.match(reportingSource, /REACT_RECOVERY_NOTICE/);
   assert.match(reportingSource, /componentStack/);
+});
+
+test("frontend storage cache failures never escape into rendering", () => {
+  assert.equal(readLocalStorageValue("blocked", { getItem: () => { throw new Error("storage blocked"); } }), null);
+
+  let written: string | null = null;
+  writeLocalStorageValue("key", "value", { setItem: (_key, value) => { written = value; } });
+  assert.equal(written, "value");
+  writeLocalStorageValue("blocked", "value", { setItem: () => { throw new Error("quota exceeded"); } });
+
+  let removed = false;
+  removeLocalStorageValue("key", { removeItem: () => { removed = true; } });
+  assert.equal(removed, true);
+  removeLocalStorageValue("blocked", { removeItem: () => { throw new Error("storage blocked"); } });
+
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  assert.match(appSource, /api\.session\(\)[\s\S]*\.catch\(/);
+  assert.match(appSource, /无法连接到服务/);
+  assert.doesNotMatch(appSource, /window\.localStorage\.(getItem|setItem|removeItem)/);
 });
 
 test("client error endpoint records authenticated reports and rejects anonymous ones", async (context) => {
@@ -144,6 +168,14 @@ test("appearance setting supports light, dark, and live system preference", () =
   assert.equal(resolveTheme("system", true), "dark");
   assert.equal(resolveTheme("system", false), "light");
   assert.equal(resolveTheme("dark", false), "dark");
+  assert.equal(readStoredThemePreference({ getItem: () => "dark" }), "dark");
+  assert.equal(readStoredThemePreference({ getItem: () => { throw new Error("storage blocked"); } }), "light");
+
+  const themeSource = fs.readFileSync(path.join(process.cwd(), "src", "theme.ts"), "utf8");
+  // The global storage getter must be resolved inside the guarded function,
+  // not in a default-parameter expression evaluated before try/catch.
+  assert.doesNotMatch(themeSource, /storage[^\n]*=\s*window\.localStorage/);
+  assert.match(themeSource, /window\.localStorage/);
 
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
