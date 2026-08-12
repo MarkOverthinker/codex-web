@@ -10,7 +10,7 @@ import {
   Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -31,6 +31,7 @@ import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
 const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expanded";
+const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
 
@@ -175,6 +176,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [workingDirManagerOpen, setWorkingDirManagerOpen] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
+  const [reloadNotice, setReloadNotice] = useState<{ kind: "waiting" | "building" | "restarting" | "success" | "error"; text: string } | null>(null);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState("");
@@ -216,6 +218,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const activityFlushTimerRef = useRef<number | null>(null);
   const currentConversationIdRef = useRef<string | null>(null);
   const taskMenuRef = useRef(taskMenu);
+  const dismissedReloadSignatureRef = useRef<string | null>(null);
+  const currentReloadSignatureRef = useRef("");
   selectedIdRef.current = selectedId;
   detailRef.current = detail;
   currentConversationIdRef.current = detail?.conversation.id === selectedId ? detail.conversation.id : null;
@@ -426,6 +430,45 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       .catch(() => setWorkingDirSettings(null));
     void api.taskCategories().then(({ settings }) => setTaskCategorySettings(settings))
       .catch(() => setTaskCategorySettings(null));
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    async function pollReloadStatus() {
+      let signature = "";
+      try {
+        const status: ReloadStatus = await api.reloadStatus();
+        if (cancelled) return;
+        signature = `${status.state ?? ""}:${status.lastResult?.finishedAt ?? ""}`;
+        currentReloadSignatureRef.current = signature;
+        let next: { kind: "waiting" | "building" | "restarting" | "success" | "error"; text: string } | null = null;
+        if (!status.available) {
+          next = null;
+        } else if (status.state === "waiting") {
+          next = { kind: "waiting", text: "代码更新已排队，任务结束后将自动重启服务。" };
+        } else if (status.state === "building") {
+          next = { kind: "building", text: "正在构建更新，稍后将重启服务…" };
+        } else if (status.state === "restarting") {
+          next = { kind: "restarting", text: "服务正在重启，页面将短暂断开…" };
+        } else if (status.state === "wait-timeout" || status.state === "build-failed" || status.state === "restart-failed") {
+          next = { kind: "error", text: `Reload 未完成：${status.lastResult?.error ?? "请稍后重试"}` };
+        } else if (status.state === "idle" && status.lastResult?.command === "restart" && status.lastResult.ok === true) {
+          const finishedAt = Date.parse(status.lastResult.finishedAt ?? "");
+          if (Number.isFinite(finishedAt) && Date.now() - finishedAt < 60_000) {
+            next = { kind: "success", text: "服务已重启成功，请刷新页面以加载最新版本。" };
+          }
+        }
+        if (next && dismissedReloadSignatureRef.current === signature) next = null;
+        setReloadNotice(next);
+      } catch {
+        if (cancelled) return;
+        setReloadNotice((current) => current?.kind === "success" ? current : null);
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void pollReloadStatus(), RELOAD_STATUS_POLL_MS);
+      }
+    }
+    void pollReloadStatus();
+    return () => { cancelled = true; if (timer !== null) window.clearTimeout(timer); };
   }, []);
   useEffect(() => {
     persistCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY, categoryExpanded);
@@ -1621,6 +1664,11 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
       {notice && <div className="toast info" role="status"><span>{notice}</span><button onClick={() => setNotice("")}><X size={16} /></button></div>}
       {currentDetail?.conversation.archived_at && <div className="archived-conversation-banner"><Archive size={15} /><span>这个任务已归档，历史内容仍可查看。</span><button type="button" onClick={() => void restoreConversation(currentDetail.conversation)}>恢复任务</button></div>}
+      {reloadNotice && <div className={`reload-banner ${reloadNotice.kind}`} role="status">
+        <span>{reloadNotice.text}</span>
+        {reloadNotice.kind === "success" && <button type="button" className="reload-banner-action" onClick={() => window.location.reload()}>刷新页面</button>}
+        <button type="button" className="icon-button" aria-label="关闭 reload 提示" onClick={() => { dismissedReloadSignatureRef.current = currentReloadSignatureRef.current; setReloadNotice(null); }}><X size={15} /></button>
+      </div>}
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && <Composer key={selectedId ?? "new-conversation"} input={input} setInput={setInput} askAgentQuote={askAgentQuote} onClearAskAgentQuote={() => setAskAgentQuote("")} focusRequest={composerFocusRequest} files={files} setFiles={setFiles} draftFiles={composerDraft?.files ?? []} draftUploads={draftUploads} draftSaveState={draftSaveState} sending={sending} submitting={submitting} selectionSaving={selectionSaving} voiceEnabled={Boolean(session.voiceEnabled)}
         conversationId={selectedId}

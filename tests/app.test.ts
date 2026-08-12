@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -858,6 +859,59 @@ test("conversation archive API keeps history readable, blocks new turns, and res
   const restored = await agent.post(`/codex-web/api/conversations/${conversationId}/restore`).set("X-CSRF-Token", csrf).expect(200);
   assert.equal(restored.body.conversation.archived_at, null);
   assert.equal((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations[0].id, conversationId);
+});
+
+test("reload status API proxies the reloader state and reports unavailable", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-reload-status-api-test-"));
+  const reloader = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: true,
+      state: "waiting",
+      busy: true,
+      lastResult: { command: "idle-check", ok: true, finishedAt: "2026-08-12T00:00:00.000Z", idle: false, running: 1 },
+    }));
+  });
+  await new Promise<void>((resolve) => reloader.listen(0, "127.0.0.1", resolve));
+  const address = reloader.address();
+  assert.ok(address && typeof address === "object");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username: "owner",
+    passwordHash: bcrypt.hashSync("ReloadStatus-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    reloaderStatusUrl: `http://127.0.0.1:${address.port}`,
+  });
+  context.after(() => {
+    instance.db.close();
+    reloader.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const agent = request.agent(instance.app);
+  await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "ReloadStatus-Password-2026!" }).expect(200);
+
+  const status = await agent.get("/codex-web/api/reload-status").expect(200);
+  assert.equal(status.body.available, true);
+  assert.equal(status.body.state, "waiting");
+  assert.equal(status.body.lastResult.running, 1);
+
+  await new Promise<void>((resolve) => reloader.close(() => resolve()));
+  const unavailable = await agent.get("/codex-web/api/reload-status").expect(200);
+  assert.equal(unavailable.body.available, false);
+});
+
+test("web UI surfaces reloader status and asks for a refresh after success", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(apiSource, /reloadStatus: \(\) => request<ReloadStatus>\("\/reload-status"\)/);
+  assert.match(appSource, /服务已重启成功，请刷新页面以加载最新版本/);
+  assert.match(appSource, /RELOAD_STATUS_POLL_MS/);
+  assert.match(appSource, /window\.location\.reload\(\)/);
+  assert.match(styles, /\.reload-banner/);
 });
 
 test("single-user login and CSRF protection", async (context) => {

@@ -337,6 +337,22 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
   const api = express.Router();
 
   api.get("/health", (_req, res) => res.json({ ok: true, service: "codex-web", time: new Date().toISOString() }));
+  api.get("/reload-status", async (_req, res) => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      try {
+        const statusUrl = new URL("/status", config.reloaderStatusUrl);
+        const response = await fetch(statusUrl, { signal: controller.signal });
+        if (!response.ok) return res.json({ available: false });
+        return res.json({ available: true, ...(await response.json() as Record<string, unknown>) });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return res.json({ available: false });
+    }
+  });
 
   // DashScope fetches this short-lived, HMAC-signed URL without a browser
   // session. Keep it before the authentication middleware and expose no other

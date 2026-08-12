@@ -23,6 +23,7 @@ export type AppConfig = {
   containerized: boolean;
   hostMode: boolean;
   codexHome: string;
+  reloaderStatusUrl: string;
   codexModel?: string;
   queueAutoStart: boolean;
   tenantWorkerIsolation: boolean;
@@ -68,6 +69,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     containerized: overrides.containerized ?? process.env.CONTAINERIZED === "true",
     hostMode: overrides.hostMode ?? process.env.HOST_MODE === "true",
     codexHome: overrides.codexHome ?? (process.env.CODEX_HOME || path.join(os.homedir(), ".codex")),
+    reloaderStatusUrl: overrides.reloaderStatusUrl ?? (process.env.CODEX_WEB_RELOADER_URL || "http://127.0.0.1:37822"),
     codexModel: overrides.codexModel ?? (process.env.CODEX_MODEL || undefined),
     queueAutoStart: overrides.queueAutoStart ?? process.env.QUEUE_AUTO_START !== "false",
     tenantWorkerIsolation: overrides.tenantWorkerIsolation ?? (process.env.TENANT_WORKER_ISOLATION === "true" && process.env.HOST_MODE !== "true"),

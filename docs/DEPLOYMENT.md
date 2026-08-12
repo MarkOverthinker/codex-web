@@ -224,6 +224,11 @@ interruption. The database path comes from the unit's `DATA_ROOT` (defaulting
 to `<WorkingDirectory>/data`) and is written into
 `/etc/codex-web-reloader/env` by the installer.
 
+The web UI polls `/codex-web/api/reload-status`, which proxies the reloader's
+`/status` endpoint. It shows queued, building, restarting, failed, and
+successful states; after a successful restart it displays a banner asking the
+user to refresh the page to load the new version.
+
 The config directory is owned by `root` with the checkout owner's group and
 mode `0750`, so only root and the checkout owner can enter it and read the
 token.
