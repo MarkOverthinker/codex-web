@@ -1,3 +1,5 @@
+@import "katex/dist/katex.min.css";
+
 :root {
   color-scheme: light;
   --ink: #0f1120;
@@ -459,6 +461,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .markdown pre { overflow-x: auto; padding: .875em; border: 1px solid #e3e5ed; border-radius: .625em; color: #e9ebf4; background: #171b32; }
 .markdown code { font-family: "Cascadia Code", Consolas, monospace; font-size: .9em; }
 .markdown :not(pre) > code { padding: .125em .3125em; border-radius: .3125em; color: #29356f; background: var(--indigo-pale); }
+.markdown .katex { font-size: 1.05em; }
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: .25em 0; }
+.markdown pre .katex { color: #e9ebf4; }
 .markdown table { width: 100%; border-collapse: collapse; }
 .markdown th, .markdown td { padding: .5em; border: 1px solid #dfe2ec; text-align: left; }
 .markdown th { color: #29356f; background: var(--indigo-pale); }
