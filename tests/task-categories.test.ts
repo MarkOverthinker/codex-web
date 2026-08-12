@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Conversation, WorkingDirFavorite } from "../src/api.js";
 import {
   autoDirCategoryKey,
+  buildTaskCategoryBodyState,
   buildHiddenCategoryInfos,
   buildDirectoryAssignments,
   buildTaskCategoryViews,
@@ -165,4 +166,11 @@ test("hidden keys validation keeps only known categories and hides stale keys fr
     buildHiddenCategoryInfos(settings, [favorite]),
     [{ key: customCategoryKey("custom-1"), kind: "custom", name: "归档项目", detail: "还没有目录" }],
   );
+});
+
+test("category body keeps the collapse control visible after full expansion", () => {
+  assert.deepEqual(buildTaskCategoryBodyState(5, false), { visibleCount: 3, remaining: 2, showExpandControl: true });
+  assert.deepEqual(buildTaskCategoryBodyState(5, true), { visibleCount: 5, remaining: 2, showExpandControl: true });
+  assert.deepEqual(buildTaskCategoryBodyState(3, true), { visibleCount: 3, remaining: 0, showExpandControl: false });
+  assert.deepEqual(buildTaskCategoryBodyState(0, false), { visibleCount: 0, remaining: 0, showExpandControl: false });
 });

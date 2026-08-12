@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
-  buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
+  buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
@@ -1190,10 +1190,17 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   }
 
   function toggleCategoryExpanded(key: string) {
-    setCategoryExpanded((current) => {
-      const next = { ...current, [key]: current[key] === false };
-      return next;
-    });
+    const expanding = categoryExpanded[key] === false;
+    setCategoryExpanded((current) => ({ ...current, [key]: current[key] === false }));
+    if (!expanding) {
+      // 折叠分类时清除“完全展开”标记，重新展开后回到最近 3 条。
+      setCategoryFullyExpanded((fully) => {
+        if (!fully[key]) return fully;
+        const next = { ...fully };
+        delete next[key];
+        return next;
+      });
+    }
   }
 
   function toggleCategoryFullyExpanded(key: string) {
@@ -1413,8 +1420,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
             ? categoryViews.map((category) => {
                 const expanded = categoryExpanded[category.key] !== false;
                 const fullyExpanded = categoryFullyExpanded[category.key] === true;
-                const visible = fullyExpanded ? category.conversations : category.conversations.slice(0, 3);
-                const remaining = category.conversations.length - visible.length;
+                const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded);
+                const visible = category.conversations.slice(0, bodyState.visibleCount);
                 return <section key={category.key} className={`task-category ${category.pinned ? "pinned" : ""}`}>
                   <div className="task-category-header">
                     <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
@@ -1434,7 +1441,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
                   </div>
                   {expanded && <div className="task-category-body">
                     {visible.map(renderConversationRow)}
-                    {remaining > 0 && <button type="button" className="task-category-more" aria-expanded={fullyExpanded} onClick={() => toggleCategoryFullyExpanded(category.key)}>{fullyExpanded ? "收起为最近 3 条" : `… 还有 ${remaining} 条`}</button>}
+                    {bodyState.showExpandControl && <button type="button" className="task-category-more" aria-expanded={fullyExpanded} onClick={() => toggleCategoryFullyExpanded(category.key)}>{fullyExpanded ? "收起为最近 3 条" : `… 还有 ${bodyState.remaining} 条`}</button>}
                   </div>}
                 </section>;
               })
