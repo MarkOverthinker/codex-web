@@ -18,7 +18,7 @@ import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode
 import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
-import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir } from "./session-importer.js";
+import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
 import {
   autoDirCategoryKey,
   customCategoryKey,
@@ -776,11 +776,21 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     return archived ? res.json({ conversation: archived }) : res.status(409).json({ error: "会话归档状态已经变化。" });
   });
 
-  api.post("/conversations/:id/restore", (req, res) => {
+  api.post("/conversations/:id/restore", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
     if (!conversation.archived_at) return res.json({ conversation });
+    if (config.hostMode && conversation.codex_thread_id && !conversation.working_dir) {
+      try {
+        const cwd = await readCodexThreadWorkingDir(codexHomeFor(session.user_id), conversation.codex_thread_id);
+        const workingDir = normalizeImportedWorkingDir(cwd, (raw) =>
+          resolveHostWorkingDir(raw, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot }));
+        if (workingDir) db.updateConversation(conversation.id, { workingDir });
+      } catch {
+        // 推导失败（目录已删除或指向应用隔离目录）时保持原状态，任务落入独立工作区，不阻塞恢复。
+      }
+    }
     const restored = db.restoreConversationForUser(conversation.id, session.user_id);
     return restored ? res.json({ conversation: restored }) : res.status(409).json({ error: "会话归档状态已经变化。" });
   });

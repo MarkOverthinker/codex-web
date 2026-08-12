@@ -22,7 +22,7 @@ import { listTenantIdentities, tenantIdentityForUser } from "../server/tenant-id
 import { consumeTenantTurnEvents, validateTenantWorkerRequest } from "../server/tenant-worker-execution.js";
 import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js";
 import { isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
-import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir } from "../server/session-importer.js";
+import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -923,7 +923,43 @@ test("conversation archive API keeps history readable, blocks new turns, and res
 
   const restored = await agent.post(`/codex-web/api/conversations/${conversationId}/restore`).set("X-CSRF-Token", csrf).expect(200);
   assert.equal(restored.body.conversation.archived_at, null);
+  assert.equal(restored.body.conversation.working_dir, null);
   assert.equal((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations[0].id, conversationId);
+});
+
+test("host mode restore derives a missing working directory from the rollout and recategorizes", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-restore-working-dir-test-"));
+  const project = path.join(root, "projects", "restored-project");
+  fs.mkdirSync(project, { recursive: true });
+  const canonicalProject = fs.realpathSync(project);
+  const codexHome = path.join(root, "codex-home");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username: "no-such-system-user-zzz",
+    passwordHash: bcrypt.hashSync("Restore-WorkingDir-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: true,
+    codexHome,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "no-such-system-user-zzz", password: "Restore-WorkingDir-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const conversationId = created.body.conversation.id as string;
+  assert.equal(created.body.conversation.working_dir, null);
+  const threadId = crypto.randomUUID();
+  instance.db.updateConversation(conversationId, { codexThreadId: threadId });
+  writeSyntheticCodexSession(codexHome, threadId, { cwd: project });
+
+  await agent.post(`/codex-web/api/conversations/${conversationId}/archive`).set("X-CSRF-Token", csrf).expect(200);
+  const restored = await agent.post(`/codex-web/api/conversations/${conversationId}/restore`).set("X-CSRF-Token", csrf).expect(200);
+  assert.equal(restored.body.conversation.archived_at, null);
+  assert.equal(restored.body.conversation.working_dir, canonicalProject);
+  assert.equal(instance.db.getConversation(conversationId)?.working_dir, canonicalProject);
 });
 
 test("reload status API proxies the reloader state and reports unavailable", async (context) => {
@@ -1461,7 +1497,7 @@ test("conversation stop cancels every active job and deletion preserves audit ro
   await agent.get(`/codex-web/api/jobs/${deletionJobId}/events`).expect(404);
 });
 
-function writeSyntheticCodexSession(codexHome: string, threadId: string, options: { dir?: string; message?: string; finalReply?: string; timestamp?: string } = {}): string {
+function writeSyntheticCodexSession(codexHome: string, threadId: string, options: { dir?: string; message?: string; finalReply?: string; timestamp?: string; cwd?: string } = {}): string {
   const directory = path.join(codexHome, options.dir ?? "sessions", "2026", "04", "20");
   fs.mkdirSync(directory, { recursive: true });
   const filePath = path.join(directory, `rollout-2026-04-20T19-01-08-${threadId}.jsonl`);
@@ -1470,7 +1506,7 @@ function writeSyntheticCodexSession(codexHome: string, threadId: string, options
     JSON.stringify({
       timestamp,
       type: "session_meta",
-      payload: { id: threadId, timestamp: "2026-04-20T11:01:08.567Z", cwd: "/home/test/project", originator: "codex_cli", cli_version: "0.107.0" },
+      payload: { id: threadId, timestamp: "2026-04-20T11:01:08.567Z", cwd: options.cwd ?? "/home/test/project", originator: "codex_cli", cli_version: "0.107.0" },
     }),
     JSON.stringify({
       timestamp,
@@ -1534,6 +1570,17 @@ test("session importer deduplicates the same thread across sessions and archived
   assert.equal(discovered.length, 1);
   assert.equal(discovered[0].threadId, threadId);
   assert.equal(discovered[0].updatedAt, "2026-04-21T09:00:00.000Z");
+});
+
+test("readCodexThreadWorkingDir reads the recorded cwd and returns null for missing threads", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-read-thread-cwd-test-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const codexHome = path.join(root, "codex-home");
+  const threadId = crypto.randomUUID();
+  writeSyntheticCodexSession(codexHome, threadId, { cwd: "/srv/recorded-project" });
+
+  assert.equal(await readCodexThreadWorkingDir(codexHome, threadId), "/srv/recorded-project");
+  assert.equal(await readCodexThreadWorkingDir(codexHome, crypto.randomUUID()), null);
 });
 
 test("session importer persists a provided working directory and falls back to null on normalization failure", async (context) => {
