@@ -14,6 +14,10 @@ temporary runtime area remain in the conversation's own workspace, and
 deliverable persistence is unchanged. Deleting a conversation never touches
 the selected host directory. Tasks sharing the same directory are serialized
 so concurrent Codex sessions cannot write the same project repository at once.
+Task-list categories are also persisted per user in `user_settings`: custom
+category names, which directories they contain, and the pinned-category order.
+The browser derives the grouped sidebar view from conversations, favorites, and
+that settings record; only expanded/collapsed state is kept in `localStorage`.
 The working-dir feature is host-mode only; isolated tenants keep the
 per-conversation workspace model and the tenant boundary is unchanged.
 

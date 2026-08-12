@@ -3,11 +3,15 @@ import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Archive, ArrowUp, Bot, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderOpen,
-  CornerUpLeft, GripVertical, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Plus, Search, Settings2, Square, Sun,
+  Archive, ArrowDown, ArrowUp, Bot, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import {
+  buildDirectoryAssignments, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
+  type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
+} from "./task-categories";
 import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
@@ -22,6 +26,8 @@ import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
+const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
+const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expanded";
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 
 type DraftSaveState = "idle" | "unsaved" | "saving" | "saved" | "error";
@@ -30,6 +36,21 @@ type CachedComposerDraft = { content: string; quoteExcerpt: string; composerDraf
 
 function composerDraftSignature(content: string, quoteExcerpt: string): string {
   return `${content}\u0000${quoteExcerpt}`;
+}
+
+function readCategoryDisplayState(key: string): Record<string, boolean> {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, boolean> : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistCategoryDisplayState(key: string, value: Record<string, boolean>): void {
+  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be unavailable in private browsing. */ }
 }
 
 export default function App() {
@@ -123,9 +144,18 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [chatFontSize, setChatFontSize] = useState(() => normalizeChatFontSize(session.chatFontSize, CHAT_FONT_SIZE_DEFAULT));
   const [fontSizeSaving, setFontSizeSaving] = useState(false);
   const [workingDirSettings, setWorkingDirSettings] = useState<WorkingDirSettings | null>(null);
+  const [taskCategorySettings, setTaskCategorySettings] = useState<TaskListCategorySettings | null>(null);
   const [newTaskDirPanelOpen, setNewTaskDirPanelOpen] = useState(false);
   const [workingDirManagerOpen, setWorkingDirManagerOpen] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [categorySaving, setCategorySaving] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState("");
   const [workingDirSaving, setWorkingDirSaving] = useState(false);
+  const [categoryMenu, setCategoryMenu] = useState<{ categoryKey: string; top: number; left: number } | null>(null);
+  const [categoryExpanded, setCategoryExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY));
+  const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
   const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
@@ -170,6 +200,10 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
   const refreshList = useCallback(async () => {
     const result = await api.conversations(); setConversations(result.conversations); return result.conversations;
+  }, []);
+
+  const refreshTaskCategories = useCallback(async () => {
+    const result = await api.taskCategories(); setTaskCategorySettings(result.settings); return result.settings;
   }, []);
 
   const syncConversation = useCallback((conversation: Conversation) => {
@@ -315,7 +349,13 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }).catch((reason) => setError(reason instanceof Error ? reason.message : "模型选项加载失败"));
     void api.workingDirs().then(({ settings }) => setWorkingDirSettings(settings))
       .catch(() => setWorkingDirSettings(null));
+    void api.taskCategories().then(({ settings }) => setTaskCategorySettings(settings))
+      .catch(() => setTaskCategorySettings(null));
   }, []);
+  useEffect(() => {
+    persistCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY, categoryExpanded);
+    persistCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY, categoryFullyExpanded);
+  }, [categoryExpanded, categoryFullyExpanded]);
   useEffect(() => {
     if (!newTaskDirPanelOpen) return;
     function closeFromOutside(event: PointerEvent) {
@@ -839,6 +879,24 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       window.removeEventListener("resize", closeOnResize);
     };
   }, [taskMenu]);
+  useEffect(() => {
+    if (!categoryMenu) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Element && !event.target.closest("[data-category-menu]")) setCategoryMenu(null);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setCategoryMenu(null);
+    };
+    const closeOnResize = () => setCategoryMenu(null);
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnResize);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnResize);
+    };
+  }, [categoryMenu]);
 
   async function openArchivedConversations() {
     setAccountSettingsOpen(false);
@@ -987,10 +1045,162 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
+  function renderConversationRow(conversation: Conversation) {
+    return <div key={conversation.id} className={`conversation-row ${selectedId === conversation.id ? "active" : ""} ${conversation.has_unread_result ? "unread" : ""} ${taskMenu?.conversationId === conversation.id ? "menu-open" : ""}`}>
+      <button className="conversation-select" onClick={() => setSelectedId(conversation.id)}>
+        <FolderOpen size={16} /><span>{conversation.title}</span>
+        {conversation.status === "running"
+          ? <LoaderCircle size={14} className="spin" role="img" aria-label="正在执行" />
+          : Boolean(conversation.has_pending_work)
+            ? <CircleDashed size={14} className="conversation-waiting" role="img" aria-label="等待发送" />
+            : null}
+      </button>
+      <div className="row-actions">
+        <button type="button" className="task-menu-trigger" data-task-menu aria-label={`任务 ${conversation.title} 操作`} aria-haspopup="menu" aria-expanded={taskMenu?.conversationId === conversation.id} title="任务操作" onClick={(event) => toggleTaskMenu(conversation, event.currentTarget)}><MoreHorizontal size={15} /></button>
+      </div>
+    </div>;
+  }
+
+  function toggleCategoryExpanded(key: string) {
+    setCategoryExpanded((current) => {
+      const next = { ...current, [key]: current[key] === false };
+      return next;
+    });
+  }
+
+  function toggleCategoryFullyExpanded(key: string) {
+    setCategoryFullyExpanded((current) => {
+      const next = { ...current, [key]: current[key] !== true };
+      return next;
+    });
+  }
+
+  async function toggleCategoryPinned(view: TaskListCategoryView) {
+    const settings = taskCategorySettings;
+    if (!settings || categorySaving) return;
+    const next = [...settings.pinned];
+    const index = next.indexOf(view.key);
+    if (index >= 0) next.splice(index, 1);
+    else next.push(view.key);
+    setCategorySaving(true); setError("");
+    try {
+      const { settings: saved } = await api.updateTaskCategoryPins(next);
+      setTaskCategorySettings(saved);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "置顶分类失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function movePinnedCategory(key: string, delta: number) {
+    const settings = taskCategorySettings;
+    if (!settings || categorySaving) return;
+    const next = [...settings.pinned];
+    const index = next.indexOf(key);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    setCategorySaving(true); setError("");
+    try {
+      const { settings: saved } = await api.updateTaskCategoryPins(next);
+      setTaskCategorySettings(saved);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "调整置顶顺序失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function createCustomCategory() {
+    const name = newCategoryName.trim();
+    if (!name || categorySaving) return;
+    setCategorySaving(true); setError("");
+    try {
+      const { settings } = await api.createTaskCategory(name);
+      setTaskCategorySettings(settings);
+      setNewCategoryName("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "创建分类失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function saveCustomCategoryName(id: string) {
+    const name = editingCategoryName.trim();
+    setEditingCategoryId(null);
+    if (!name || categorySaving) return;
+    setCategorySaving(true); setError("");
+    try {
+      const { settings } = await api.renameTaskCategory(id, name);
+      setTaskCategorySettings(settings);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "重命名分类失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function deleteCustomCategory(category: TaskListCategorySettings["customCategories"][number]) {
+    if (!window.confirm(`删除自定义分类“${category.name}”？其中的工作目录会回到自动分类，任务本身不会被删除。`)) return;
+    setCategorySaving(true); setError("");
+    try {
+      const { settings } = await api.deleteTaskCategory(category.id);
+      setTaskCategorySettings(settings);
+      if (editingCategoryId === category.id) setEditingCategoryId(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除分类失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  async function assignDirectory(dir: string, categoryId: string | null) {
+    if (categorySaving) return;
+    setCategorySaving(true); setError("");
+    try {
+      const { settings } = await api.assignTaskCategoryDir(dir, categoryId);
+      setTaskCategorySettings(settings);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "移动工作目录失败");
+    } finally {
+      setCategorySaving(false);
+    }
+  }
+
+  function toggleCategoryMenu(categoryKey: string, button: HTMLButtonElement) {
+    if (categoryMenu?.categoryKey === categoryKey) {
+      setCategoryMenu(null);
+      return;
+    }
+    const bounds = button.getBoundingClientRect();
+    const width = 186;
+    const height = 132;
+    const top = bounds.bottom + 6 + height <= window.innerHeight - 8
+      ? bounds.bottom + 6
+      : Math.max(8, bounds.top - height - 6);
+    const left = Math.max(8, Math.min(bounds.right - width, window.innerWidth - width - 8));
+    setCategoryMenu({ categoryKey, top, left });
+  }
+
   const filtered = useMemo(() => conversations.filter((item) => item.title.toLowerCase().includes(query.toLowerCase())), [conversations, query]);
+  const categoryViews = useMemo(
+    () => buildTaskCategoryViews(filtered, workingDirSettings?.favorites ?? [], taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS),
+    [filtered, workingDirSettings, taskCategorySettings],
+  );
+  const categoryDirectoryAssignments = useMemo(
+    () => buildDirectoryAssignments(conversations, workingDirSettings?.favorites ?? [], taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS),
+    [conversations, workingDirSettings, taskCategorySettings],
+  );
+  const pinnedCategoryViews = useMemo(
+    () => categoryViews.filter((category) => category.pinned).sort((left, right) => left.pinIndex - right.pinIndex),
+    [categoryViews],
+  );
   const currentDetail = detail?.conversation.id === selectedId ? detail : null;
   const loadingConversation = Boolean(selectedId && !currentDetail);
   const taskMenuConversation = taskMenu ? conversations.find((conversation) => conversation.id === taskMenu.conversationId) : undefined;
+  const categoryMenuCategory = categoryMenu ? categoryViews.find((category) => category.key === categoryMenu.categoryKey) : undefined;
   const account = resolveAccountIdentity(session);
 
   return <div className="shell">
@@ -1030,21 +1240,39 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         : <button className="new-task" onClick={() => void newConversation()}><Plus size={17} />新建任务</button>}
       <button className="import-sessions-button" onClick={() => void openImportDialog()} title="导入本地 Codex 历史会话"><Download size={15} />导入历史会话</button>
       <div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索任务" /></div>
-      <div className="conversation-section"><div className="section-label"><span>任务</span><strong>{filtered.length}</strong></div>
-        <div className="conversation-list" onScroll={() => setTaskMenu(null)}>
-          {filtered.map((conversation) => <div key={conversation.id} className={`conversation-row ${selectedId === conversation.id ? "active" : ""} ${conversation.has_unread_result ? "unread" : ""} ${taskMenu?.conversationId === conversation.id ? "menu-open" : ""}`}>
-            <button className="conversation-select" onClick={() => setSelectedId(conversation.id)}>
-              <FolderOpen size={16} /><span>{conversation.title}</span>
-              {conversation.status === "running"
-                ? <LoaderCircle size={14} className="spin" role="img" aria-label="正在执行" />
-                : Boolean(conversation.has_pending_work)
-                  ? <CircleDashed size={14} className="conversation-waiting" role="img" aria-label="等待发送" />
-                  : null}
-            </button>
-            <div className="row-actions">
-              <button type="button" className="task-menu-trigger" data-task-menu aria-label={`任务 ${conversation.title} 操作`} aria-haspopup="menu" aria-expanded={taskMenu?.conversationId === conversation.id} title="任务操作" onClick={(event) => toggleTaskMenu(conversation, event.currentTarget)}><MoreHorizontal size={15} /></button>
-            </div>
-          </div>)}
+      <div className="conversation-section">
+        <div className="section-label"><span>任务</span><span className="section-label-actions"><strong>{filtered.length}</strong>{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
+        <div className="conversation-list" onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
+          {workingDirSettings?.enabled && taskCategorySettings
+            ? categoryViews.map((category) => {
+                const expanded = categoryExpanded[category.key] !== false;
+                const fullyExpanded = categoryFullyExpanded[category.key] === true;
+                const visible = fullyExpanded ? category.conversations : category.conversations.slice(0, 3);
+                const remaining = category.conversations.length - visible.length;
+                return <section key={category.key} className={`task-category ${category.pinned ? "pinned" : ""}`}>
+                  <div className="task-category-header">
+                    <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
+                      <ChevronDown size={14} className={expanded ? "" : "collapsed"} />
+                      <span className="task-category-copy">
+                        <strong>{category.name}</strong>
+                        <small title={category.detail}>{category.detail}</small>
+                      </span>
+                      <span className="task-category-count">{category.conversations.length}</span>
+                    </button>
+                    <div className="task-category-actions">
+                      <button type="button" className={category.pinned ? "pinned" : ""} aria-label={category.pinned ? `取消置顶 ${category.name}` : `置顶 ${category.name}`} aria-pressed={category.pinned} title={category.pinned ? "取消置顶" : "置顶"} onClick={() => void toggleCategoryPinned(category)}>
+                        {category.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                      </button>
+                      <button type="button" className="category-menu-trigger" data-category-menu aria-label={`分类 ${category.name} 操作`} aria-haspopup="menu" aria-expanded={categoryMenu?.categoryKey === category.key} title="分类操作" onClick={(event) => toggleCategoryMenu(category.key, event.currentTarget)}><MoreHorizontal size={15} /></button>
+                    </div>
+                  </div>
+                  {expanded && <div className="task-category-body">
+                    {visible.map(renderConversationRow)}
+                    {remaining > 0 && <button type="button" className="task-category-more" aria-expanded={fullyExpanded} onClick={() => toggleCategoryFullyExpanded(category.key)}>{fullyExpanded ? "收起为最近 3 条" : `… 还有 ${remaining} 条`}</button>}
+                  </div>}
+                </section>;
+              })
+            : filtered.map(renderConversationRow)}
           {filtered.length === 0 && <div className="empty-list">{query ? "没有匹配任务" : "还没有任务"}</div>}
         </div>
       </div>
@@ -1088,6 +1316,34 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       <button type="button" role="menuitem" onClick={() => void archiveConversation(taskMenuConversation)}><Archive size={16} /><span>归档</span></button>
       <button type="button" role="menuitem" onClick={() => { setTaskMenu(null); void renameConversation(taskMenuConversation); }}><Pencil size={16} /><span>重命名</span></button>
       <button type="button" role="menuitem" className="danger" onClick={() => { setTaskMenu(null); void deleteConversation(taskMenuConversation); }}><Trash2 size={16} /><span>删除</span></button>
+    </div>, document.body)}
+
+    {categoryMenuCategory && createPortal(<div
+      className="task-menu-panel category-menu-panel"
+      data-category-menu
+      role="menu"
+      aria-label={`分类 ${categoryMenuCategory.name} 操作`}
+      style={{ top: categoryMenu!.top, left: categoryMenu!.left }}
+    >
+      <button type="button" role="menuitem" onClick={() => { setCategoryMenu(null); void toggleCategoryPinned(categoryMenuCategory); }}>
+        {categoryMenuCategory.pinned ? <PinOff size={16} /> : <Pin size={16} />}
+        <span>{categoryMenuCategory.pinned ? "取消置顶" : "置顶"}</span>
+      </button>
+      {categoryMenuCategory.kind === "auto" && <button type="button" role="menuitem" onClick={() => { setCategoryMenu(null); setCategoryManagerOpen(true); }}>
+        <FolderInput size={16} /><span>移动目录…</span>
+      </button>}
+      {categoryMenuCategory.kind === "custom" && <button type="button" role="menuitem" onClick={() => {
+        const id = categoryMenuCategory.customId!;
+        setCategoryMenu(null);
+        setEditingCategoryId(id);
+        setEditingCategoryName(categoryMenuCategory.name);
+        setCategoryManagerOpen(true);
+      }}><Pencil size={16} /><span>重命名</span></button>}
+      {categoryMenuCategory.kind === "custom" && <button type="button" role="menuitem" className="danger" onClick={() => {
+        const category = taskCategorySettings?.customCategories.find((candidate) => candidate.id === categoryMenuCategory.customId);
+        setCategoryMenu(null);
+        if (category) void deleteCustomCategory(category);
+      }}><Trash2 size={16} /><span>删除分类</span></button>}
     </div>, document.body)}
 
     {archivedDialogOpen && createPortal(<div className="archive-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setArchivedDialogOpen(false); }}>
@@ -1158,6 +1414,67 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
             ))}
         </div>
         <footer className="working-dir-manager-footer"><small>仅 host 模式可用；目录必须存在且为绝对路径，不能指向应用自身的数据目录。</small></footer>
+      </section>
+    </div>, document.body)}
+
+    {categoryManagerOpen && workingDirSettings?.enabled && taskCategorySettings && createPortal(<div className="category-manager-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCategoryManagerOpen(false); }}>
+      <section className="category-manager" role="dialog" aria-modal="true" aria-label="管理任务分类">
+        <header><div><FolderCog size={19} /><strong>管理任务分类</strong></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setCategoryManagerOpen(false)}><X size={18} /></button></header>
+        <div className="category-manager-body">
+          <div className="category-manager-create">
+            <input value={newCategoryName} onChange={(event) => setNewCategoryName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createCustomCategory(); }} placeholder="新分类名称" />
+            <button type="button" className="primary-button" disabled={categorySaving || !newCategoryName.trim()} onClick={() => void createCustomCategory()}>创建</button>
+          </div>
+          <div className="category-manager-section">
+            <div className="category-manager-heading"><Pin size={14} /><strong>置顶顺序</strong></div>
+            {pinnedCategoryViews.length === 0
+              ? <div className="category-manager-empty">还没有置顶分类</div>
+              : pinnedCategoryViews.map((view, index) => (
+                <div className="category-pin-row" key={view.key}>
+                  <span className="category-pin-copy"><strong>{view.name}</strong><small title={view.detail}>{view.detail}</small></span>
+                  <span className="category-pin-actions">
+                    <button type="button" title="上移" aria-label={`上移 ${view.name}`} disabled={categorySaving || index === 0} onClick={() => void movePinnedCategory(view.key, -1)}><ArrowUp size={14} /></button>
+                    <button type="button" title="下移" aria-label={`下移 ${view.name}`} disabled={categorySaving || index === pinnedCategoryViews.length - 1} onClick={() => void movePinnedCategory(view.key, 1)}><ArrowDown size={14} /></button>
+                    <button type="button" title="取消置顶" aria-label={`取消置顶 ${view.name}`} disabled={categorySaving} onClick={() => void toggleCategoryPinned(view)}><PinOff size={14} /></button>
+                  </span>
+                </div>
+              ))}
+          </div>
+          <div className="category-manager-section">
+            <div className="category-manager-heading"><LayoutList size={14} /><strong>自定义分类</strong></div>
+            {taskCategorySettings.customCategories.length === 0
+              ? <div className="category-manager-empty">还没有自定义分类</div>
+              : taskCategorySettings.customCategories.map((category) => (
+                <div className="category-custom-row" key={category.id}>
+                  <span className="category-custom-copy">
+                    {editingCategoryId === category.id
+                      ? <input autoFocus value={editingCategoryName} onChange={(event) => setEditingCategoryName(event.target.value)} onBlur={() => void saveCustomCategoryName(category.id)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditingCategoryId(null); }} />
+                      : <><strong>{category.name}</strong><small>{category.assignedDirs.length ? `${category.assignedDirs.length} 个目录` : "还没有目录"}</small></>}
+                  </span>
+                  <span className="category-custom-actions">
+                    <button type="button" title="重命名" aria-label={`重命名 ${category.name}`} disabled={categorySaving} onClick={() => { setEditingCategoryId(category.id); setEditingCategoryName(category.name); }}><Pencil size={14} /></button>
+                    <button type="button" className="danger" title="删除分类" aria-label={`删除 ${category.name}`} disabled={categorySaving} onClick={() => void deleteCustomCategory(category)}><Trash2 size={14} /></button>
+                  </span>
+                </div>
+              ))}
+          </div>
+          <div className="category-manager-section">
+            <div className="category-manager-heading"><FolderOpen size={14} /><strong>目录归类</strong></div>
+            <small className="category-manager-hint">选择“自动归类”时，已收藏目录回到自己的分类，其他目录回到临时工作区。</small>
+            {categoryDirectoryAssignments.filter((assignment) => assignment.dir).length === 0
+              ? <div className="category-manager-empty">当前任务还没有可归类的工作目录</div>
+              : categoryDirectoryAssignments.filter((assignment) => assignment.dir).map((assignment) => (
+                <div className="category-dir-row" key={assignment.dir!}>
+                  <span className="category-dir-copy"><strong>{assignment.label}</strong><small title={assignment.dir!}>{assignment.dir}</small></span>
+                  <select value={assignment.customId ?? ""} disabled={categorySaving} aria-label={`${assignment.label} 所属分类`} onChange={(event) => void assignDirectory(assignment.dir!, event.target.value || null)}>
+                    <option value="">自动归类（{assignment.categoryName}）</option>
+                    {taskCategorySettings.customCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                </div>
+              ))}
+          </div>
+        </div>
+        <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；删除分类不会删除任务。</small></footer>
       </section>
     </div>, document.body)}
 

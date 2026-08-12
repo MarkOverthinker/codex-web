@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
+import { type TaskListCategorySettings, type TaskListCustomCategory } from "../src/task-categories.js";
 import { isDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName } from "./paths.js";
 
 export const LEGACY_USER_ID = "00000000-0000-4000-8000-000000000001";
@@ -952,6 +953,48 @@ export class AppDatabase {
       INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'default_working_dir',?,?)
       ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
     `).run(userId, workingDir, new Date().toISOString());
+  }
+
+  getTaskListCategorySettings(userId = LEGACY_USER_ID): TaskListCategorySettings {
+    const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='task_list_categories'").get(userId) as { value: string } | undefined;
+    if (!row) return { customCategories: [], pinned: [] };
+    try {
+      const parsed = JSON.parse(row.value) as Partial<TaskListCategorySettings> | null;
+      if (!parsed || typeof parsed !== "object") return { customCategories: [], pinned: [] };
+      const customCategories: TaskListCustomCategory[] = [];
+      if (Array.isArray(parsed.customCategories)) {
+        for (const item of parsed.customCategories.slice(0, 100)) {
+          if (!item || typeof item !== "object") continue;
+          const record = item as Partial<TaskListCustomCategory>;
+          if (typeof record.id !== "string" || !record.id || typeof record.name !== "string" || !record.name.trim()) continue;
+          const assignedDirs = Array.isArray(record.assignedDirs)
+            ? [...new Set(record.assignedDirs.filter((dir): dir is string => typeof dir === "string" && dir.startsWith("/")))].slice(0, 500)
+            : [];
+          customCategories.push({ id: record.id, name: record.name.trim().slice(0, 100), assignedDirs });
+        }
+      }
+      const pinned = Array.isArray(parsed.pinned)
+        ? [...new Set(parsed.pinned.filter((key): key is string => typeof key === "string" && key.length > 0))].slice(0, 100)
+        : [];
+      return { customCategories, pinned };
+    } catch {
+      return { customCategories: [], pinned: [] };
+    }
+  }
+
+  setTaskListCategorySettings(settings: TaskListCategorySettings, userId = LEGACY_USER_ID): void {
+    const safe: TaskListCategorySettings = {
+      customCategories: settings.customCategories.slice(0, 100).map((category) => ({
+        id: category.id,
+        name: category.name.trim().slice(0, 100),
+        assignedDirs: [...new Set(category.assignedDirs.filter((dir) => dir.startsWith("/")))].slice(0, 500),
+      })),
+      pinned: [...new Set(settings.pinned.filter((key) => key.length > 0))].slice(0, 100),
+    };
+    this.sqlite.prepare(`
+      INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'task_list_categories',?,?)
+      ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    `).run(userId, JSON.stringify(safe), new Date().toISOString());
   }
 
   createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection): JobRow {
