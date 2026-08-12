@@ -359,12 +359,13 @@ test("task timing shows live elapsed time and completed total duration", () => {
   assert.equal(formatElapsed(45), "45 秒");
   assert.equal(formatElapsed(125), "2 分 05 秒");
   const activities = [
-    { seq: 1, kind: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" },
-    { seq: 2, kind: "status", label: "正在登记结果文件", created_at: "2026-08-12T00:02:05.000Z" },
+    { seq: 1, type: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" },
+    { seq: 2, type: "status", status: "running", label: "正在登记结果文件", created_at: "2026-08-12T00:02:05.000Z" },
     { seq: 3, type: "done", status: "completed", created_at: "2026-08-12T00:02:05.000Z" },
   ];
   assert.equal(taskElapsedSeconds(activities), 125);
-  assert.equal(taskElapsedSeconds([{ seq: 1, kind: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" }]), null);
+  assert.equal(taskElapsedSeconds([{ seq: 1, type: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" }]), null);
+  assert.equal(taskElapsedSeconds([{ seq: 1, kind: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" }, { seq: 2, type: "done", created_at: "2026-08-12T00:00:30.000Z" }]), 30);
   assert.equal(taskElapsedSeconds([]), null);
 
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
@@ -373,7 +374,10 @@ test("task timing shows live elapsed time and completed total duration", () => {
   assert.match(appSource, /reasoningAbove/);
   assert.match(appSource, /总用时/);
   assert.match(appSource, /已用时/);
-  assert.match(styles, /\.process-timer/);
+  assert.match(appSource, /process-timer-row/);
+  assert.match(appSource, /reasoning-duration/);
+  assert.match(styles, /\.process-timer-row/);
+  assert.match(styles, /\.reasoning-duration/);
 });
 
 test("running progress expands inline without a nested vertical scroller", () => {
@@ -1502,6 +1506,7 @@ function writeSyntheticCodexSession(codexHome: string, threadId: string, options
   fs.mkdirSync(directory, { recursive: true });
   const filePath = path.join(directory, `rollout-2026-04-20T19-01-08-${threadId}.jsonl`);
   const timestamp = options.timestamp ?? "2026-04-20T11:01:20.633Z";
+  const assistantTimestamp = new Date(new Date(timestamp).getTime() + 60_000).toISOString();
   const lines = [
     JSON.stringify({
       timestamp,
@@ -1519,8 +1524,8 @@ function writeSyntheticCodexSession(codexHome: string, threadId: string, options
       type: "turn_context",
       payload: { turn_id: "turn-1", model: "gpt-5.4", collaboration_mode: { mode: "default", settings: { model: "gpt-5.4", reasoning_effort: "high" } } },
     }),
-    JSON.stringify({ timestamp, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "中间回复" }] } }),
-    JSON.stringify({ timestamp, type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: options.finalReply ?? "**最终回复**：项目已检查。" } }),
+    JSON.stringify({ timestamp: assistantTimestamp, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "中间回复" }] } }),
+    JSON.stringify({ timestamp: assistantTimestamp, type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: options.finalReply ?? "**最终回复**：项目已检查。" } }),
   ];
   fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
   return filePath;
@@ -1569,7 +1574,7 @@ test("session importer deduplicates the same thread across sessions and archived
   const discovered = await discoverImportableSessions(codexHome, new Set());
   assert.equal(discovered.length, 1);
   assert.equal(discovered[0].threadId, threadId);
-  assert.equal(discovered[0].updatedAt, "2026-04-21T09:00:00.000Z");
+  assert.equal(discovered[0].updatedAt, "2026-04-21T09:01:00.000Z");
 });
 
 test("readCodexThreadWorkingDir reads the recorded cwd and returns null for missing threads", async (context) => {
