@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type Dispatch, type FormEvent, type KeyboardEvent, type SetStateAction } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type Dispatch, type FormEvent, type KeyboardEvent, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,6 +28,7 @@ import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
+import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
@@ -1777,6 +1778,7 @@ type MessageListProps = {
   loadingOlderMessages: boolean;
   sending: boolean;
   reasoningSteps: ReasoningStep[];
+  taskDurationSeconds: number | null;
   messagesRef: React.RefObject<HTMLDivElement | null>;
   onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void;
   userInitials: string;
@@ -1792,23 +1794,30 @@ function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   return <ProcessPanel key={detail.conversation.id} activities={activities} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+  const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
-    {messages.map((message) => <MessageCard key={message.id} message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} />)}
+    {messages.map((message, index) => {
+      const reasoningAbove = !sending && index === reasoningMessageIndex && reasoningSteps.length > 0;
+      return <Fragment key={message.id}>
+        {reasoningAbove && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
+        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} />
+      </Fragment>;
+    })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
-    {!sending && <CompletedReasoningPanel steps={reasoningSteps} />}
+    {!sending && reasoningMessageIndex === -1 && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
     <div />
   </div>;
 });
 
-function CompletedReasoningPanel({ steps }: { steps: ReasoningStep[] }) {
+function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningStep[]; durationSeconds: number | null }) {
   if (steps.length === 0) return null;
   return <article className="message assistant reasoning-completed">
     <div className="message-avatar"><Brain size={15} /></div>
     <div className="message-body">
       <details className="reasoning-panel">
-        <summary><span className="reasoning-panel-title"><Brain size={14} />思考过程</span><span className="reasoning-panel-meta">{steps.length} 个步骤</span><ChevronDown size={14} /></summary>
+        <summary><span className="reasoning-panel-title"><Brain size={14} />思考过程</span><span className="reasoning-panel-meta">{steps.length} 个步骤{durationSeconds != null ? ` · 总用时 ${formatElapsed(durationSeconds)}` : ""}</span><ChevronDown size={14} /></summary>
         <ol className="reasoning-steps">
           {steps.map((step, index) => (
             <li key={`${step.title ?? index}-${index}`}>
@@ -1830,6 +1839,7 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
 }) {
   const citationFiles = useMemo(() => detail.messages.flatMap((message) => message.files), [detail.messages]);
   const reasoningSteps = useMemo(() => collectReasoningSteps(activities), [activities]);
+  const taskDurationSeconds = useMemo(() => taskElapsedSeconds(activities), [activities]);
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
 
@@ -1906,6 +1916,7 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
         loadingOlderMessages={loadingOlderMessages}
         sending={sending}
         reasoningSteps={reasoningSteps}
+        taskDurationSeconds={taskDurationSeconds}
         messagesRef={messagesRef}
         onMessagesScroll={onMessagesScroll}
         userInitials={userInitials}
@@ -1917,6 +1928,21 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
   </section>;
 });
 
+function useElapsedTimer(startedAt: string | null): number {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    if (!startedAt) return;
+    const update = () => {
+      const start = new Date(startedAt).getTime();
+      setElapsedSeconds(Number.isFinite(start) ? Math.max(0, Math.floor((Date.now() - start) / 1000)) : 0);
+    };
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  return elapsedSeconds;
+}
+
 function ProcessPanel({ activities }: { activities: JobEvent[] }) {
   const latestStatus = activities.findLast((item) => item.type === "status" || item.kind === "status");
   const queueStatus = activities.findLast((activity) => activity.status === "queued");
@@ -1925,9 +1951,16 @@ function ProcessPanel({ activities }: { activities: JobEvent[] }) {
   const plan = activities.findLast((activity) => activity.kind === "todo" && Boolean(activity.items?.length));
   const journal = buildProcessJournal(activities);
   const completedPlanItems = plan?.items?.filter((item) => item.completed).length ?? 0;
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (startedAt) return;
+    const started = activities.find((activity) => activity.kind === "status" && activity.status === "running");
+    if (started?.created_at) setStartedAt(started.created_at);
+  }, [activities, startedAt]);
+  const elapsedSeconds = useElapsedTimer(startedAt);
 
   return <div className="activity-card" role="status" aria-live="polite">
-    <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong><span>{queued ? (queueStatus?.jobsAhead ? `前面还有 ${queueStatus.jobsAhead} 个任务，完成后自动开始` : "即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span></div>
+    <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong>{startedAt && !queued && <time className="process-timer">已用时 {formatElapsed(elapsedSeconds)}</time>}<span>{queued ? (queueStatus?.jobsAhead ? `前面还有 ${queueStatus.jobsAhead} 个任务，完成后自动开始` : "即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span></div>
     {plan?.items && <div className="process-plan"><div className="process-section-title"><strong>执行计划</strong><span>{completedPlanItems}/{plan.items.length}</span></div><ul>
       {plan.items.map((item, index) => <li className={item.completed ? "completed" : index === completedPlanItems ? "current" : ""} key={`${item.text}-${index}`}><span>{item.completed ? <Check size={12} /> : index === completedPlanItems ? <LoaderCircle className="spin" size={12} /> : index + 1}</span><p>{item.text}</p></li>)}
     </ul></div>}
