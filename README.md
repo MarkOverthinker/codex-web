@@ -210,7 +210,9 @@ user is a tenant: tasks run under that user's Unix identity with
 their global skills and host tools (for example Caddy/frp publishing) work as
 they do in a normal local Codex session. `add-tenant.mjs` creates missing
 system users (copying a `.codex` template) and reuses existing users' own
-`~/.codex`. See [Host mode](docs/DEPLOYMENT.md#host-mode-machine-users-as-tenants)
+`~/.codex`. Task processes load the user's full supplementary groups via
+`setpriv --init-groups` (util-linux), so group-owned host tools work as in a
+normal login. See [Host mode](docs/DEPLOYMENT.md#host-mode-machine-users-as-tenants)
 for setup and the security trade-offs.
 
 In host mode, a new task can choose its Codex working directory: pick one of
