@@ -9,6 +9,8 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 
 const DEFAULT_PORT = 37822;
+const DEFAULT_WAIT_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_POLL_MS = 5_000;
 const MAX_COMMAND_LOG_BYTES = 128 * 1024;
 
 function parseCommand(value) {
@@ -38,6 +40,14 @@ function loadConfig() {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`invalid CODEX_WEB_RELOADER_PORT: ${process.env.CODEX_WEB_RELOADER_PORT}`);
   }
+  const waitTimeoutMs = Number(process.env.CODEX_WEB_RELOADER_WAIT_TIMEOUT_MS ?? DEFAULT_WAIT_TIMEOUT_MS);
+  const pollMs = Number(process.env.CODEX_WEB_RELOADER_POLL_MS ?? DEFAULT_POLL_MS);
+  if (!Number.isInteger(waitTimeoutMs) || waitTimeoutMs < 0) {
+    throw new Error(`invalid CODEX_WEB_RELOADER_WAIT_TIMEOUT_MS: ${process.env.CODEX_WEB_RELOADER_WAIT_TIMEOUT_MS}`);
+  }
+  if (!Number.isInteger(pollMs) || pollMs < 50) {
+    throw new Error(`invalid CODEX_WEB_RELOADER_POLL_MS: ${process.env.CODEX_WEB_RELOADER_POLL_MS}`);
+  }
   return {
     host: "127.0.0.1",
     port,
@@ -46,6 +56,8 @@ function loadConfig() {
     idleCheckCommand: parseCommand(process.env.CODEX_WEB_RELOADER_IDLE_CHECK_CMD ?? "node scripts/check-codex-web-idle.mjs"),
     buildCommand: parseCommand(process.env.CODEX_WEB_RELOADER_BUILD_CMD ?? "npm run build"),
     restartCommand: parseCommand(process.env.CODEX_WEB_RELOADER_RESTART_CMD ?? "systemctl restart codex-web.service"),
+    waitTimeoutMs,
+    pollMs,
   };
 }
 
@@ -88,6 +100,20 @@ function sendJson(res, statusCode, body) {
   res.end(payload);
 }
 
+function parseIdleCheck(output) {
+  try {
+    const payloadLine = output.split("\n").find((line) => line.trim().startsWith("{"));
+    const payload = payloadLine ? JSON.parse(payloadLine) : null;
+    return {
+      idle: payload?.idle === true,
+      running: typeof payload?.running === "number" && Number.isInteger(payload.running) ? payload.running : -1,
+      error: typeof payload?.error === "string" ? payload.error : "",
+    };
+  } catch {
+    return { idle: false, running: -1, error: "invalid idle check output" };
+  }
+}
+
 function authorized(req, token) {
   if (!token) return false;
   const header = req.headers.authorization ?? "";
@@ -104,7 +130,17 @@ let busy = false;
 let lastResult = null;
 
 async function handleRestart(res) {
+  let responded = false;
   if (busy) {
+    if (state === "waiting") {
+      sendJson(res, 202, {
+        ok: true,
+        state,
+        message: "已有 reload 排队，任务结束后将自动构建并重启服务。",
+        lastResult,
+      });
+      return;
+    }
     sendJson(res, 409, {
       ok: false,
       error: "another rebuild/restart is already running",
@@ -119,17 +155,8 @@ async function handleRestart(res) {
   lastResult = null;
 
   const idleCheck = await runCommand(config.idleCheckCommand, config.root);
-  let idle = false;
-  let idleError = "";
-  try {
-    const payloadLine = idleCheck.output.split("\n").find((line) => line.trim().startsWith("{"));
-    const payload = payloadLine ? JSON.parse(payloadLine) : null;
-    idle = payload?.idle === true;
-    if (typeof payload?.error === "string") idleError = payload.error;
-  } catch {
-    idleError = "invalid idle check output";
-  }
-  if (!idle) {
+  let check = parseIdleCheck(idleCheck.output);
+  if (check.running < 0) {
     state = "busy";
     busy = false;
     lastResult = {
@@ -137,16 +164,54 @@ async function handleRestart(res) {
       ok: false,
       finishedAt: new Date().toISOString(),
       idle: false,
-      error: idleError || "codex-web has running jobs",
+      error: check.error || "cannot verify Codex Web idle state",
       output: idleCheck.output,
     };
     sendJson(res, 409, {
       ok: false,
-      error: idleError || "codex-web has running jobs; restart skipped",
+      error: check.error || "cannot verify Codex Web idle state; restart skipped",
       state,
       lastResult,
     });
     return;
+  }
+
+  if (!check.idle) {
+    state = "waiting";
+    lastResult = {
+      command: "idle-check",
+      ok: true,
+      finishedAt: new Date().toISOString(),
+      idle: false,
+      running: check.running,
+      note: "waiting for running jobs to finish",
+    };
+    responded = true;
+    sendJson(res, 202, {
+      ok: true,
+      state,
+      message: "Codex Web 仍有任务运行；已排队，任务结束后将自动构建并重启服务。",
+      lastResult,
+    });
+    const deadline = Date.now() + config.waitTimeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, config.pollMs));
+      check = parseIdleCheck((await runCommand(config.idleCheckCommand, config.root)).output);
+      if (check.idle) break;
+    }
+    if (!check.idle) {
+      state = "wait-timeout";
+      busy = false;
+      lastResult = {
+        command: "idle-check",
+        ok: false,
+        finishedAt: new Date().toISOString(),
+        idle: false,
+        error: check.error || `timed out waiting for jobs to finish after ${config.waitTimeoutMs} ms; restart skipped`,
+        output: idleCheck.output,
+      };
+      return;
+    }
   }
 
   state = "building";
@@ -162,6 +227,7 @@ async function handleRestart(res) {
       output: build.output,
     };
     console.error(`build failed:\n${build.output}`);
+    if (responded) return;
     sendJson(res, 500, { ok: false, error: "build failed; codex-web.service was not restarted", state, lastResult });
     return;
   }
@@ -179,6 +245,7 @@ async function handleRestart(res) {
       output: restart.output,
     };
     console.error(`restart failed:\n${restart.output}`);
+    if (responded) return;
     sendJson(res, 500, { ok: false, error: "restart command failed", state, lastResult });
     return;
   }
@@ -190,6 +257,7 @@ async function handleRestart(res) {
     ok: true,
     finishedAt: new Date().toISOString(),
   };
+  if (responded) return;
   sendJson(res, 200, {
     ok: true,
     state,

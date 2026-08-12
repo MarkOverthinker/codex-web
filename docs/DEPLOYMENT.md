@@ -205,21 +205,24 @@ npm run reload
 ```
 
 The reloader answers `GET /status` and authenticated `POST /restart` on
-`http://127.0.0.1:37822`. It returns HTTP 409 while a rebuild/restart is
-already running, and HTTP 500 with the build log when compilation fails
-(leaving the running service untouched). The token file
-`/etc/codex-web-reloader/token` is readable only by root and the checkout
-owner. To uninstall, stop and disable the unit and remove
-`/etc/codex-web-reloader`.
+`http://127.0.0.1:37822`. It returns HTTP 409 while another rebuild/restart
+is already running (unless that run is queued, in which case it returns 202),
+and HTTP 500 with the build log when compilation fails (leaving the running
+service untouched). The token file `/etc/codex-web-reloader/token` is readable
+only by root and the checkout owner. To uninstall, stop and disable the unit
+and remove `/etc/codex-web-reloader`.
 
 Before building or restarting, the reloader runs
 `scripts/check-codex-web-idle.mjs`, which queries the service database for
-running jobs. If any job is still running (or the database cannot be
-verified), it returns HTTP 409 with state `busy`, skips the build and the
-restart, and the client prints that the reload was skipped. Re-run
-`npm run reload` after the tasks finish. The database path comes from the
-unit's `DATA_ROOT` (defaulting to `<WorkingDirectory>/data`) and is written
-into `/etc/codex-web-reloader/env` by the installer.
+running jobs. If jobs are still running, the reload is queued: the request
+returns HTTP 202 with state `waiting`, and once the jobs finish the reloader
+automatically builds and restarts `codex-web.service`. The queue waits up to
+30 minutes by default (`CODEX_WEB_RELOADER_WAIT_TIMEOUT_MS`); on timeout the
+state becomes `wait-timeout` and no restart happens. If the database cannot be
+verified, the reloader refuses with HTTP 409 instead of risking an
+interruption. The database path comes from the unit's `DATA_ROOT` (defaulting
+to `<WorkingDirectory>/data`) and is written into
+`/etc/codex-web-reloader/env` by the installer.
 
 The config directory is owned by `root` with the checkout owner's group and
 mode `0750`, so only root and the checkout owner can enter it and read the
