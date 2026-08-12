@@ -1461,29 +1461,30 @@ test("conversation stop cancels every active job and deletion preserves audit ro
   await agent.get(`/codex-web/api/jobs/${deletionJobId}/events`).expect(404);
 });
 
-function writeSyntheticCodexSession(codexHome: string, threadId: string, options: { dir?: string; message?: string; finalReply?: string } = {}): string {
+function writeSyntheticCodexSession(codexHome: string, threadId: string, options: { dir?: string; message?: string; finalReply?: string; timestamp?: string } = {}): string {
   const directory = path.join(codexHome, options.dir ?? "sessions", "2026", "04", "20");
   fs.mkdirSync(directory, { recursive: true });
   const filePath = path.join(directory, `rollout-2026-04-20T19-01-08-${threadId}.jsonl`);
+  const timestamp = options.timestamp ?? "2026-04-20T11:01:20.633Z";
   const lines = [
     JSON.stringify({
-      timestamp: "2026-04-20T11:01:20.633Z",
+      timestamp,
       type: "session_meta",
       payload: { id: threadId, timestamp: "2026-04-20T11:01:08.567Z", cwd: "/home/test/project", originator: "codex_cli", cli_version: "0.107.0" },
     }),
     JSON.stringify({
-      timestamp: "2026-04-20T11:01:20.630Z",
+      timestamp,
       type: "response_item",
       payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# AGENTS.md instructions for /home/test/project\n\n- Follow the repo conventions." }] },
     }),
-    JSON.stringify({ timestamp: "2026-04-20T11:01:20.633Z", type: "event_msg", payload: { type: "user_message", message: options.message ?? "请检查这个项目", images: [], text_elements: [] } }),
+    JSON.stringify({ timestamp, type: "event_msg", payload: { type: "user_message", message: options.message ?? "请检查这个项目", images: [], text_elements: [] } }),
     JSON.stringify({
-      timestamp: "2026-04-20T11:01:20.648Z",
+      timestamp,
       type: "turn_context",
       payload: { turn_id: "turn-1", model: "gpt-5.4", collaboration_mode: { mode: "default", settings: { model: "gpt-5.4", reasoning_effort: "high" } } },
     }),
-    JSON.stringify({ timestamp: "2026-04-20T11:05:39.422Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "中间回复" }] } }),
-    JSON.stringify({ timestamp: "2026-04-20T11:06:00.000Z", type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: options.finalReply ?? "**最终回复**：项目已检查。" } }),
+    JSON.stringify({ timestamp, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "中间回复" }] } }),
+    JSON.stringify({ timestamp, type: "event_msg", payload: { type: "task_complete", turn_id: "turn-1", last_agent_message: options.finalReply ?? "**最终回复**：项目已检查。" } }),
   ];
   fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
   return filePath;
@@ -1519,6 +1520,20 @@ test("session importer discovers Codex rollouts, derives titles, and skips alrea
   assert.equal(legacy.title, "旧版会话的真实问题");
   assert.equal((await discoverImportableSessions(codexHome, new Set([threadId]))).length, 1);
   assert.equal((await discoverImportableSessions(codexHome, new Set([threadId, legacyThreadId]))).length, 0);
+});
+
+test("session importer deduplicates the same thread across sessions and archived sessions", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-session-importer-dedup-test-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const codexHome = path.join(root, "codex-home");
+  const threadId = crypto.randomUUID();
+  writeSyntheticCodexSession(codexHome, threadId, { dir: "sessions", timestamp: "2026-04-20T11:00:00.000Z" });
+  writeSyntheticCodexSession(codexHome, threadId, { dir: "archived_sessions", timestamp: "2026-04-21T09:00:00.000Z" });
+
+  const discovered = await discoverImportableSessions(codexHome, new Set());
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].threadId, threadId);
+  assert.equal(discovered[0].updatedAt, "2026-04-21T09:00:00.000Z");
 });
 
 test("session importer persists a provided working directory and falls back to null on normalization failure", async (context) => {

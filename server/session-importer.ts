@@ -168,7 +168,7 @@ export function deriveImportedTitle(firstUserMessage: string | null): string {
  * tenant's Codex Home holds many multi-hundred-megabyte sessions.
  */
 export async function discoverImportableSessions(codexHome: string, existingThreadIds: ReadonlySet<string>): Promise<ImportableSession[]> {
-  const sessions: ImportableSession[] = [];
+  const sessionsById = new Map<string, ImportableSession>();
   for (const directoryName of ["sessions", "archived_sessions"]) {
     const root = path.resolve(codexHome, directoryName);
     if (!fs.existsSync(root)) continue;
@@ -188,7 +188,7 @@ export async function discoverImportableSessions(codexHome: string, existingThre
         const scan = await scanSessionFile(absolute, { maxBytes: SESSION_DISCOVERY_HEAD_BYTES, collectTurns: false });
         const effectiveThreadId = scan.threadId ?? threadId;
         if (existingThreadIds.has(effectiveThreadId)) continue;
-        sessions.push({
+        const candidate: ImportableSession = {
           threadId: effectiveThreadId,
           title: deriveImportedTitle(scan.firstUserMessage),
           createdAt: scan.createdAt ?? new Date(stat.birthtimeMs).toISOString(),
@@ -197,11 +197,18 @@ export async function discoverImportableSessions(codexHome: string, existingThre
           cwd: scan.cwd,
           originator: scan.originator,
           model: scan.model,
-        });
+        };
+        const existing = sessionsById.get(effectiveThreadId);
+        if (!existing
+          || candidate.updatedAt.localeCompare(existing.updatedAt) > 0
+          || (candidate.updatedAt === existing.updatedAt && candidate.fileSize > existing.fileSize)) {
+          sessionsById.set(effectiveThreadId, candidate);
+        }
       }
     };
     await visit(root);
   }
+  const sessions = [...sessionsById.values()];
   sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   return sessions;
 }
