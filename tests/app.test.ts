@@ -130,10 +130,14 @@ test("host working directory picker exposes favorites, manual paths, and per-con
   assert.match(apiSource, /workingDirs: \(\) => request<\{ settings: WorkingDirSettings \}>\(\"\/working-dirs\"\)/);
   assert.match(apiSource, /updateFavoriteWorkingDir:/);
   assert.match(apiSource, /createConversation: \(workingDir\?: string \| null\)/);
+  assert.match(apiSource, /export class ApiError extends Error/);
+  assert.match(apiSource, /updateConversationWorkingDir: \(id: string, workingDir: string \| null, confirm = false\)/);
   assert.match(appSource, /className="new-task-dir-panel"/);
   assert.match(appSource, /管理收藏…/);
   assert.match(appSource, /或手动输入绝对路径/);
   assert.match(appSource, /className="chat-working-dir"/);
+  assert.match(appSource, /reason\.code !== "working-dir-busy"/);
+  assert.match(appSource, /window\.confirm\("该工作目录已有其他会话/);
   assert.match(styles, /\.new-task-dir-panel \{/);
   assert.match(styles, /\.working-dir-manager \{/);
   assert.match(styles, /\.chat-working-dir \{/);
@@ -1032,10 +1036,31 @@ test("host mode persists favorite working directories and applies them to new co
   instance.db.createJob(blockerJob, blocker.body.conversation.id);
   instance.db.updateJob(blockerJob, "running");
   instance.db.updateConversation(blocker.body.conversation.id, { status: "running" });
-  await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
+  const busy = await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
     .set("X-CSRF-Token", csrf)
     .send({ workingDir: project }).expect(409);
+  assert.equal(busy.body.code, "working-dir-busy");
+  assert.equal(
+    (await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200)).body.conversation.working_dir,
+    null,
+  );
+
+  await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project, confirm: true }).expect(200);
+  assert.equal(
+    (await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200)).body.conversation.working_dir,
+    canonicalProject,
+  );
   instance.db.finishJob(blockerJob, blocker.body.conversation.id, "completed");
+
+  await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: null }).expect(200);
+  assert.equal(
+    (await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200)).body.conversation.working_dir,
+    null,
+  );
 
   await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
     .set("X-CSRF-Token", csrf)

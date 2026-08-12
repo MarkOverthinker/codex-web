@@ -97,6 +97,15 @@ export type PendingMutationResponse = {
   guidance?: string;
 };
 
+export class ApiError extends Error {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+  }
+}
+
 let csrfToken = "";
 export function setCsrf(value?: string) { csrfToken = value ?? ""; }
 
@@ -107,7 +116,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${BASE_PATH}/api${path}`, { ...init, headers, credentials: "same-origin" });
   if (response.status === 204) return undefined as T;
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `请求失败 (${response.status})`);
+  if (!response.ok) throw new ApiError(body.error || `请求失败 (${response.status})`, body.code);
   return body as T;
 }
 
@@ -137,8 +146,8 @@ export const api = {
     request<{ settings: WorkingDirSettings }>("/working-dirs/default", { method: "PUT", body: JSON.stringify({ path }) }),
   createConversation: (workingDir?: string | null) =>
     request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST", body: JSON.stringify({ workingDir }) }),
-  updateConversationWorkingDir: (id: string, workingDir: string | null) =>
-    request<{ conversation: Conversation }>(`/conversations/${id}/working-dir`, { method: "PUT", body: JSON.stringify({ workingDir }) }),
+  updateConversationWorkingDir: (id: string, workingDir: string | null, confirm = false) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/working-dir`, { method: "PUT", body: JSON.stringify({ workingDir, confirm }) }),
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
   conversationMessages: (id: string, before: string) => request<ConversationMessagesPage>(
     `/conversations/${id}/messages?before=${encodeURIComponent(before)}`,

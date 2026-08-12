@@ -589,8 +589,12 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       try { workingDir = resolveSubmittedWorkingDir(raw); }
       catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" }); }
     }
-    if (workingDir && db.listActiveJobsForWorkingDir(workingDir).length > 0) {
-      return res.status(409).json({ error: "该工作目录已有其他会话正在排队或运行任务，请处理完成后再切换。" });
+    const workingDirBusy = Boolean(workingDir && db.listActiveJobsForWorkingDir(workingDir).length > 0);
+    if (workingDirBusy && req.body?.confirm !== true) {
+      return res.status(409).json({
+        error: "该工作目录已有其他会话正在排队或运行任务。确认切换后，本会话将与这些任务在同一目录交替执行，可能互相影响文件状态。",
+        code: "working-dir-busy",
+      });
     }
     db.updateConversation(conversation.id, { workingDir });
     return res.json({ conversation: db.getConversationForUser(conversation.id, session.user_id) });
