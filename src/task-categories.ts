@@ -347,6 +347,32 @@ export function buildDirectoryAssignments(
   return [...rows.values()].sort((left, right) => left.label.localeCompare(right.label));
 }
 
+export type TaskCategoryBodyState = {
+  visibleCount: number;
+  remaining: number;
+  showExpandControl: boolean;
+};
+
+/**
+ * Decide how many tasks a category body shows and whether the expand/collapse
+ * control is needed. The remaining count always refers to the collapsed
+ * preview limit instead of the currently visible count, so fully expanding a
+ * category never hides the collapse button.
+ */
+export function buildTaskCategoryBodyState(
+  conversationCount: number,
+  fullyExpanded: boolean,
+  previewLimit = 3,
+): TaskCategoryBodyState {
+  const previewCount = Math.max(0, Math.min(conversationCount, Math.max(0, Math.trunc(previewLimit))));
+  const remaining = Math.max(0, conversationCount - previewCount);
+  return {
+    visibleCount: fullyExpanded ? conversationCount : previewCount,
+    remaining,
+    showExpandControl: remaining > 0,
+  };
+}
+
 function pathLabel(dir: string): string {
   const segments = dir.replace(/[\\/]+$/, "").split(/[\\/]/);
   return segments.at(-1) || dir;
