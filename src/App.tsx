@@ -1561,7 +1561,6 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；删除分类不会删除任务。</small></footer>
       </section>
     </div>, document.body)}
-    {previewFile && <FilePreviewPane key={previewFile.id} file={previewFile} onClose={closeFilePreview} />}
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
@@ -1585,6 +1584,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         onRestoreEditingFile={(fileId) => setRemovedEditingFileIds((current) => current.filter((id) => id !== fileId))}
         onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined} />}
     </main>
+    {previewFile && <FilePreviewPane key={previewFile.id} file={previewFile} onClose={closeFilePreview} />}
   </div>;
 }
 

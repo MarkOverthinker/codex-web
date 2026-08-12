@@ -802,7 +802,9 @@ test("output files are maintained in conversation details and open in a side-by-
   assert.match(appSource, /className="file-preview-trigger"/);
   assert.match(appSource, /onPreview=\{onPreview\}/);
   assert.match(appSource, /ReactMarkdown remarkPlugins=\{\[remarkGfm\]\}>/);
+  assert.ok(appSource.indexOf('<main className="workspace"') < appSource.indexOf("<FilePreviewPane"));
   assert.match(styles, /\.file-preview-pane \{/);
+  assert.match(styles, /\.file-preview-pane \{[^}]*border-left:/);
   assert.match(styles, /\.chat-outputs \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.file-preview-pane/);
 });
