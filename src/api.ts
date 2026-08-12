@@ -68,6 +68,7 @@ export type ConversationDetail = {
   conversation: Conversation;
   agentSelection: AgentSelection;
   messages: Message[];
+  outputFiles: WorkFile[];
   messagePage: MessagePage;
   pendingPrompts: PendingPrompt[];
   editingPrompt: PendingPrompt | null;

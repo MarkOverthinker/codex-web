@@ -22,7 +22,7 @@ import { consumeTenantTurnEvents, validateTenantWorkerRequest } from "../server/
 import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js";
 import { isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions } from "../server/session-importer.js";
-import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
+import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
 import { chooseComposerPrimaryAction } from "../src/composer-action.js";
@@ -776,6 +776,38 @@ test("browser preview is limited to formats browsers can display directly", () =
   assert.equal(isBrowserPreviewable(file("application/vnd.openxmlformats-officedocument.presentationml.presentation")), false);
 });
 
+test("in-page preview distinguishes Markdown, text, images, and PDFs with a text size cap", () => {
+  const file = (mime_type: string, size = 10) => ({ mime_type, size } as WorkFile);
+  assert.equal(filePreviewKind(file("text/markdown")), "markdown");
+  assert.equal(filePreviewKind(file("text/plain")), "text");
+  assert.equal(filePreviewKind(file("text/csv")), "text");
+  assert.equal(filePreviewKind(file("image/png")), "image");
+  assert.equal(filePreviewKind(file("application/pdf")), "pdf");
+  assert.equal(filePreviewKind(file("application/vnd.openxmlformats-officedocument.presentationml.presentation")), null);
+  assert.equal(canPreviewInline(file("text/markdown")), true);
+  assert.equal(canPreviewInline(file("text/plain", FILE_PREVIEW_TEXT_LIMIT_BYTES + 1)), false);
+  assert.equal(canPreviewInline(file("image/png", 100 * 1024 * 1024)), true);
+});
+
+test("output files are maintained in conversation details and open in a floating preview", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(apiSource, /outputFiles: WorkFile\[\];/);
+  assert.match(serverSource, /outputFiles = db\.listFiles\(conversation\.id\)\.filter\(\(file\) => file\.kind === "output"\)/);
+  assert.match(serverSource, /outputFiles,/);
+  assert.match(appSource, /className="chat-outputs"/);
+  assert.match(appSource, /function FilePreviewModal/);
+  assert.match(appSource, /className="file-preview-trigger"/);
+  assert.match(appSource, /onPreview=\{onPreview\}/);
+  assert.match(appSource, /ReactMarkdown remarkPlugins=\{\[remarkGfm\]\}>/);
+  assert.match(styles, /\.file-preview-backdrop \{/);
+  assert.match(styles, /\.file-preview-panel \{/);
+  assert.match(styles, /\.chat-outputs \{/);
+  assert.match(styles, /:root\[data-theme="dark"\] \.file-preview-panel/);
+});
+
 test("risky uploads and execution requests use offline isolation", () => {
   assert.deepEqual(assessTaskPolicy("整理表格", [{ original_name: "source.xlsx" }]), { isolated: false, networkAccessEnabled: true });
   const macro = assessTaskPolicy("看看这个文件", [{ original_name: "unknown.xlsm" }]);
@@ -923,6 +955,9 @@ test("single-user login and CSRF protection", async (context) => {
     mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     size: 9, kind: "output", created_at: new Date().toISOString(),
   });
+  const detailWithOutput = await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200);
+  assert.equal(detailWithOutput.body.outputFiles.length, 1);
+  assert.equal(detailWithOutput.body.outputFiles[0].original_name, originalName);
   const download = await agent.get(`/codex-web/api/files/${fileId}?download=1`).expect(200);
   assert.equal(download.headers["cache-control"], "private, no-store");
   assert.match(download.headers["content-disposition"], /^attachment; filename="download\.pptx"; filename\*=UTF-8''/);

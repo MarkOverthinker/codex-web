@@ -46,6 +46,25 @@ export function isBrowserPreviewable(file: WorkFile): boolean {
     || /^text\/(?:plain|markdown|csv)/.test(file.mime_type);
 }
 
+export type FilePreviewKind = "image" | "pdf" | "markdown" | "text";
+
+export const FILE_PREVIEW_TEXT_LIMIT_BYTES = 5 * 1024 * 1024;
+
+export function filePreviewKind(file: WorkFile): FilePreviewKind | null {
+  if (file.mime_type.startsWith("image/")) return "image";
+  if (file.mime_type === "application/pdf") return "pdf";
+  if (file.mime_type === "text/markdown") return "markdown";
+  if (file.mime_type === "text/plain" || file.mime_type === "text/csv") return "text";
+  return null;
+}
+
+export function canPreviewInline(file: WorkFile): boolean {
+  const kind = filePreviewKind(file);
+  if (!kind) return false;
+  if (kind === "markdown" || kind === "text") return file.size <= FILE_PREVIEW_TEXT_LIMIT_BYTES;
+  return true;
+}
+
 export function resolveMessageFileLink(href: string | undefined, files: WorkFile[]): ResolvedMessageLink {
   if (!href) return { kind: "unavailable" };
   const normalized = normalizePath(href);

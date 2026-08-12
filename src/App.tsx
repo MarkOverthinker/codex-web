@@ -12,7 +12,7 @@ import {
   buildDirectoryAssignments, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
-import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
+import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
@@ -179,6 +179,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [categoryMenu, setCategoryMenu] = useState<{ categoryKey: string; top: number; left: number } | null>(null);
   const [categoryExpanded, setCategoryExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY));
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
+  const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
   const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
@@ -228,6 +229,9 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     setAskAgentQuote(normalized.slice(0, ASK_AGENT_SELECTION_MAX_CHARS + 1));
     setComposerFocusRequest((request) => request + 1);
   }, []);
+
+  const openFilePreview = useCallback((file: WorkFile) => setPreviewFile(file), []);
+  const closeFilePreview = useCallback(() => setPreviewFile(null), []);
 
   const refreshList = useCallback(async () => {
     const result = await api.conversations();
@@ -1557,10 +1561,11 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；删除分类不会删除任务。</small></footer>
       </section>
     </div>, document.body)}
+    {previewFile && createPortal(<FilePreviewModal key={previewFile.id} file={previewFile} onClose={closeFilePreview} />, document.body)}
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <Chat detail={currentDetail} activities={activities} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} />
+      {currentDetail ? <Chat detail={currentDetail} activities={activities} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} />
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -1638,9 +1643,10 @@ type MessageCardProps = {
   userInitials: string;
   chatFontSize: number;
   citationFiles: WorkFile[];
+  onPreview: (file: WorkFile) => void;
 };
 
-const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview }: MessageCardProps) {
   return <article className={`message ${message.role}`}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
@@ -1658,7 +1664,7 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
         {message.quote_excerpt && <div className="message-reference" title={message.quote_excerpt}><CornerUpLeft size={14} /><span><strong>引用</strong>{message.quote_excerpt}</span></div>}
         {message.content && <p data-agent-selectable="true">{message.content}</p>}
       </>}
-      {message.files.length > 0 && <div className="file-grid">{message.files.map((file) => <FileCard key={file.id} file={file} />)}</div>}
+      {message.files.length > 0 && <div className="file-grid">{message.files.map((file) => <FileCard key={file.id} file={file} onPreview={onPreview} />)}</div>}
     </div>
   </article>;
 });
@@ -1674,6 +1680,7 @@ type MessageListProps = {
   userInitials: string;
   chatFontSize: number;
   citationFiles: WorkFile[];
+  onPreview: (file: WorkFile) => void;
 };
 
 const LiveActivitiesContext = createContext<JobEvent[]>([]);
@@ -1683,18 +1690,18 @@ function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   return <ProcessPanel key={detail.conversation.id} activities={activities} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
-    {messages.map((message) => <MessageCard key={message.id} message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} />)}
+    {messages.map((message) => <MessageCard key={message.id} message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} />)}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
     <div />
   </div>;
 });
 
-const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange }: {
+const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
   detail: ConversationDetail; activities: JobEvent[]; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number;
-  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void;
+  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void;
 }) {
   const citationFiles = useMemo(() => detail.messages.flatMap((message) => message.files), [detail.messages]);
   const chatRef = useRef<HTMLElement>(null);
@@ -1759,6 +1766,12 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
       direction="down"
       onChange={(value) => onWorkingDirChange(value || null)}
     />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
+    {detail.outputFiles.length > 0 && <div className="chat-outputs" aria-label="输出文件">
+      <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
+      <div className="chat-outputs-list">{detail.outputFiles.map((file) => canPreviewInline(file)
+        ? <button type="button" key={file.id} className="chat-output-chip" title={file.original_name} onClick={() => onPreview(file)}>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></button>
+        : <a key={file.id} className="chat-output-chip" href={fileUrl(file, true)} download={file.original_name} title={file.original_name}>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></a>)}</div>
+    </div>}
     <LiveActivitiesContext.Provider value={activities}>
       <MessageList
         messages={detail.messages}
@@ -1771,6 +1784,7 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
         userInitials={userInitials}
         chatFontSize={chatFontSize}
         citationFiles={citationFiles}
+        onPreview={onPreview}
       />
     </LiveActivitiesContext.Provider>{askSelection && <button type="button" className={`ask-agent-selection ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }} onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>}
   </section>;
@@ -1833,16 +1847,85 @@ function formatActivityTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date);
 }
 
-function FileCard({ file }: { file: WorkFile }) {
-  const icon = file.mime_type.startsWith("image/") ? <FileImage size={20} /> : <FileIcon size={20} />;
-  const previewable = isBrowserPreviewable(file);
-  const body = <>{icon}<span><strong>{file.original_name}</strong><small>{formatSize(file.size)} · {file.kind === "output" ? "结果文件" : "上传文件"}</small></span></>;
+function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkFile) => void }) {
+  const kind = filePreviewKind(file);
+  const previewable = canPreviewInline(file);
+  const icon = kind === "image" ? <FileImage size={20} /> : kind ? <FileText size={20} /> : <FileIcon size={20} />;
+  const meta = `${formatSize(file.size)} · ${file.kind === "output" ? "结果文件" : "上传文件"}${previewable ? " · 点击预览" : ""}`;
+  const body = <>{icon}<span><strong>{file.original_name}</strong><small>{meta}</small></span></>;
   return <div className="file-card">
     {previewable
-      ? <a href={fileUrl(file)} target="_blank" rel="noreferrer">{body}</a>
+      ? <button type="button" className="file-preview-trigger" title="点击预览" onClick={() => onPreview(file)}>{body}</button>
       : <a href={fileUrl(file, true)} download={file.original_name}>{body}</a>}
     <a className="download-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={16} /></a>
   </div>;
+}
+
+function FilePreviewModal({ file, onClose }: { file: WorkFile; onClose: () => void }) {
+  const kind = filePreviewKind(file);
+  const source = fileUrl(file);
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const isTextKind = kind === "markdown" || kind === "text";
+
+  useEffect(() => {
+    if (!isTextKind) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    setText(null);
+    setError("");
+    fetch(source, { credentials: "same-origin", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(body?.error || `文件读取失败 (${response.status})`);
+        }
+        const value = await response.text();
+        if (!cancelled) setText(value);
+      })
+      .catch((reason) => {
+        if (cancelled || (reason instanceof DOMException && reason.name === "AbortError")) return;
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "文件读取失败");
+      });
+    return () => { cancelled = true; controller.abort(); };
+  }, [file.id, isTextKind, source]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const subtitle = `${file.kind === "output" ? "结果文件" : "上传文件"} · ${formatSize(file.size)}`;
+  return <div className="file-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="file-preview-panel" role="dialog" aria-modal="true" aria-label={`预览 ${file.original_name}`}>
+      <header>
+        {kind === "image" ? <FileImage size={19} /> : kind ? <FileText size={19} /> : <FileIcon size={19} />}
+        <span className="file-preview-title"><strong>{file.original_name}</strong><small>{subtitle}</small></span>
+        <span className="file-preview-actions">
+          <a className="icon-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={17} /></a>
+          <button type="button" className="icon-button" aria-label="关闭" autoFocus onClick={onClose}><X size={18} /></button>
+        </span>
+      </header>
+      <div className={`file-preview-body ${kind === "image" || kind === "pdf" ? "fit" : ""}`}>
+        {kind === "image" && <img className="file-preview-image" src={source} alt={file.original_name} />}
+        {kind === "pdf" && <iframe className="file-preview-frame" src={source} title={file.original_name} />}
+        {kind === "markdown" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <div className="markdown file-preview-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>)}
+        {kind === "text" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <pre className="file-preview-plain">{text}</pre>)}
+        {!kind && <FilePreviewError error="该文件格式暂不支持页内预览，请下载后查看。" />}
+      </div>
+    </section>
+  </div>;
+}
+
+function FilePreviewLoading() {
+  return <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>正在加载预览…</span></div>;
+}
+
+function FilePreviewError({ error }: { error: string }) {
+  return <div className="file-preview-error"><TriangleAlert size={20} /><span>{error}</span></div>;
 }
 
 function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, onSteer }: {
