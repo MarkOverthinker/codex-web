@@ -218,8 +218,10 @@ access. Favorites and a per-user default are stored in the web database, and
 each conversation remembers its own directory. Attachments, generated outputs
 and temporary runtime files still live in the conversation's own workspace;
 deleting a conversation never removes the selected host directory. Tasks that
-share one directory run one at a time to avoid conflicting writes. This
-feature is deliberately unavailable in the isolated tenant deployment.
+share one directory run one at a time to avoid conflicting writes. Switching an
+existing conversation into a directory where other sessions have queued or
+running work asks for your confirmation first, and proceeds once you confirm.
+This feature is deliberately unavailable in the isolated tenant deployment.
 
 ## Optional voice transcription
 

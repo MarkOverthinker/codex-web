@@ -7,7 +7,7 @@ import {
   CornerUpLeft, GripVertical, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
@@ -533,8 +533,17 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   async function changeConversationWorkingDir(conversationId: string, workingDir: string | null) {
     setWorkingDirSaving(true); setError("");
     try {
-      const result = await api.updateConversationWorkingDir(conversationId, workingDir);
+      try {
+        const result = await api.updateConversationWorkingDir(conversationId, workingDir);
+        syncConversation(result.conversation);
+        return;
+      } catch (reason) {
+        if (!(reason instanceof ApiError) || reason.code !== "working-dir-busy") throw reason;
+      }
+      if (!window.confirm("该工作目录已有其他会话正在排队或运行任务。确认切换后，本会话将与这些任务在同一目录交替执行，可能互相影响文件状态。是否仍要切换？")) return;
+      const result = await api.updateConversationWorkingDir(conversationId, workingDir, true);
       syncConversation(result.conversation);
+      setNotice("已确认切换到有其他会话活动的工作目录；同一目录的任务仍将串行执行。");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "工作目录修改失败");
     } finally {
