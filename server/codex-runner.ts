@@ -17,6 +17,7 @@ import { buildAgentSteerPrompt, buildAgentTurnPrompt, type AgentAttachmentContex
 import { detectOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { latestUserCancellationContext } from "./cancellation-summary.js";
 import { hostTenantFor } from "./host-mode.js";
+import { buildReasoningSteps } from "./reasoning-parts.js";
 
 type Publish = (jobId: string, eventType: string, payload: unknown) => void;
 
@@ -324,7 +325,13 @@ export function summarizeEvent(event: ThreadEvent): unknown | null {
   const item = event.item;
   if (item.type === "reasoning") {
     const summary = redactBrandForDisplay(sanitizeAgentMarkdown(item.text)).trim();
-    return summary ? { kind: "reasoning", label: "模型思路摘要", detail: summary } : null;
+    if (!summary) return null;
+    return {
+      kind: "reasoning",
+      label: "思考过程",
+      detail: summary,
+      steps: buildReasoningSteps([summary], []),
+    };
   }
   if (item.type === "command_execution") {
     const detail = redactBrandForDisplay(item.command);

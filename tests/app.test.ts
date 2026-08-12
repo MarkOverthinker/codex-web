@@ -23,6 +23,7 @@ import { consumeTenantTurnEvents, validateTenantWorkerRequest } from "../server/
 import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js";
 import { isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir } from "../server/session-importer.js";
+import { buildReasoningSteps } from "../server/reasoning-parts.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
@@ -36,6 +37,7 @@ import { normalizeThemePreference, resolveTheme, THEME_PREFERENCE_KEY } from "..
 import type { Conversation, WorkFile } from "../src/api.js";
 import { buildAgentSteerPrompt, buildAgentTurnPrompt } from "../server/agent-context.js";
 import { buildProcessJournal } from "../src/process-journal.js";
+import { collectReasoningSteps } from "../src/reasoning-steps.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES, buildOptionalCapabilityConfig, detectOptionalAgentCapabilities } from "../server/optional-capabilities.js";
 import { USER_CANCELLED_TASK_MARKER, latestUserCancellationContext } from "../server/cancellation-summary.js";
 import { formatRolloutBytes, ROLLOUT_WARNING_BYTES, shouldWarnAboutRollout } from "../src/rollout-capacity.js";
@@ -259,7 +261,10 @@ test("progress labels do not report intermediate agent messages as complete", ()
     kind: "update", label: "阶段反馈", detail: "正在核对表格结构",
   });
   assert.deepEqual(summarizeEvent({ type: "item.completed", item: { type: "reasoning", text: "先核对排名口径，再制作图表。" } } as never), {
-    kind: "reasoning", label: "模型思路摘要", detail: "先核对排名口径，再制作图表。",
+    kind: "reasoning",
+    label: "思考过程",
+    detail: "先核对排名口径，再制作图表。",
+    steps: [{ title: "先核对排名口径，再制作图表。", detail: "先核对排名口径，再制作图表。" }],
   });
   assert.deepEqual(summarizeEvent({ type: "turn.completed" } as never), {
     kind: "status", label: "工作已完成，正在整理结果",
@@ -309,6 +314,43 @@ test("running work journal retains every important direction and compacts repeat
   assert.doesNotMatch(styles, /\.process-journal-pinned|position: sticky;/);
   assert.match(appSource, /\{sending && <article className="message assistant running"/);
   assert.match(appSource, /完成前持续保留，可随时引导/);
+});
+
+test("completed reasoning panel collects incremental steps and legacy details", () => {
+  assert.deepEqual(buildReasoningSteps(["先确认数据口径", "再验证汇总结果"], ["先确认数据口径，再核对排名", "再验证汇总结果"]), [
+    { title: "先确认数据口径", detail: "先确认数据口径，再核对排名" },
+    { title: "再验证汇总结果", detail: "再验证汇总结果" },
+  ]);
+  assert.deepEqual(buildReasoningSteps(["## 先确认数据口径\n读取表格。"], []), [
+    { title: "先确认数据口径", detail: "## 先确认数据口径\n读取表格。" },
+  ]);
+  assert.equal(buildReasoningSteps([], []), undefined);
+
+  const steps = collectReasoningSteps([
+    { kind: "reasoning", detail: "先确认数据口径", steps: [{ title: "先确认数据口径", detail: "先确认数据口径" }] },
+    { kind: "reasoning", detail: "先确认数据口径", steps: [{ title: "先确认数据口径", detail: "先确认数据口径，再核对排名" }] },
+    { kind: "reasoning", detail: "再验证汇总结果", steps: [{ title: "再验证汇总结果", detail: "再验证汇总结果" }] },
+  ]);
+  assert.deepEqual(steps, [
+    { title: "先确认数据口径", detail: "先确认数据口径，再核对排名" },
+    { title: "再验证汇总结果", detail: "再验证汇总结果" },
+  ]);
+
+  const legacy = collectReasoningSteps([
+    { kind: "reasoning", detail: "## 先确认数据口径\n读取表格。\n\n## 再验证汇总结果\n检查小计。" },
+  ]);
+  assert.deepEqual(legacy, [
+    { title: "先确认数据口径", detail: "## 先确认数据口径\n读取表格。" },
+    { title: "再验证汇总结果", detail: "## 再验证汇总结果\n检查小计。" },
+  ]);
+
+  assert.deepEqual(collectReasoningSteps([{ kind: "update", detail: "阶段反馈" }]), []);
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(appSource, /CompletedReasoningPanel/);
+  assert.match(appSource, /思考过程/);
+  assert.match(styles, /\.reasoning-panel \{/);
+  assert.match(styles, /\.reasoning-step-detail/);
 });
 
 test("running progress expands inline without a nested vertical scroller", () => {

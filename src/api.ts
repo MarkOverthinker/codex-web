@@ -63,6 +63,11 @@ export type AgentOptions = {
   codexConfigHint?: string;
 };
 export type AgentSelection = { model: string; reasoningEffort: ReasoningEffort };
+export type ReasoningStep = {
+  title?: string;
+  detail?: string;
+  summary?: string;
+};
 export type JobEvent = {
   seq?: number;
   type?: string;
@@ -76,6 +81,7 @@ export type JobEvent = {
   queuePosition?: number;
   jobsAhead?: number;
   message?: string;
+  steps?: ReasoningStep[];
 };
 export type ConversationDetail = {
   conversation: Conversation;
