@@ -3,6 +3,10 @@ import { api } from "./api";
 const REPORT_DEDUPE_MS = 5 * 60_000;
 const MAX_REPORT_MESSAGE_LENGTH = 2000;
 const MAX_REPORT_STACK_LENGTH = 8000;
+// React reports this notice through `reportError` after it successfully
+// recovers from a concurrent render error by re-rendering synchronously.
+// It is not an application failure, so it must not pollute error reporting.
+const REACT_RECOVERY_NOTICE = /There was an error during concurrent rendering but React was able to recover|Minified React error #520/;
 
 type ClientErrorReport = {
   message: string;
@@ -20,6 +24,7 @@ function reportError(error: unknown, source: string): void {
       try { return JSON.stringify(error); } catch { return String(error); }
     })(),
   );
+  if (REACT_RECOVERY_NOTICE.test(normalized.message) || (normalized.stack ?? "").includes("#520")) return;
   const stack = normalized.stack ?? "";
   const key = `${source}\u0000${normalized.message}\u0000${stack}`;
   const now = Date.now();
