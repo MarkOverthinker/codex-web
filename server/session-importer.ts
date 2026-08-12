@@ -233,6 +233,19 @@ export function normalizeImportedWorkingDir(
 }
 
 /**
+ * Read the working directory recorded in a thread's largest rollout file.
+ * Used when restoring an archived conversation whose persisted working
+ * directory is missing; independent (standalone) conversations record the
+ * application-managed workspace instead, which the caller's normalizer rejects.
+ */
+export async function readCodexThreadWorkingDir(codexHome: string, threadId: string): Promise<string | null> {
+  const files = findCodexThreadFiles(codexHome, threadId).sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
+  if (files.length === 0) return null;
+  const scan = await scanSessionFile(files[0], { maxBytes: SESSION_DISCOVERY_HEAD_BYTES, collectTurns: false });
+  return scan.cwd;
+}
+
+/**
  * Import one Codex thread as a web conversation. The rollout file is reused as
  * the single source of truth: the conversation records the thread id and a
  * readable user/assistant message history so the UI can list and open it, while
