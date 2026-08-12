@@ -789,7 +789,7 @@ test("in-page preview distinguishes Markdown, text, images, and PDFs with a text
   assert.equal(canPreviewInline(file("image/png", 100 * 1024 * 1024)), true);
 });
 
-test("output files are maintained in conversation details and open in a floating preview", () => {
+test("output files are maintained in conversation details and open in a side-by-side preview", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
@@ -798,14 +798,13 @@ test("output files are maintained in conversation details and open in a floating
   assert.match(serverSource, /outputFiles = db\.listFiles\(conversation\.id\)\.filter\(\(file\) => file\.kind === "output"\)/);
   assert.match(serverSource, /outputFiles,/);
   assert.match(appSource, /className="chat-outputs"/);
-  assert.match(appSource, /function FilePreviewModal/);
+  assert.match(appSource, /function FilePreviewPane/);
   assert.match(appSource, /className="file-preview-trigger"/);
   assert.match(appSource, /onPreview=\{onPreview\}/);
   assert.match(appSource, /ReactMarkdown remarkPlugins=\{\[remarkGfm\]\}>/);
-  assert.match(styles, /\.file-preview-backdrop \{/);
-  assert.match(styles, /\.file-preview-panel \{/);
+  assert.match(styles, /\.file-preview-pane \{/);
   assert.match(styles, /\.chat-outputs \{/);
-  assert.match(styles, /:root\[data-theme="dark"\] \.file-preview-panel/);
+  assert.match(styles, /:root\[data-theme="dark"\] \.file-preview-pane/);
 });
 
 test("risky uploads and execution requests use offline isolation", () => {

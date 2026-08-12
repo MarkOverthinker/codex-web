@@ -1561,7 +1561,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；删除分类不会删除任务。</small></footer>
       </section>
     </div>, document.body)}
-    {previewFile && createPortal(<FilePreviewModal key={previewFile.id} file={previewFile} onClose={closeFilePreview} />, document.body)}
+    {previewFile && <FilePreviewPane key={previewFile.id} file={previewFile} onClose={closeFilePreview} />}
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
@@ -1861,7 +1861,7 @@ function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkF
   </div>;
 }
 
-function FilePreviewModal({ file, onClose }: { file: WorkFile; onClose: () => void }) {
+function FilePreviewPane({ file, onClose }: { file: WorkFile; onClose: () => void }) {
   const kind = filePreviewKind(file);
   const source = fileUrl(file);
   const [text, setText] = useState<string | null>(null);
@@ -1899,8 +1899,7 @@ function FilePreviewModal({ file, onClose }: { file: WorkFile; onClose: () => vo
   }, [onClose]);
 
   const subtitle = `${file.kind === "output" ? "结果文件" : "上传文件"} · ${formatSize(file.size)}`;
-  return <div className="file-preview-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="file-preview-panel" role="dialog" aria-modal="true" aria-label={`预览 ${file.original_name}`}>
+  return <aside className="file-preview-pane" aria-label={`预览 ${file.original_name}`}>
       <header>
         {kind === "image" ? <FileImage size={19} /> : kind ? <FileText size={19} /> : <FileIcon size={19} />}
         <span className="file-preview-title"><strong>{file.original_name}</strong><small>{subtitle}</small></span>
@@ -1916,8 +1915,7 @@ function FilePreviewModal({ file, onClose }: { file: WorkFile; onClose: () => vo
         {kind === "text" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <pre className="file-preview-plain">{text}</pre>)}
         {!kind && <FilePreviewError error="该文件格式暂不支持页内预览，请下载后查看。" />}
       </div>
-    </section>
-  </div>;
+  </aside>;
 }
 
 function FilePreviewLoading() {
