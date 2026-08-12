@@ -14,7 +14,7 @@ curl --fail http://127.0.0.1:37821/codex-web/api/health
 
 Back up all three named volumes before upgrades. Keep `.env` outside source control.
 
-Docker grants the application up to 30 minutes after `SIGTERM` to drain active Codex work. New dispatch stops immediately, queued jobs stay persisted, and the container exits once active executions finish. Avoid overriding `stop_grace_period` with a shorter value unless you accept interrupted jobs.
+Docker grants the application up to 30 minutes after `SIGTERM` to drain active Codex work. New dispatch stops immediately, queued jobs stay persisted, and the container exits once active executions finish. Work still running when `stop_grace_period` expires is forcibly killed, so do not shorten it unless you accept interrupted jobs.
 
 ## Reusing the host Codex login
 
@@ -177,8 +177,10 @@ every directory on the CLI path is world-searchable.
 
 Stop any manually started `node dist-server/server/index.js` process first,
 otherwise the new service fails to bind the port (the unit restarts and binds
-as soon as the port frees up). `TimeoutStopSec=1800` preserves the graceful
-30-minute drain for in-flight Codex jobs on shutdown/restart.
+as soon as the port frees up). `TimeoutStopSec=infinity` lets the unit wait as
+long as in-flight Codex jobs need on shutdown/restart, so reloads never
+interrupt running work. Use `systemctl kill --signal=KILL codex-web` to
+force-stop a stuck job when necessary.
 
 ### On-demand rebuild and restart (host mode)
 

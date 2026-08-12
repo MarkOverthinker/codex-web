@@ -13,7 +13,6 @@ const server = app.listen(config.port, config.host, () => {
   logger.info({ host: config.host, port: config.port, basePath: config.basePath }, "Codex Web started");
 });
 
-const SHUTDOWN_DRAIN_TIMEOUT_MS = 29 * 60_000;
 let stopping = false;
 
 async function shutdown(signal: string): Promise<void> {
@@ -21,14 +20,8 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   beginShutdown();
   logger.info({ signal }, "Codex Web stopping");
-  const deadline = Date.now() + SHUTDOWN_DRAIN_TIMEOUT_MS;
-  while ((db.runningJobCount() > 0 || runner.activeJobCount > 0) && Date.now() < deadline) {
+  while (db.runningJobCount() > 0 || runner.activeJobCount > 0) {
     await new Promise<void>((resolve) => setTimeout(resolve, 250));
-  }
-  const remainingJobs = db.runningJobCount();
-  if (remainingJobs > 0 || runner.activeJobCount > 0) {
-    logger.error({ remainingJobs, activeExecutions: runner.activeJobCount }, "Shutdown drain timed out");
-    process.exit(1);
   }
   logger.info("Running jobs drained; closing network services");
   server.close(() => {

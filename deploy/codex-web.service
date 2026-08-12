@@ -16,9 +16,10 @@ Environment=CODEX_RUNTIME_PATH=/home/<user>/.nvm/versions/node/v24.12.0/bin/code
 ExecStart=/usr/bin/node dist-server/server/index.js
 Restart=always
 RestartSec=5
-# Codex Web drains in-flight jobs for up to 30 minutes after SIGTERM; keep the
-# stop timeout long enough to avoid killing active work.
-TimeoutStopSec=1800
+# Codex Web drains in-flight jobs after SIGTERM and only exits once they
+# finish; keep the stop timeout unbounded so reloads never interrupt running
+# work. Use `systemctl kill --signal=KILL codex-web` to force-stop a stuck job.
+TimeoutStopSec=infinity
 KillSignal=SIGTERM
 
 [Install]
