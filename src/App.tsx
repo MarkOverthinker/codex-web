@@ -2,6 +2,8 @@ import { createContext, memo, useCallback, useContext, useDeferredValue, useEffe
 import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
@@ -1700,7 +1702,8 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
     <div className="message-body">
       <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></div>
       {message.role === "assistant" ? <div className="markdown" data-agent-selectable="true"><ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
         urlTransform={(url) => isLocalMarkdownUrl(url) ? url : defaultUrlTransform(url)}
         components={{ a: ({ href, children }) => {
           const resolved = resolveMessageFileLink(href, message.files);
@@ -1869,7 +1872,7 @@ function ProcessPanel({ activities }: { activities: JobEvent[] }) {
 function ProcessJournalNote({ activity }: { activity: JobEvent }) {
   return <section className="process-journal-note">
     <header><Bot size={14} /><strong>{activity.kind === "reasoning" ? "重要思路" : "阶段反馈"}</strong>{activity.created_at && <time dateTime={activity.created_at}>{formatActivityTime(activity.created_at)}</time>}</header>
-    <div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{activity.detail ?? ""}</ReactMarkdown></div>
+    <div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}>{activity.detail ?? ""}</ReactMarkdown></div>
   </section>;
 }
 
@@ -1959,7 +1962,7 @@ function FilePreviewPane({ file, onClose }: { file: WorkFile; onClose: () => voi
       <div className={`file-preview-body ${kind === "image" || kind === "pdf" ? "fit" : ""}`}>
         {kind === "image" && <img className="file-preview-image" src={source} alt={file.original_name} />}
         {kind === "pdf" && <iframe className="file-preview-frame" src={source} title={file.original_name} />}
-        {kind === "markdown" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <div className="markdown file-preview-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>)}
+        {kind === "markdown" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <div className="markdown file-preview-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}>{text}</ReactMarkdown></div>)}
         {kind === "text" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <pre className="file-preview-plain">{text}</pre>)}
         {!kind && <FilePreviewError error="该文件格式暂不支持页内预览，请下载后查看。" />}
       </div>
