@@ -1143,7 +1143,7 @@ test("task list categories persist custom grouping, directory assignment, and pi
     .send({ workingDir: project }).expect(201);
 
   const initial = await agent.get("/codex-web/api/task-categories").expect(200);
-  assert.deepEqual(initial.body.settings, { customCategories: [], pinned: [] });
+  assert.deepEqual(initial.body.settings, { customCategories: [], pinned: [], hidden: [] });
 
   const created = await agent.post("/codex-web/api/task-categories/custom")
     .set("X-CSRF-Token", csrf)
@@ -1170,16 +1170,41 @@ test("task list categories persist custom grouping, directory assignment, and pi
     .send({ keys: [`custom:${customId}`, "auto:standalone", "unknown:key"] }).expect(200);
   assert.deepEqual(pinned.body.settings.pinned, [`custom:${customId}`, "auto:standalone"]);
 
+  const hidden = await agent.put("/codex-web/api/task-categories/hidden")
+    .set("X-CSRF-Token", csrf)
+    .send({ keys: [`custom:${customId}`, "auto:standalone", "auto:standalone", "unknown:key"] }).expect(200);
+  assert.deepEqual(hidden.body.settings.hidden, [`custom:${customId}`, "auto:standalone"]);
+
   const unassigned = await agent.put("/codex-web/api/task-categories/dirs")
     .set("X-CSRF-Token", csrf)
     .send({ dir: project, categoryId: null }).expect(200);
   assert.deepEqual(unassigned.body.settings.customCategories[0].assignedDirs, []);
 
+  const restored = await agent.put("/codex-web/api/task-categories/hidden")
+    .set("X-CSRF-Token", csrf)
+    .send({ keys: [] }).expect(200);
+  assert.deepEqual(restored.body.settings.hidden, []);
+
+  await agent.put("/codex-web/api/task-categories/hidden")
+    .set("X-CSRF-Token", csrf)
+    .send({ keys: [`custom:${customId}`] }).expect(200);
   const deleted = await agent.delete(`/codex-web/api/task-categories/custom/${customId}`)
     .set("X-CSRF-Token", csrf)
     .expect(200);
   assert.equal(deleted.body.settings.customCategories.length, 0);
   assert.deepEqual(deleted.body.settings.pinned, ["auto:standalone"]);
+  assert.deepEqual(deleted.body.settings.hidden, []);
+
+  const hiddenDirKey = `auto:dir:${encodeURIComponent(canonicalProject)}`;
+  const hiddenDir = await agent.put("/codex-web/api/task-categories/hidden")
+    .set("X-CSRF-Token", csrf)
+    .send({ keys: [hiddenDirKey] }).expect(200);
+  assert.deepEqual(hiddenDir.body.settings.hidden, [hiddenDirKey]);
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "remove", path: project }).expect(200);
+  const afterFavoriteRemoved = await agent.get("/codex-web/api/task-categories").expect(200);
+  assert.deepEqual(afterFavoriteRemoved.body.settings.hidden, []);
 });
 
 test("quoted selections stay outside the visible message body and survive the pending queue", async (context) => {

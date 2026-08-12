@@ -3,9 +3,11 @@ import test from "node:test";
 import type { Conversation, WorkingDirFavorite } from "../src/api.js";
 import {
   autoDirCategoryKey,
+  buildHiddenCategoryInfos,
   buildDirectoryAssignments,
   buildTaskCategoryViews,
   customCategoryKey,
+  listValidHiddenCategoryKeys,
   TASK_LIST_AUTO_STANDALONE_KEY,
   TASK_LIST_AUTO_TEMP_KEY,
   type TaskListCategorySettings,
@@ -40,6 +42,7 @@ test("task category view groups standalone, favorite, temporary, and custom dire
   const settings: TaskListCategorySettings = {
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: ["/tmp/temporary-a"] }],
     pinned: [],
+    hidden: [],
   };
 
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
@@ -70,6 +73,7 @@ test("custom assignment overrides favorite auto categories and pinned order wins
   const settings: TaskListCategorySettings = {
     customCategories: [{ id: "custom-1", name: "重点项目", assignedDirs: [favorite.path] }],
     pinned: [TASK_LIST_AUTO_STANDALONE_KEY, customCategoryKey("custom-1")],
+    hidden: [],
   };
 
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
@@ -90,6 +94,7 @@ test("search filtering keeps category structure and counts only matching tasks",
   const settings: TaskListCategorySettings = {
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: ["/tmp/temporary-a"] }],
     pinned: [],
+    hidden: [],
   };
   const filtered = [conversations[1]];
   const views = buildTaskCategoryViews(filtered, [], settings);
@@ -107,6 +112,7 @@ test("directory assignments report the current auto or custom bucket", () => {
   const settings: TaskListCategorySettings = {
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: ["/tmp/custom-a"] }],
     pinned: [],
+    hidden: [],
   };
   const assignments = buildDirectoryAssignments(conversations, [favorite], settings);
   assert.equal(assignments.length, 4);
@@ -121,4 +127,42 @@ test("directory assignments report the current auto or custom bucket", () => {
   );
   assert.equal(assignments.find((assignment) => assignment.dir === favorite.path)?.categoryName, "Favorite");
   assert.equal(assignments.find((assignment) => assignment.dir === "/tmp/temporary-a")?.categoryName, "临时工作区");
+});
+
+test("hidden categories are omitted from views but remain restorable", () => {
+  const conversations = [
+    conversation("standalone", null, "2026-01-01T00:00:00.000Z"),
+    conversation("favorite", favorite.path, "2026-01-02T00:00:00.000Z"),
+    conversation("temp", "/tmp/temporary-a", "2026-01-03T00:00:00.000Z"),
+  ];
+  const settings: TaskListCategorySettings = {
+    customCategories: [],
+    pinned: [],
+    hidden: [TASK_LIST_AUTO_STANDALONE_KEY, autoDirCategoryKey(favorite.path)],
+  };
+
+  const views = buildTaskCategoryViews(conversations, [favorite], settings);
+  assert.deepEqual(views.map((view) => view.key), [TASK_LIST_AUTO_TEMP_KEY]);
+
+  const infos = buildHiddenCategoryInfos(settings, [favorite]);
+  assert.deepEqual(infos.map((info) => info.key), [TASK_LIST_AUTO_STANDALONE_KEY, autoDirCategoryKey(favorite.path)]);
+  assert.equal(infos[0].name, "独立工作区");
+  assert.equal(infos[1].name, favorite.label);
+});
+
+test("hidden keys validation keeps only known categories and hides stale keys from recovery", () => {
+  const settings: TaskListCategorySettings = {
+    customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: [] }],
+    pinned: [],
+    hidden: [customCategoryKey("custom-1"), customCategoryKey("deleted"), "auto:dir:/gone", "unknown:key"],
+  };
+
+  assert.deepEqual(
+    listValidHiddenCategoryKeys(settings, [favorite.path]),
+    [customCategoryKey("custom-1")],
+  );
+  assert.deepEqual(
+    buildHiddenCategoryInfos(settings, [favorite]),
+    [{ key: customCategoryKey("custom-1"), kind: "custom", name: "归档项目", detail: "还没有目录" }],
+  );
 });

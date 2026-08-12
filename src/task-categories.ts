@@ -12,6 +12,7 @@ export type TaskListCustomCategory = {
 export type TaskListCategorySettings = {
   customCategories: TaskListCustomCategory[];
   pinned: string[];
+  hidden: string[];
 };
 
 export type TaskListCategoryView = {
@@ -38,6 +39,7 @@ export type DirectoryCategoryAssignment = {
 export const EMPTY_TASK_LIST_CATEGORY_SETTINGS: TaskListCategorySettings = {
   customCategories: [],
   pinned: [],
+  hidden: [],
 };
 
 export function customCategoryKey(id: string): string {
@@ -70,7 +72,11 @@ export function parseCategoryKey(key: string): {
   return null;
 }
 
-export function listValidPinnedCategoryKeys(settings: TaskListCategorySettings, favoritePaths: string[]): string[] {
+function filterValidCategoryKeys(
+  keys: string[],
+  settings: Pick<TaskListCategorySettings, "customCategories">,
+  favoritePaths: string[],
+): string[] {
   const customIds = new Set(settings.customCategories.map((category) => category.id));
   const valid = new Set<string>([
     TASK_LIST_AUTO_STANDALONE_KEY,
@@ -80,13 +86,27 @@ export function listValidPinnedCategoryKeys(settings: TaskListCategorySettings, 
   ]);
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const key of settings.pinned) {
+  for (const key of keys) {
     if (!valid.has(key) || seen.has(key)) continue;
     if (key.startsWith("custom:") && !customIds.has(key.slice("custom:".length))) continue;
     seen.add(key);
     result.push(key);
   }
   return result;
+}
+
+export function listValidPinnedCategoryKeys(
+  settings: Pick<TaskListCategorySettings, "customCategories" | "pinned">,
+  favoritePaths: string[],
+): string[] {
+  return filterValidCategoryKeys(settings.pinned, settings, favoritePaths);
+}
+
+export function listValidHiddenCategoryKeys(
+  settings: Pick<TaskListCategorySettings, "customCategories" | "hidden">,
+  favoritePaths: string[],
+): string[] {
+  return filterValidCategoryKeys(settings.hidden, settings, favoritePaths);
 }
 
 function sortedByUpdatedAt(conversations: Conversation[]): Conversation[] {
@@ -118,14 +138,15 @@ function addPendingView(groups: Map<string, PendingView>, view: PendingView): vo
 /**
  * Derive the categorized sidebar view from the current active conversations,
  * favorite working directories, and server-persisted category settings.
- * Empty categories are omitted; categories are ordered by pinned order first
- * and then by the newest conversation inside each category.
+ * Empty and hidden categories are omitted; categories are ordered by pinned
+ * order first and then by the newest conversation inside each category.
  */
 export function buildTaskCategoryViews(
   conversations: Conversation[],
   favorites: WorkingDirFavorite[],
   settings: TaskListCategorySettings,
 ): TaskListCategoryView[] {
+  const hiddenKeys = new Set(settings.hidden);
   const favoriteByPath = new Map(favorites.map((favorite) => [favorite.path, favorite]));
   const customByDir = new Map<string, TaskListCustomCategory>();
   for (const category of settings.customCategories) {
@@ -210,7 +231,57 @@ export function buildTaskCategoryViews(
     const rightUpdated = right.conversations[0]?.updated_at ?? "";
     return rightUpdated.localeCompare(leftUpdated);
   });
-  return views;
+  return views.filter((view) => !hiddenKeys.has(view.key));
+}
+
+export type HiddenCategoryInfo = {
+  key: string;
+  kind: "auto" | "custom";
+  name: string;
+  detail: string;
+};
+
+/**
+ * Resolve hidden category keys to displayable entries for the category
+ * manager. Keys that no longer refer to an existing category or favorite are
+ * ignored so stale settings never block recovery of visible categories.
+ */
+export function buildHiddenCategoryInfos(
+  settings: TaskListCategorySettings,
+  favorites: WorkingDirFavorite[],
+): HiddenCategoryInfo[] {
+  const favoriteByPath = new Map(favorites.map((favorite) => [favorite.path, favorite]));
+  const customById = new Map(settings.customCategories.map((category) => [category.id, category]));
+  const infos: HiddenCategoryInfo[] = [];
+  for (const key of settings.hidden) {
+    const parsed = parseCategoryKey(key);
+    if (!parsed) continue;
+    if (parsed.kind === "custom") {
+      const category = parsed.customId ? customById.get(parsed.customId) : undefined;
+      if (!category) continue;
+      infos.push({
+        key,
+        kind: "custom",
+        name: category.name,
+        detail: category.assignedDirs.length ? `${category.assignedDirs.length} 个目录` : "还没有目录",
+      });
+      continue;
+    }
+    if (parsed.autoKind === "standalone") {
+      infos.push({ key, kind: "auto", name: "独立工作区", detail: "每个任务使用系统隔离目录" });
+      continue;
+    }
+    if (parsed.autoKind === "temporary") {
+      infos.push({ key, kind: "auto", name: "临时工作区", detail: "未收藏目录自动归入" });
+      continue;
+    }
+    if (parsed.autoKind === "dir" && parsed.dir) {
+      const favorite = favoriteByPath.get(parsed.dir);
+      if (!favorite) continue;
+      infos.push({ key, kind: "auto", name: favorite.label, detail: parsed.dir });
+    }
+  }
+  return infos;
 }
 
 export function buildDirectoryAssignments(

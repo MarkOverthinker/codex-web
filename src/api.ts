@@ -158,6 +158,8 @@ export const api = {
     request<{ settings: TaskListCategorySettings }>("/task-categories/dirs", { method: "PUT", body: JSON.stringify({ dir, categoryId }) }),
   updateTaskCategoryPins: (keys: string[]) =>
     request<{ settings: TaskListCategorySettings }>("/task-categories/pins", { method: "PUT", body: JSON.stringify({ keys }) }),
+  updateTaskCategoryHidden: (keys: string[]) =>
+    request<{ settings: TaskListCategorySettings }>("/task-categories/hidden", { method: "PUT", body: JSON.stringify({ keys }) }),
   createConversation: (workingDir?: string | null) =>
     request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST", body: JSON.stringify({ workingDir }) }),
   updateConversationWorkingDir: (id: string, workingDir: string | null, confirm = false) =>
