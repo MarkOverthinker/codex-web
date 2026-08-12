@@ -7,6 +7,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import multer from "multer";
+import pino, { type Logger } from "pino";
 import { loadConfig, type AppConfig } from "./config.js";
 import { CodexRunner, extractLeakedAutoTitleAnswer } from "./codex-runner.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -32,8 +33,11 @@ const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
 const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例如“把图片背景改为白色”或“汇总这些表格”。收到明确指令后才会开始处理。";
 type AuthenticatedRequest = Request & { appSession?: SessionRow };
 
-export function createApp(overrides: Partial<AppConfig> = {}) {
+export type AppOverrides = Partial<AppConfig> & { logger?: Logger };
+
+export function createApp(overrides: AppOverrides = {}) {
   const config = loadConfig(overrides);
+  const logger = overrides.logger ?? pino({ level: "warn" });
   fs.mkdirSync(config.dataRoot, { recursive: true });
   fs.mkdirSync(config.tenantRoot, { recursive: true });
   const db = new AppDatabase(config.dataRoot, { username: config.username, passwordHash: config.passwordHash, displayName: config.displayName });
@@ -424,6 +428,24 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     if (token) db.deleteSession(hashToken(token, config.sessionSecret));
     res.clearCookie(COOKIE_NAME, { path: config.basePath || "/" });
     res.json({ ok: true });
+  });
+
+  const clientErrorLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { ok: true },
+  });
+  api.post("/client-errors", clientErrorLimiter, (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const raw = req.body as Record<string, unknown> | undefined;
+    const message = typeof raw?.message === "string" ? raw.message.trim().slice(0, 2000) : "";
+    const stack = typeof raw?.stack === "string" ? raw.stack.trim().slice(0, 8000) : "";
+    const source = typeof raw?.source === "string" ? raw.source.trim().slice(0, 100) : "";
+    const href = typeof raw?.href === "string" ? raw.href.trim().slice(0, 1000) : "";
+    if (message) logger.warn({ userId: session.user_id, source, href, message, stack }, "client error");
+    return res.json({ ok: true });
   });
 
   api.get("/conversations", (_req, res) => {
@@ -1380,7 +1402,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
 
   if (config.queueAutoStart) setImmediate(() => void pumpQueue());
   return {
-    app, db, runner, config, pumpQueue,
+    app, db, runner, config, logger, pumpQueue,
     beginShutdown: () => { shuttingDown = true; },
   };
 }

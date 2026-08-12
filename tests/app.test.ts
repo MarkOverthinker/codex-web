@@ -65,6 +65,50 @@ test("login form leaves the username empty for each user to enter", () => {
   assert.match(appSource, /用户名<input autoComplete="username" autoFocus/);
 });
 
+test("frontend installs an error boundary and client error reporting", () => {
+  const mainSource = fs.readFileSync(path.join(process.cwd(), "src", "main.tsx"), "utf8");
+  const boundarySource = fs.readFileSync(path.join(process.cwd(), "src", "error-boundary.tsx"), "utf8");
+  const reportingSource = fs.readFileSync(path.join(process.cwd(), "src", "client-errors.ts"), "utf8");
+  assert.match(mainSource, /AppErrorBoundary/);
+  assert.match(mainSource, /installClientErrorReporting\(\)/);
+  assert.match(boundarySource, /componentDidCatch/);
+  assert.match(boundarySource, /getDerivedStateFromError/);
+  assert.match(reportingSource, /unhandledrejection/);
+  assert.match(reportingSource, /reportClientError/);
+});
+
+test("client error endpoint records authenticated reports and rejects anonymous ones", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-client-error-test-"));
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Client-Error-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+
+  await agent.post("/codex-web/api/client-errors").send({ message: "anonymous report" }).expect(401);
+
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Client-Error-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const reported = await agent.post("/codex-web/api/client-errors")
+    .set("X-CSRF-Token", csrf)
+    .send({
+      message: "render: boom",
+      stack: "TypeError: boom\n    at MessageCard",
+      source: "error-boundary",
+      href: "https://example.test/codex-web/",
+    })
+    .expect(200);
+  assert.deepEqual(reported.body, { ok: true });
+
+  const oversized = await agent.post("/codex-web/api/client-errors")
+    .set("X-CSRF-Token", csrf)
+    .send({ message: "x".repeat(5000) })
+    .expect(200);
+  assert.deepEqual(oversized.body, { ok: true });
+});
+
 test("composer replaces stop with send as soon as there is sendable input", () => {
   assert.equal(chooseComposerPrimaryAction({ running: true, hasText: false, hasAttachments: false, voiceActive: false }), "stop");
   assert.equal(chooseComposerPrimaryAction({ running: true, hasText: true, hasAttachments: false, voiceActive: false }), "send");
