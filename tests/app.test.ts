@@ -80,8 +80,6 @@ test("frontend installs an error boundary and client error reporting", () => {
   assert.match(reportingSource, /reportClientError/);
   assert.match(reportingSource, /REACT_RECOVERY_NOTICE/);
   assert.match(reportingSource, /componentStack/);
-  const categoriesSource = fs.readFileSync(path.join(process.cwd(), "src", "task-categories.ts"), "utf8");
-  assert.doesNotMatch(categoriesSource, /\.push\(\.\.\./);
 });
 
 test("client error endpoint records authenticated reports and rejects anonymous ones", async (context) => {

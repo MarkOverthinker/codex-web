@@ -86,6 +86,32 @@ test("custom assignment overrides favorite auto categories and pinned order wins
   assert.equal(views[1].pinIndex, 1);
 });
 
+test("custom category groups repeated conversations without mutating settings", () => {
+  const settings: TaskListCategorySettings = {
+    customCategories: [{
+      id: "custom-1",
+      name: "重点项目",
+      assignedDirs: ["/tmp/custom-a", "/tmp/custom-b", "/tmp/custom-a"],
+    }],
+    pinned: [],
+    hidden: [],
+  };
+  const originalSettings = structuredClone(settings);
+  const conversations = [
+    conversation("custom-a-old", "/tmp/custom-a", "2026-01-01T00:00:00.000Z"),
+    conversation("custom-a-new", "/tmp/custom-a", "2026-01-03T00:00:00.000Z"),
+    conversation("custom-b", "/tmp/custom-b", "2026-01-02T00:00:00.000Z"),
+  ];
+
+  const views = buildTaskCategoryViews(conversations, [], settings);
+
+  assert.equal(views.length, 1);
+  assert.deepEqual(views[0].conversations.map((item) => item.id), ["custom-a-new", "custom-b", "custom-a-old"]);
+  assert.deepEqual(views[0].assignedDirs, ["/tmp/custom-a", "/tmp/custom-b"]);
+  assert.notStrictEqual(views[0].assignedDirs, settings.customCategories[0].assignedDirs);
+  assert.deepEqual(settings, originalSettings);
+});
+
 test("search filtering keeps category structure and counts only matching tasks", () => {
   const conversations = [
     conversation("standalone", null, "2026-01-01T00:00:00.000Z"),

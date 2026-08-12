@@ -128,15 +128,19 @@ type PendingView = {
 function addPendingView(groups: Map<string, PendingView>, view: PendingView): void {
   const existing = groups.get(view.key);
   if (existing) {
-    // Avoid spread arguments entirely: a pathological input with a very large
-    // array can otherwise throw "Maximum call stack size exceeded" inside
-    // Array.prototype.push on some engines.
     for (const conversation of view.conversations) existing.conversations.push(conversation);
-    if (view.assignedDirs.length) {
-      for (const dir of view.assignedDirs) existing.assignedDirs.push(dir);
+    for (const dir of view.assignedDirs) {
+      if (!existing.assignedDirs.includes(dir)) existing.assignedDirs.push(dir);
     }
   } else {
-    groups.set(view.key, view);
+    // Pending views are accumulated below, so never retain arrays owned by
+    // API settings or callers. In particular, custom categories reuse their
+    // assignedDirs array for every matching conversation.
+    groups.set(view.key, {
+      ...view,
+      assignedDirs: [...new Set(view.assignedDirs)],
+      conversations: [...view.conversations],
+    });
   }
 }
 
