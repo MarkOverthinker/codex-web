@@ -345,6 +345,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .archived-conversation-banner button { flex: 0 0 auto; padding: 5px 9px; border: 1px solid #cdd2e2; border-radius: 7px; color: var(--indigo); background: #fff; cursor: pointer; font-size: 11px; font-weight: 700; }
 .codex-config-banner { min-height: 45px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border-top: 1px solid rgba(184, 129, 27, .22); color: #8a5b10; background: rgba(255, 246, 222, .95); font-size: 12px; text-align: center; }
 .codex-config-banner svg { flex: 0 0 auto; color: #c07d10; }
+.reload-banner { min-height: 42px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 8px 14px; border-top: 1px solid rgba(15, 17, 32, .08); color: #5b6074; background: #f3f5fb; font-size: 12px; text-align: center; }
+.reload-banner.success { color: #28563a; background: #f1faf3; border-top-color: #bed8c5; }
+.reload-banner.error { color: #8a2430; background: #fff6f7; border-top-color: #f0c7cd; }
+.reload-banner.waiting, .reload-banner.building, .reload-banner.restarting { color: #8a5b10; background: #fff6e9; border-top-color: #ecd39b; }
+.reload-banner-action { min-height: 28px; padding: 3px 10px; border: 1px solid currentColor; border-radius: 7px; color: inherit; background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+.reload-banner .icon-button { color: inherit; }
 .welcome {
   flex: 1;
   display: grid;
@@ -807,6 +813,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 :root[data-theme="dark"] .archived-conversation-banner button { border-color: #4a4d58; color: #c7ceff; background: #303238; }
 :root[data-theme="dark"] .codex-config-banner { border-top-color: #4a3d20; color: #d8b76a; background: rgba(51, 43, 24, .96); }
 :root[data-theme="dark"] .codex-config-banner svg { color: #e0a83a; }
+:root[data-theme="dark"] .reload-banner { border-top-color: #3a3c43; color: #c9cad1; background: #232429; }
+:root[data-theme="dark"] .reload-banner.success { border-top-color: #35523d; color: #9dd4ab; background: rgba(28, 54, 36, .9); }
+:root[data-theme="dark"] .reload-banner.error { border-top-color: #5b3338; color: #f0a4ab; background: rgba(62, 28, 32, .9); }
+:root[data-theme="dark"] .reload-banner.waiting, :root[data-theme="dark"] .reload-banner.building, :root[data-theme="dark"] .reload-banner.restarting { border-top-color: #4a3d20; color: #d8b76a; background: rgba(51, 43, 24, .9); }
 :root[data-theme="dark"] .suggestions button { border-color: #393b43; background: var(--paper); box-shadow: 0 8px 24px rgba(0, 0, 0, .16); }
 :root[data-theme="dark"] .suggestions button:hover { border-color: #62697f; background: #292a2f; box-shadow: 0 14px 34px rgba(0, 0, 0, .23); }
 :root[data-theme="dark"] .messages {

@@ -9,6 +9,19 @@ export type Conversation = {
 };
 export type WorkingDirFavorite = { path: string; label: string; added_at: string };
 export type WorkingDirSettings = { enabled: boolean; favorites: WorkingDirFavorite[]; defaultWorkingDir: string | null };
+export type ReloadStatus = {
+  available: boolean;
+  state?: string;
+  busy?: boolean;
+  lastResult?: {
+    command?: string;
+    ok?: boolean;
+    finishedAt?: string;
+    idle?: boolean;
+    running?: number;
+    error?: string;
+  };
+};
 export type WorkFile = {
   id: string; original_name: string; relative_path: string; mime_type: string; size: number; kind: "upload" | "output";
 };
@@ -143,6 +156,7 @@ export const api = {
     method: "PUT", body: JSON.stringify({ chatFontSize }),
   }),
   workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
+  reloadStatus: () => request<ReloadStatus>("/reload-status"),
   updateFavoriteWorkingDir: (payload: { action: "add" | "remove" | "rename"; path?: string; label?: string }) =>
     request<{ settings: WorkingDirSettings }>("/working-dirs/favorites", { method: "PUT", body: JSON.stringify(payload) }),
   setDefaultWorkingDir: (path: string | null) =>
