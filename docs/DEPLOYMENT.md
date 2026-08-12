@@ -122,6 +122,14 @@ The web UI shows a persistent banner when a user's `~/.codex` is missing
 inline `experimental_bearer_token` in `config.toml`), and sending tasks is
 blocked with the same hint until it is configured.
 
+Host-mode task processes load the system user's full supplementary group
+membership, not just the primary uid/gid: the root service drops privileges
+through `setpriv --reuid ... --regid ... --init-groups` (util-linux), so a task
+shell sees the same groups as a normal login (for example group-owned host
+tools like `htmlmounts`). When `setpriv` is unavailable, the service falls back
+to the legacy uid/gid-only spawn and task processes keep an empty supplementary
+group set.
+
 Security trade-off: this mode runs the web service as root and gives each
 tenant full host access under its own Unix identity. Only add users you trust;
 this is not a boundary for hostile workloads.

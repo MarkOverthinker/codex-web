@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import readline from "node:readline";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { isRetryableUpstreamError } from "./retry-policy.js";
@@ -48,6 +48,26 @@ type PendingRequest = {
 type RpcResponse = { id: number; result?: unknown; error?: { message?: string; data?: unknown } };
 type RpcNotification = { method: string; params?: JsonObject };
 
+let setprivProbeResult: boolean | undefined;
+
+/**
+ * setpriv from util-linux is required to rebuild a task user's supplementary
+ * groups after dropping privileges (spawn's uid/gid options never call
+ * initgroups()). Probe once per process and fall back to the old behavior on
+ * systems without it.
+ */
+function setprivAvailable(): boolean {
+  if (setprivProbeResult === undefined) {
+    try {
+      execFileSync("setpriv", ["--help"], { stdio: "ignore", timeout: 5_000 });
+      setprivProbeResult = true;
+    } catch {
+      setprivProbeResult = false;
+    }
+  }
+  return setprivProbeResult;
+}
+
 class AppServerTurnClient {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest>();
@@ -67,12 +87,35 @@ class AppServerTurnClient {
       this.rejectCompletion = reject;
     });
     const dropPrivileges = options.uid !== undefined && options.gid !== undefined && process.getuid?.() === 0;
-    this.child = spawn(options.executablePath || process.env.CODEX_RUNTIME_PATH || "codex", ["app-server", "--listen", "stdio://"], {
+    const executablePath = options.executablePath || process.env.CODEX_RUNTIME_PATH || "codex";
+    const appServerArgs = ["app-server", "--listen", "stdio://"];
+    const spawnOptions: SpawnOptionsWithoutStdio = {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
-      ...(dropPrivileges ? { uid: options.uid, gid: options.gid } : {}),
-    });
+    };
+    let command = executablePath;
+    let args = appServerArgs;
+    if (dropPrivileges) {
+      if (setprivAvailable()) {
+        // setpriv --init-groups rebuilds the user's supplementary groups from
+        // /etc/group (it resolves the user from --reuid); spawn's uid/gid
+        // options only set the primary uid/gid and inherit an empty group set.
+        command = "setpriv";
+        args = [
+          "--reuid", String(options.uid),
+          "--regid", String(options.gid),
+          "--init-groups",
+          "--",
+          executablePath,
+          ...appServerArgs,
+        ];
+      } else {
+        spawnOptions.uid = options.uid;
+        spawnOptions.gid = options.gid;
+      }
+    }
+    this.child = spawn(command, args, spawnOptions);
     const output = readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity });
     output.on("line", (line) => this.handleLine(line));
     this.child.stderr.on("data", (chunk: Buffer) => {
