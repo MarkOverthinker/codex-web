@@ -43,6 +43,7 @@ function loadConfig() {
     port,
     token: process.env.CODEX_WEB_RELOADER_TOKEN ?? "",
     root: process.env.CODEX_WEB_RELOADER_ROOT ?? process.cwd(),
+    idleCheckCommand: parseCommand(process.env.CODEX_WEB_RELOADER_IDLE_CHECK_CMD ?? "node scripts/check-codex-web-idle.mjs"),
     buildCommand: parseCommand(process.env.CODEX_WEB_RELOADER_BUILD_CMD ?? "npm run build"),
     restartCommand: parseCommand(process.env.CODEX_WEB_RELOADER_RESTART_CMD ?? "systemctl restart codex-web.service"),
   };
@@ -114,8 +115,41 @@ async function handleRestart(res) {
   }
 
   busy = true;
-  state = "building";
+  state = "checking";
   lastResult = null;
+
+  const idleCheck = await runCommand(config.idleCheckCommand, config.root);
+  let idle = false;
+  let idleError = "";
+  try {
+    const payloadLine = idleCheck.output.split("\n").find((line) => line.trim().startsWith("{"));
+    const payload = payloadLine ? JSON.parse(payloadLine) : null;
+    idle = payload?.idle === true;
+    if (typeof payload?.error === "string") idleError = payload.error;
+  } catch {
+    idleError = "invalid idle check output";
+  }
+  if (!idle) {
+    state = "busy";
+    busy = false;
+    lastResult = {
+      command: "idle-check",
+      ok: false,
+      finishedAt: new Date().toISOString(),
+      idle: false,
+      error: idleError || "codex-web has running jobs",
+      output: idleCheck.output,
+    };
+    sendJson(res, 409, {
+      ok: false,
+      error: idleError || "codex-web has running jobs; restart skipped",
+      state,
+      lastResult,
+    });
+    return;
+  }
+
+  state = "building";
 
   const build = await runCommand(config.buildCommand, config.root);
   if (!build.ok) {

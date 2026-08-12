@@ -25,7 +25,13 @@ const response = await fetch(`${url}/restart`, {
 
 const text = await response.text();
 if (!response.ok) {
-  console.error(text || `HTTP ${response.status}`);
+  let body = null;
+  try { body = JSON.parse(text); } catch { /* Non-JSON error body. */ }
+  if (body?.state === "busy") {
+    console.error("Codex Web 仍有任务正在运行，本次未重启。任务完成后请重新运行 npm run reload。");
+  } else {
+    console.error(text || `HTTP ${response.status}`);
+  }
   process.exit(1);
 }
 console.log(text);

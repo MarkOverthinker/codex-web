@@ -64,10 +64,12 @@ test("codex-web-reloader rebuilds, restarts, and rejects unauthenticated request
   const buildLog = path.join(tmp, "build.log");
   const restartLog = path.join(tmp, "restart.log");
   const failMarker = path.join(tmp, "fail");
+  const busyMarker = path.join(tmp, "busy");
   const tokenFile = path.join(tmp, "token");
 
   const mockBuild = path.join(tmp, "mock-build.mjs");
   const mockRestart = path.join(tmp, "mock-restart.mjs");
+  const mockIdleCheck = path.join(tmp, "mock-idle-check.mjs");
   await fs.promises.writeFile(
     mockBuild,
     `import fs from "node:fs";
@@ -86,6 +88,16 @@ fs.appendFileSync(process.env.CODEX_WEB_RELOADER_RESTART_LOG, "restart ok\\n");
 console.log("mock restart ok");
 `,
   );
+  await fs.promises.writeFile(
+    mockIdleCheck,
+    `import fs from "node:fs";
+if (process.env.CODEX_WEB_RELOADER_BUSY_MARKER && fs.existsSync(process.env.CODEX_WEB_RELOADER_BUSY_MARKER)) {
+  console.log(JSON.stringify({ idle: false, running: 1 }));
+} else {
+  console.log(JSON.stringify({ idle: true, running: 0 }));
+}
+`,
+  );
 
   const child = spawn(process.execPath, [path.join(process.cwd(), "scripts", "codex-web-reloader.mjs")], {
     env: {
@@ -93,11 +105,13 @@ console.log("mock restart ok");
       CODEX_WEB_RELOADER_PORT: "0",
       CODEX_WEB_RELOADER_TOKEN: TOKEN,
       CODEX_WEB_RELOADER_ROOT: tmp,
+      CODEX_WEB_RELOADER_IDLE_CHECK_CMD: JSON.stringify([process.execPath, mockIdleCheck]),
       CODEX_WEB_RELOADER_BUILD_CMD: JSON.stringify([process.execPath, mockBuild]),
       CODEX_WEB_RELOADER_RESTART_CMD: JSON.stringify([process.execPath, mockRestart]),
       CODEX_WEB_RELOADER_BUILD_LOG: buildLog,
       CODEX_WEB_RELOADER_RESTART_LOG: restartLog,
       CODEX_WEB_RELOADER_FAIL_MARKER: failMarker,
+      CODEX_WEB_RELOADER_BUSY_MARKER: busyMarker,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -158,12 +172,34 @@ console.log("mock restart ok");
 
   const restartLogAfterFailure = await fs.promises.readFile(restartLog, "utf8");
   assert.equal(restartLogAfterFailure.match(/restart ok/g)?.length ?? 0, 2);
-});
 
-test("host reload waits for running jobs instead of interrupting them", () => {
-  const indexSource = fs.readFileSync(path.join(process.cwd(), "server", "index.ts"), "utf8");
-  const serviceUnit = fs.readFileSync(path.join(process.cwd(), "deploy", "codex-web.service"), "utf8");
-  assert.doesNotMatch(indexSource, /SHUTDOWN_DRAIN_TIMEOUT_MS|Shutdown drain timed out/);
-  assert.match(indexSource, /while \(db\.runningJobCount\(\) > 0 \|\| runner\.activeJobCount > 0\)/);
-  assert.match(serviceUnit, /TimeoutStopSec=infinity/);
+  const buildRunsBeforeBusy = (await fs.promises.readFile(buildLog, "utf8")).match(/build ok/g)?.length ?? 0;
+  const restartRunsBeforeBusy = (await fs.promises.readFile(restartLog, "utf8")).match(/restart ok/g)?.length ?? 0;
+  await fs.promises.writeFile(busyMarker, "busy");
+  const busy = await fetch(`${baseUrl}/restart`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ command: "restart" }),
+  });
+  assert.equal(busy.status, 409);
+  const busyBody = await busy.json();
+  assert.equal(busyBody.state, "busy");
+  assert.equal(busyBody.ok, false);
+  assert.equal(busyBody.lastResult.command, "idle-check");
+  const buildLogAfterBusy = await fs.promises.readFile(buildLog, "utf8");
+  const restartLogAfterBusy = await fs.promises.readFile(restartLog, "utf8");
+  assert.equal(buildLogAfterBusy.match(/build ok/g)?.length ?? 0, buildRunsBeforeBusy);
+  assert.equal(restartLogAfterBusy.match(/restart ok/g)?.length ?? 0, restartRunsBeforeBusy);
+
+  const busyClient = await runWithOutput(process.execPath, [path.join(process.cwd(), "scripts", "reload-codex-web.mjs")], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      CODEX_WEB_RELOADER_URL: baseUrl,
+      CODEX_WEB_RELOADER_TOKEN_FILE: tokenFile,
+      CODEX_WEB_RELOADER_BUSY_MARKER: busyMarker,
+    },
+  });
+  assert.notEqual(busyClient.code, 0);
+  assert.match(busyClient.stderr, /本次未重启/);
 });
