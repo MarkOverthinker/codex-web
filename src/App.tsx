@@ -7,7 +7,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
-  Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
+  Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
@@ -1824,7 +1824,7 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
     <div className="message-avatar"><Brain size={15} /></div>
     <div className="message-body">
       <details className="reasoning-panel">
-        <summary><span className="reasoning-panel-title"><Brain size={14} />思考过程</span><span className="reasoning-panel-meta">{steps.length} 个步骤{durationSeconds != null ? ` · 总用时 ${formatElapsed(durationSeconds)}` : ""}</span><ChevronDown size={14} /></summary>
+        <summary><span className="reasoning-panel-title"><Brain size={14} />思考过程</span><span className="reasoning-panel-meta">{steps.length} 个步骤</span><ChevronDown size={14} /></summary>
         <ol className="reasoning-steps">
           {steps.map((step, index) => (
             <li key={`${step.title ?? index}-${index}`}>
@@ -1836,6 +1836,7 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
           ))}
         </ol>
       </details>
+      {durationSeconds != null && <div className="reasoning-duration"><Timer size={13} />总用时 {formatElapsed(durationSeconds)}</div>}
     </div>
   </article>;
 }
@@ -1961,13 +1962,13 @@ function ProcessPanel({ activities }: { activities: JobEvent[] }) {
   const [startedAt, setStartedAt] = useState<string | null>(null);
   useEffect(() => {
     if (startedAt) return;
-    const started = activities.find((activity) => activity.kind === "status" && activity.status === "running");
+    const started = activities.find((activity) => (activity.kind === "status" || activity.type === "status") && activity.status === "running");
     if (started?.created_at) setStartedAt(started.created_at);
   }, [activities, startedAt]);
   const elapsedSeconds = useElapsedTimer(startedAt);
 
   return <div className="activity-card" role="status" aria-live="polite">
-    <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong>{startedAt && !queued && <time className="process-timer">已用时 {formatElapsed(elapsedSeconds)}</time>}<span>{queued ? (queueStatus?.jobsAhead ? `前面还有 ${queueStatus.jobsAhead} 个任务，完成后自动开始` : "即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span></div>
+    <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong><span>{queued ? (queueStatus?.jobsAhead ? `前面还有 ${queueStatus.jobsAhead} 个任务，完成后自动开始` : "即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span></div>
     {plan?.items && <div className="process-plan"><div className="process-section-title"><strong>执行计划</strong><span>{completedPlanItems}/{plan.items.length}</span></div><ul>
       {plan.items.map((item, index) => <li className={item.completed ? "completed" : index === completedPlanItems ? "current" : ""} key={`${item.text}-${index}`}><span>{item.completed ? <Check size={12} /> : index === completedPlanItems ? <LoaderCircle className="spin" size={12} /> : index + 1}</span><p>{item.text}</p></li>)}
     </ul></div>}
@@ -1982,6 +1983,7 @@ function ProcessPanel({ activities }: { activities: JobEvent[] }) {
             {activity.kind === "command" && activity.detail ? <details className="technical-detail"><summary>{activity.actionCount && activity.actionCount > 1 ? `查看 ${activity.actionCount} 个技术步骤` : "查看技术细节"}</summary><code>{activity.groupedDetails?.join("\n\n") || activity.detail}</code></details> : null}
           </div>
         </div>) : <p className="process-journal-empty">正在建立执行方向…</p>}</div>
+    {startedAt && !queued && <div className="process-timer-row"><Timer size={13} />已用时 {formatElapsed(elapsedSeconds)}</div>}
   </div>;
 }
 
