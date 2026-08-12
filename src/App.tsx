@@ -1798,7 +1798,7 @@ const LiveActivitiesContext = createContext<JobEvent[]>([]);
 
 function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   const activities = useContext(LiveActivitiesContext);
-  return <ProcessPanel key={detail.conversation.id} activities={activities} />;
+  return <ProcessPanel key={detail.conversation.id} activities={activities} startedAt={detail.activeJob?.startedAt ?? null} />;
 }
 
 const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
@@ -1951,7 +1951,7 @@ function useElapsedTimer(startedAt: string | null): number {
   return elapsedSeconds;
 }
 
-function ProcessPanel({ activities }: { activities: JobEvent[] }) {
+function ProcessPanel({ activities, startedAt: jobStartedAt }: { activities: JobEvent[]; startedAt?: string | null }) {
   const latestStatus = activities.findLast((item) => item.type === "status" || item.kind === "status");
   const queueStatus = activities.findLast((activity) => activity.status === "queued");
   const queued = Boolean(queueStatus) && !activities.some((activity) => activity.status === "running");
@@ -1959,12 +1959,9 @@ function ProcessPanel({ activities }: { activities: JobEvent[] }) {
   const plan = activities.findLast((activity) => activity.kind === "todo" && Boolean(activity.items?.length));
   const journal = buildProcessJournal(activities);
   const completedPlanItems = plan?.items?.filter((item) => item.completed).length ?? 0;
-  const [startedAt, setStartedAt] = useState<string | null>(null);
-  useEffect(() => {
-    if (startedAt) return;
-    const started = activities.find((activity) => (activity.kind === "status" || activity.type === "status") && activity.status === "running");
-    if (started?.created_at) setStartedAt(started.created_at);
-  }, [activities, startedAt]);
+  const startedAt = jobStartedAt
+    ?? activities.find((activity) => (activity.kind === "status" || activity.type === "status") && activity.status === "running")?.created_at
+    ?? null;
   const elapsedSeconds = useElapsedTimer(startedAt);
 
   return <div className="activity-card" role="status" aria-live="polite">

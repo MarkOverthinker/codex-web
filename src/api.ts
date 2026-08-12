@@ -49,7 +49,7 @@ export type ComposerDraft = {
   created_at: string;
   updated_at: string;
 };
-export type Job = { id: string; status: string; conversation_id: string; queuePosition?: number };
+export type Job = { id: string; status: string; conversation_id: string; queuePosition?: number; startedAt?: string | null };
 // The online Codex catalog is authoritative. Keep this open so a newer CLI can
 // expose a new reasoning level without requiring a front-end release first.
 export type ReasoningEffort = string;

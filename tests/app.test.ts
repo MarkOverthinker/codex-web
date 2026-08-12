@@ -376,6 +376,7 @@ test("task timing shows live elapsed time and completed total duration", () => {
   assert.match(appSource, /已用时/);
   assert.match(appSource, /process-timer-row/);
   assert.match(appSource, /reasoning-duration/);
+  assert.match(appSource, /activeJob\?\.startedAt/);
   assert.match(styles, /\.process-timer-row/);
   assert.match(styles, /\.reasoning-duration/);
 });
@@ -2318,11 +2319,12 @@ test("conversation detail restores running progress and terminal SSE replay", as
   instance.db.createJob(jobId, conversationId);
   instance.db.updateJob(jobId, "running");
   instance.db.updateConversation(conversationId, { status: "running" });
-  instance.db.appendEvent(jobId, "status", { label: "started" });
+  instance.db.appendEvent(jobId, "status", { status: "running", label: "started" });
   instance.db.appendEvent(jobId, "progress", { label: "step two" });
 
   const running = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
   assert.equal(running.body.activeJob.id, jobId);
+  assert.equal(typeof running.body.activeJob.startedAt, "string");
   assert.equal(running.body.jobEvents.length, 2);
   assert.equal(running.body.jobEvents[1].label, "step two");
 

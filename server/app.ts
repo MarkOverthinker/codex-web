@@ -799,12 +799,20 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const session = res.locals.session as SessionRow;
     let conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    const jobStartedAt = (jobId: string): string | null => {
+      for (const event of db.listEvents(jobId)) {
+        const payload = JSON.parse(event.payload) as Record<string, unknown>;
+        if (payload.status === "running") return event.created_at;
+      }
+      return null;
+    };
     const rolloutBytes = runner.conversationRolloutBytes(conversation.id);
     if (rolloutBytes !== conversation.rollout_bytes) {
       db.setConversationRolloutBytes(conversation.id, rolloutBytes);
       conversation = db.getConversationForUser(conversation.id, session.user_id)!;
     }
     const latestJob = db.getLatestJobForConversation(conversation.id) ?? null;
+    const latestJobWithStartedAt = latestJob ? { ...latestJob, startedAt: jobStartedAt(latestJob.id) } : null;
     const jobEvents = latestJob
       ? db.listEvents(latestJob.id).map((event) => ({ seq: event.seq, type: event.event_type, created_at: event.created_at, ...JSON.parse(event.payload) }))
       : [];
@@ -812,8 +820,8 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const safeMessages = safeConversationMessages(conversation, messagePage.messages);
     const outputFiles = db.listFiles(conversation.id).filter((file) => file.kind === "output");
     const agentSelection = conversationAgentSelection(conversation);
-    const activeJob = latestJob && ["queued", "running"].includes(latestJob.status)
-      ? { ...latestJob, queuePosition: db.getQueuePosition(latestJob.id) }
+    const activeJob = latestJobWithStartedAt && ["queued", "running"].includes(latestJobWithStartedAt.status)
+      ? { ...latestJobWithStartedAt, queuePosition: db.getQueuePosition(latestJobWithStartedAt.id) }
       : null;
     const pendingPrompts = db.listPendingPrompts(conversation.id);
     const editingPrompt = db.listPendingPrompts(conversation.id, "editing")[0] ?? null;
@@ -828,7 +836,7 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       editingPrompt,
       composerDraft,
       activeJob,
-      latestJob,
+      latestJob: latestJobWithStartedAt,
       jobEvents,
       rolloutBytes,
     });
