@@ -53,7 +53,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBo
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     this.setState({ componentStack: info.componentStack ?? "" });
-    reportBoundaryError(error);
+    reportBoundaryError(error, info.componentStack ?? undefined);
     if (!this.autoRetried) {
       // Transient render failures (e.g. a single bad streamed event) often
       // recover without losing the SSE connection or editor state.

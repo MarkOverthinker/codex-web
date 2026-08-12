@@ -11,6 +11,7 @@ const REACT_RECOVERY_NOTICE = /There was an error during concurrent rendering bu
 type ClientErrorReport = {
   message: string;
   stack?: string;
+  componentStack?: string;
   source: string;
   href: string;
 };
@@ -18,7 +19,7 @@ type ClientErrorReport = {
 let lastReportKey = "";
 let lastReportAt = 0;
 
-function reportError(error: unknown, source: string): void {
+function reportError(error: unknown, source: string, componentStack?: string): void {
   const normalized = error instanceof Error ? error : new Error(
     typeof error === "string" ? error : (() => {
       try { return JSON.stringify(error); } catch { return String(error); }
@@ -35,6 +36,7 @@ function reportError(error: unknown, source: string): void {
   const report: ClientErrorReport = {
     message: normalized.message.slice(0, MAX_REPORT_MESSAGE_LENGTH),
     stack: stack.slice(0, MAX_REPORT_STACK_LENGTH),
+    componentStack: componentStack?.slice(0, MAX_REPORT_STACK_LENGTH),
     source,
     href: window.location.href,
   };
@@ -54,6 +56,6 @@ export function installClientErrorReporting(): void {
 }
 
 /** Reports a render error captured by the error boundary. */
-export function reportBoundaryError(error: Error): void {
-  reportError(error, "error-boundary");
+export function reportBoundaryError(error: Error, componentStack?: string): void {
+  reportError(error, "error-boundary", componentStack);
 }
