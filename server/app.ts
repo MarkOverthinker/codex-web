@@ -19,6 +19,11 @@ import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPers
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { discoverImportableSessions, importSessionThread } from "./session-importer.js";
+import {
+  customCategoryKey,
+  listValidPinnedCategoryKeys,
+  type TaskListCategorySettings,
+} from "../src/task-categories.js";
 
 const COOKIE_NAME = "cww_session";
 const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
@@ -64,6 +69,20 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
       favorites: db.getFavoriteWorkingDirectories(userId),
       defaultWorkingDir: db.getDefaultWorkingDir(userId),
     };
+  }
+
+  function normalizeTaskCategoryName(raw: unknown): string {
+    if (typeof raw !== "string" || !raw.trim()) throw new Error("请输入分类名称。");
+    return raw.trim().replace(/\s+/g, " ").slice(0, 100);
+  }
+
+  function taskListCategorySettingsFor(userId: string): TaskListCategorySettings {
+    return db.getTaskListCategorySettings(userId);
+  }
+
+  function saveTaskListCategorySettings(userId: string, settings: TaskListCategorySettings): TaskListCategorySettings {
+    db.setTaskListCategorySettings(settings, userId);
+    return db.getTaskListCategorySettings(userId);
   }
 
   function requireHostWorkingTenant(session: SessionRow) {
@@ -539,6 +558,103 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     }
     db.setDefaultWorkingDir(next, session.user_id);
     return res.json({ settings: workingDirSettingsFor(session.user_id) });
+  });
+
+  api.get("/task-categories", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    return res.json({ settings: taskListCategorySettingsFor(session.user_id) });
+  });
+
+  api.post("/task-categories/custom", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "任务列表分类仅支持已映射系统账户的 host 模式。" });
+    }
+    let name: string;
+    try { name = normalizeTaskCategoryName(req.body?.name); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "分类名称无效。" }); }
+    const settings = taskListCategorySettingsFor(session.user_id);
+    if (settings.customCategories.length >= 50) return res.status(400).json({ error: "最多创建 50 个自定义分类。" });
+    if (settings.customCategories.some((category) => category.name.toLowerCase() === name.toLowerCase())) {
+      return res.status(400).json({ error: "已存在同名分类。" });
+    }
+    settings.customCategories.push({ id: crypto.randomUUID(), name, assignedDirs: [] });
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
+  });
+
+  api.patch("/task-categories/custom/:id", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "任务列表分类仅支持已映射系统账户的 host 模式。" });
+    }
+    const id = String(req.params.id);
+    let name: string;
+    try { name = normalizeTaskCategoryName(req.body?.name); }
+    catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "分类名称无效。" }); }
+    const settings = taskListCategorySettingsFor(session.user_id);
+    const category = settings.customCategories.find((candidate) => candidate.id === id);
+    if (!category) return res.status(404).json({ error: "自定义分类不存在。" });
+    if (settings.customCategories.some((candidate) => candidate.id !== id && candidate.name.toLowerCase() === name.toLowerCase())) {
+      return res.status(400).json({ error: "已存在同名分类。" });
+    }
+    category.name = name;
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
+  });
+
+  api.delete("/task-categories/custom/:id", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "任务列表分类仅支持已映射系统账户的 host 模式。" });
+    }
+    const id = String(req.params.id);
+    const settings = taskListCategorySettingsFor(session.user_id);
+    const before = settings.customCategories.length;
+    settings.customCategories = settings.customCategories.filter((category) => category.id !== id);
+    if (settings.customCategories.length === before) return res.status(404).json({ error: "自定义分类不存在。" });
+    settings.pinned = settings.pinned.filter((key) => key !== customCategoryKey(id));
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
+  });
+
+  api.put("/task-categories/dirs", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "工作目录归类仅支持已映射系统账户的 host 模式。" });
+    }
+    let dir: string;
+    try {
+      dir = resolveStoredWorkingDirInput(typeof req.body?.dir === "string" ? req.body.dir : "");
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" });
+    }
+    const rawCategoryId = req.body?.categoryId;
+    const customId = rawCategoryId === null || rawCategoryId === undefined || rawCategoryId === ""
+      ? null
+      : String(rawCategoryId);
+    const settings = taskListCategorySettingsFor(session.user_id);
+    if (customId && !settings.customCategories.some((category) => category.id === customId)) {
+      return res.status(404).json({ error: "自定义分类不存在。" });
+    }
+    for (const category of settings.customCategories) {
+      category.assignedDirs = category.assignedDirs.filter((candidate) => candidate !== dir);
+    }
+    if (customId) {
+      const category = settings.customCategories.find((candidate) => candidate.id === customId)!;
+      category.assignedDirs = [...new Set([...category.assignedDirs, dir])];
+    }
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
+  });
+
+  api.put("/task-categories/pins", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "任务列表分类仅支持已映射系统账户的 host 模式。" });
+    }
+    const rawKeys = req.body?.keys;
+    if (!Array.isArray(rawKeys)) return res.status(400).json({ error: "置顶顺序无效。" });
+    const settings = taskListCategorySettingsFor(session.user_id);
+    const favoritePaths = db.getFavoriteWorkingDirectories(session.user_id).map((favorite) => favorite.path);
+    settings.pinned = listValidPinnedCategoryKeys({ customCategories: settings.customCategories, pinned: rawKeys.filter((key): key is string => typeof key === "string") }, favoritePaths);
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 
   api.post("/conversations", (req, res) => {

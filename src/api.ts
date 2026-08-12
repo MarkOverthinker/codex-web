@@ -1,3 +1,5 @@
+import type { TaskListCategorySettings } from "./task-categories.js";
+
 export const BASE_PATH = "/codex-web";
 
 export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; voiceEnabled?: boolean };
@@ -144,6 +146,17 @@ export const api = {
     request<{ settings: WorkingDirSettings }>("/working-dirs/favorites", { method: "PUT", body: JSON.stringify(payload) }),
   setDefaultWorkingDir: (path: string | null) =>
     request<{ settings: WorkingDirSettings }>("/working-dirs/default", { method: "PUT", body: JSON.stringify({ path }) }),
+  taskCategories: () => request<{ settings: TaskListCategorySettings }>("/task-categories"),
+  createTaskCategory: (name: string) =>
+    request<{ settings: TaskListCategorySettings }>("/task-categories/custom", { method: "POST", body: JSON.stringify({ name }) }),
+  renameTaskCategory: (id: string, name: string) =>
+    request<{ settings: TaskListCategorySettings }>(`/task-categories/custom/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteTaskCategory: (id: string) =>
+    request<{ settings: TaskListCategorySettings }>(`/task-categories/custom/${id}`, { method: "DELETE" }),
+  assignTaskCategoryDir: (dir: string, categoryId: string | null) =>
+    request<{ settings: TaskListCategorySettings }>("/task-categories/dirs", { method: "PUT", body: JSON.stringify({ dir, categoryId }) }),
+  updateTaskCategoryPins: (keys: string[]) =>
+    request<{ settings: TaskListCategorySettings }>("/task-categories/pins", { method: "PUT", body: JSON.stringify({ keys }) }),
   createConversation: (workingDir?: string | null) =>
     request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST", body: JSON.stringify({ workingDir }) }),
   updateConversationWorkingDir: (id: string, workingDir: string | null, confirm = false) =>

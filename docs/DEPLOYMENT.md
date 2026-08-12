@@ -143,6 +143,10 @@ Behavior and limits:
   unchanged.
 - The directory must exist, be an absolute path, and must not point at the
   application's own `DATA_ROOT`, `TENANT_ROOT`, or `WORKSPACE_ROOT`.
+- The task sidebar groups conversations by working directory and supports
+  custom categories, per-directory assignment, and pinned categories. Category
+  definitions and pin order are stored per user in `user_settings`; collapse
+  and “show all” states are stored in browser `localStorage`.
 - Deleting or archiving a conversation never removes the selected host
   directory, and the application never overwrites `AGENTS.md` files inside it.
 - Tasks that share the same working directory run one at a time; the next task

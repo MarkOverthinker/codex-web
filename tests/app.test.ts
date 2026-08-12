@@ -1077,6 +1077,75 @@ test("host mode persists favorite working directories and applies them to new co
   assert.equal(clearedDefault.body.settings.defaultWorkingDir, null);
 });
 
+test("task list categories persist custom grouping, directory assignment, and pin order", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-task-categories-api-test-"));
+  const username = process.env.USER || process.env.LOGNAME || "root";
+  assert.ok(resolveSystemUser(username), `expected the current machine user ${username} to resolve`);
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username,
+    passwordHash: bcrypt.hashSync("TaskCategories-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: true,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username, password: "TaskCategories-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const project = path.join(root, "projects", "categorized-project");
+  fs.mkdirSync(project, { recursive: true });
+  const canonicalProject = fs.realpathSync(project);
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "add", path: project, label: "Categorized" }).expect(200);
+  await agent.post("/codex-web/api/conversations")
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project }).expect(201);
+
+  const initial = await agent.get("/codex-web/api/task-categories").expect(200);
+  assert.deepEqual(initial.body.settings, { customCategories: [], pinned: [] });
+
+  const created = await agent.post("/codex-web/api/task-categories/custom")
+    .set("X-CSRF-Token", csrf)
+    .send({ name: "归档项目" }).expect(200);
+  const customId = created.body.settings.customCategories[0].id as string;
+  assert.equal(created.body.settings.customCategories[0].name, "归档项目");
+
+  await agent.post("/codex-web/api/task-categories/custom")
+    .set("X-CSRF-Token", csrf)
+    .send({ name: "归档项目" }).expect(400);
+
+  const assigned = await agent.put("/codex-web/api/task-categories/dirs")
+    .set("X-CSRF-Token", csrf)
+    .send({ dir: project, categoryId: customId }).expect(200);
+  assert.deepEqual(assigned.body.settings.customCategories[0].assignedDirs, [canonicalProject]);
+
+  const renamed = await agent.patch(`/codex-web/api/task-categories/custom/${customId}`)
+    .set("X-CSRF-Token", csrf)
+    .send({ name: "重点项目" }).expect(200);
+  assert.equal(renamed.body.settings.customCategories[0].name, "重点项目");
+
+  const pinned = await agent.put("/codex-web/api/task-categories/pins")
+    .set("X-CSRF-Token", csrf)
+    .send({ keys: [`custom:${customId}`, "auto:standalone", "unknown:key"] }).expect(200);
+  assert.deepEqual(pinned.body.settings.pinned, [`custom:${customId}`, "auto:standalone"]);
+
+  const unassigned = await agent.put("/codex-web/api/task-categories/dirs")
+    .set("X-CSRF-Token", csrf)
+    .send({ dir: project, categoryId: null }).expect(200);
+  assert.deepEqual(unassigned.body.settings.customCategories[0].assignedDirs, []);
+
+  const deleted = await agent.delete(`/codex-web/api/task-categories/custom/${customId}`)
+    .set("X-CSRF-Token", csrf)
+    .expect(200);
+  assert.equal(deleted.body.settings.customCategories.length, 0);
+  assert.deepEqual(deleted.body.settings.pinned, ["auto:standalone"]);
+});
+
 test("quoted selections stay outside the visible message body and survive the pending queue", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-message-quote-test-"));
   const instance = createApp({

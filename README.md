@@ -221,7 +221,13 @@ deleting a conversation never removes the selected host directory. Tasks that
 share one directory run one at a time to avoid conflicting writes. Switching an
 existing conversation into a directory where other sessions have queued or
 running work asks for your confirmation first, and proceeds once you confirm.
-This feature is deliberately unavailable in the isolated tenant deployment.
+The sidebar groups these tasks by working directory: standalone workspaces,
+favorite directories, and an automatic “temporary workspace” bucket for
+unfavorited paths. You can create custom categories, move a directory into one,
+pin categories, and reorder pinned categories; category definitions, directory
+assignment, and pin order are persisted on the server while expanded/collapsed
+state stays in the browser. This feature is deliberately unavailable in the
+isolated tenant deployment.
 
 ## Optional voice transcription
 
