@@ -74,8 +74,14 @@ test("frontend installs an error boundary and client error reporting", () => {
   assert.match(boundarySource, /componentDidCatch/);
   assert.match(boundarySource, /getDerivedStateFromError/);
   assert.match(boundarySource, /window\.location\.reload\(\)/);
-  assert.match(boundarySource, /AUTO_RELOAD_COOLDOWN_MS/);
-  assert.match(boundarySource, /this\.autoRetried/);
+  // Render failures must remain on the stable fallback until the user
+  // explicitly chooses a recovery action; automatic remount/reload loops are
+  // intentionally not part of the boundary contract.
+  assert.doesNotMatch(boundarySource, /AUTO_RELOAD_COOLDOWN_MS/);
+  assert.doesNotMatch(boundarySource, /autoRetried/);
+  assert.doesNotMatch(boundarySource, /sessionStorage/);
+  assert.match(boundarySource, /private readonly retry/);
+  assert.match(boundarySource, /private readonly reload/);
   assert.match(reportingSource, /unhandledrejection/);
   assert.match(reportingSource, /reportClientError/);
   assert.match(reportingSource, /REACT_RECOVERY_NOTICE/);
