@@ -6,13 +6,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
 
 function renderMarkdown(markdown: string): string {
   return renderToStaticMarkup(React.createElement(
     ReactMarkdown,
     {
       remarkPlugins: [remarkGfm, remarkMath],
-      rehypePlugins: [[rehypeKatex, { throwOnError: false }]],
+      rehypePlugins: [[rehypeKatex, { throwOnError: false }], rehypeHighlight],
     },
     markdown,
   ));
@@ -35,4 +36,18 @@ test("plain text and GFM content keep rendering without KaTeX interference", () 
   assert.match(html, /<strong>加粗<\/strong>/);
   assert.match(html, /<table>/);
   assert.match(html, /价格 \$5 和/);
+});
+
+test("code blocks get syntax highlighting while unknown languages stay readable", () => {
+  const highlighted = renderMarkdown("```js\nconst total = items.length;\n```");
+  assert.match(highlighted, /class="hljs language-js"/);
+  assert.match(highlighted, /hljs-keyword/);
+  assert.match(highlighted, /hljs-property/);
+
+  const unknown = renderMarkdown("```no-such-language\nplain text\n```");
+  assert.match(unknown, /<code/);
+  assert.match(unknown, /plain text/);
+
+  const bare = renderMarkdown("```\nno language\n```");
+  assert.match(bare, /no language/);
 });
