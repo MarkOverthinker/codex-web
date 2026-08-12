@@ -1,6 +1,7 @@
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { isRetryableUpstreamError } from "./retry-policy.js";
+import { buildReasoningSteps } from "./reasoning-parts.js";
 
 export function redactBrandForDisplay(value: string): string {
   return value.replace(/chatgpt|codex/gi, "Codex Web");
@@ -15,7 +16,13 @@ export function summarizeEvent(event: ThreadEvent): unknown | null {
   const item = event.item;
   if (item.type === "reasoning") {
     const summary = redactBrandForDisplay(sanitizeAgentMarkdown(item.text)).trim();
-    return summary ? { kind: "reasoning", label: "模型思路摘要", detail: summary } : null;
+    if (!summary) return null;
+    return {
+      kind: "reasoning",
+      label: "思考过程",
+      detail: summary,
+      steps: buildReasoningSteps([summary], []),
+    };
   }
   if (item.type === "command_execution") {
     const detail = redactBrandForDisplay(item.command);

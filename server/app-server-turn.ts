@@ -3,6 +3,7 @@ import readline from "node:readline";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { isRetryableUpstreamError } from "./retry-policy.js";
 import { buildOptionalCapabilityConfig, type OptionalAgentCapabilities } from "./optional-capabilities.js";
+import { buildReasoningSteps } from "./reasoning-parts.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -134,7 +135,7 @@ class AppServerTurnClient {
           shell_environment_policy: { inherit: "core", set: this.options.shellEnvironment },
           model_reasoning_summary: "auto",
           hide_agent_reasoning: false,
-          show_raw_agent_reasoning: false,
+          show_raw_agent_reasoning: true,
           web_search: this.options.webSearchMode,
           ...buildOptionalCapabilityConfig(this.options.optionalCapabilities),
         },
@@ -266,8 +267,19 @@ function makeUserInput(prompt: string, imagePaths: string[]): JsonObject[] {
 
 function summarizeItem(item: JsonObject, completed: boolean): unknown | null {
   if (item.type === "reasoning") {
-    const summary = [...asStringArray(item.summary), ...asStringArray(item.content)].join("\n\n").trim();
-    return summary ? { kind: "reasoning", label: "模型思路摘要", detail: redactBrand(sanitizeAgentMarkdown(summary)) } : null;
+    const summaries = asStringArray(item.summary)
+      .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
+      .filter(Boolean);
+    const contents = asStringArray(item.content)
+      .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
+      .filter(Boolean);
+    if (summaries.length === 0 && contents.length === 0) return null;
+    return {
+      kind: "reasoning",
+      label: "思考过程",
+      detail: summaries.join("\n\n") || contents.join("\n\n"),
+      steps: buildReasoningSteps(summaries, contents),
+    };
   }
   if (item.type === "commandExecution") {
     const command = typeof item.command === "string" ? item.command : "";

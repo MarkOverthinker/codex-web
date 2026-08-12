@@ -6,11 +6,11 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
-  Archive, ArrowDown, ArrowUp, Bot, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -26,6 +26,7 @@ import { ASK_AGENT_SELECTION_MAX_CHARS, normalizeAskAgentSelection } from "./ask
 import { mergeMessagePages, preservePrependedScrollTop } from "./message-history";
 import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
+import { collectReasoningSteps } from "./reasoning-steps";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
@@ -1775,6 +1776,7 @@ type MessageListProps = {
   hasMore: boolean;
   loadingOlderMessages: boolean;
   sending: boolean;
+  reasoningSteps: ReasoningStep[];
   messagesRef: React.RefObject<HTMLDivElement | null>;
   onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void;
   userInitials: string;
@@ -1790,20 +1792,44 @@ function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   return <ProcessPanel key={detail.conversation.id} activities={activities} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
     {messages.map((message) => <MessageCard key={message.id} message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} />)}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
+    {!sending && <CompletedReasoningPanel steps={reasoningSteps} />}
     <div />
   </div>;
 });
+
+function CompletedReasoningPanel({ steps }: { steps: ReasoningStep[] }) {
+  if (steps.length === 0) return null;
+  return <article className="message assistant reasoning-completed">
+    <div className="message-avatar"><Brain size={15} /></div>
+    <div className="message-body">
+      <details className="reasoning-panel">
+        <summary><span className="reasoning-panel-title"><Brain size={14} />思考过程</span><span className="reasoning-panel-meta">{steps.length} 个步骤</span><ChevronDown size={14} /></summary>
+        <ol className="reasoning-steps">
+          {steps.map((step, index) => (
+            <li key={`${step.title ?? index}-${index}`}>
+              <details className="reasoning-step">
+                <summary><span className="reasoning-step-index">{index + 1}</span><span className="reasoning-step-title">{step.title || "思考步骤"}</span><ChevronDown size={13} /></summary>
+                <div className="markdown reasoning-step-detail"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{step.detail || step.title}</ReactMarkdown></div>
+              </details>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </div>
+  </article>;
+}
 
 const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
   detail: ConversationDetail; activities: JobEvent[]; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void;
 }) {
   const citationFiles = useMemo(() => detail.messages.flatMap((message) => message.files), [detail.messages]);
+  const reasoningSteps = useMemo(() => collectReasoningSteps(activities), [activities]);
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
 
@@ -1879,6 +1905,7 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
         hasMore={detail.messagePage.hasMore}
         loadingOlderMessages={loadingOlderMessages}
         sending={sending}
+        reasoningSteps={reasoningSteps}
         messagesRef={messagesRef}
         onMessagesScroll={onMessagesScroll}
         userInitials={userInitials}
