@@ -212,6 +212,10 @@ already running, and HTTP 500 with the build log when compilation fails
 owner. To uninstall, stop and disable the unit and remove
 `/etc/codex-web-reloader`.
 
+The config directory is owned by `root` with the checkout owner's group and
+mode `0750`, so only root and the checkout owner can enter it and read the
+token.
+
 ## Reverse proxy
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
