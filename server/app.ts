@@ -442,9 +442,10 @@ export function createApp(overrides: AppOverrides = {}) {
     const raw = req.body as Record<string, unknown> | undefined;
     const message = typeof raw?.message === "string" ? raw.message.trim().slice(0, 2000) : "";
     const stack = typeof raw?.stack === "string" ? raw.stack.trim().slice(0, 8000) : "";
+    const componentStack = typeof raw?.componentStack === "string" ? raw.componentStack.trim().slice(0, 8000) : "";
     const source = typeof raw?.source === "string" ? raw.source.trim().slice(0, 100) : "";
     const href = typeof raw?.href === "string" ? raw.href.trim().slice(0, 1000) : "";
-    if (message) logger.warn({ userId: session.user_id, source, href, message, stack }, "client error");
+    if (message) logger.warn({ userId: session.user_id, source, href, message, stack, componentStack }, "client error");
     return res.json({ ok: true });
   });
 

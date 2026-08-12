@@ -128,8 +128,13 @@ type PendingView = {
 function addPendingView(groups: Map<string, PendingView>, view: PendingView): void {
   const existing = groups.get(view.key);
   if (existing) {
-    existing.conversations.push(...view.conversations);
-    if (view.assignedDirs.length) existing.assignedDirs.push(...view.assignedDirs);
+    // Avoid spread arguments entirely: a pathological input with a very large
+    // array can otherwise throw "Maximum call stack size exceeded" inside
+    // Array.prototype.push on some engines.
+    for (const conversation of view.conversations) existing.conversations.push(conversation);
+    if (view.assignedDirs.length) {
+      for (const dir of view.assignedDirs) existing.assignedDirs.push(dir);
+    }
   } else {
     groups.set(view.key, view);
   }
