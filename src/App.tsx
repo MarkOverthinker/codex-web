@@ -1348,7 +1348,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
   const deferredQuery = useDeferredValue(query);
   const filtered = useMemo(
-    () => conversations.filter((item) => item.title.toLowerCase().includes(deferredQuery.toLowerCase())),
+    () => conversations.filter((item) => (item.title ?? "").toLowerCase().includes(deferredQuery.toLowerCase())),
     [conversations, deferredQuery],
   );
   const categoryViews = useMemo(

@@ -250,6 +250,8 @@ export const api = {
     `/conversations/${conversationId}/pending-prompts/${promptId}/steer`, { method: "POST" },
   ),
   cancelJob: (id: string) => request<{ ok: true }>(`/jobs/${id}/cancel`, { method: "POST" }),
+  reportClientError: (report: { message: string; stack?: string; source: string; href: string }) =>
+    request<{ ok: true }>("/client-errors", { method: "POST", body: JSON.stringify(report) }),
 };
 
 export function fileUrl(file: WorkFile, download = false): string {
