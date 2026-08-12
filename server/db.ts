@@ -24,6 +24,7 @@ export type ConversationRow = {
   title: string;
   title_source: ConversationTitleSource;
   codex_thread_id: string | null;
+  working_dir: string | null;
   agent_model: string | null;
   reasoning_effort: string | null;
   status: "idle" | "running";
@@ -127,6 +128,12 @@ export type JobEventRow = {
 export type StoredAgentSelection = {
   model: string;
   reasoningEffort: string;
+};
+
+export type WorkingDirectoryFavorite = {
+  path: string;
+  label: string;
+  added_at: string;
 };
 
 type LegacyUserSeed = { username: string; passwordHash: string; displayName?: string };
@@ -290,6 +297,7 @@ export class AppDatabase {
 
     const conversationColumns = this.columnNames("conversations");
     if (!conversationColumns.has("user_id")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN user_id TEXT REFERENCES users(id)");
+    if (!conversationColumns.has("working_dir")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN working_dir TEXT");
     if (!conversationColumns.has("agent_model")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN agent_model TEXT");
     if (!conversationColumns.has("reasoning_effort")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT");
     if (!conversationColumns.has("has_unread_result")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN has_unread_result INTEGER NOT NULL DEFAULT 0");
@@ -341,6 +349,7 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS conversations_user_idx ON conversations(user_id, updated_at);
       CREATE INDEX IF NOT EXISTS conversations_user_active_idx ON conversations(user_id, deleted_at, updated_at);
       CREATE INDEX IF NOT EXISTS conversations_user_archived_idx ON conversations(user_id, deleted_at, archived_at);
+      CREATE INDEX IF NOT EXISTS conversations_working_dir_idx ON conversations(working_dir) WHERE working_dir IS NOT NULL;
       CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS files_conversation_idx ON files(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS files_pending_prompt_idx ON files(pending_prompt_id, created_at);
@@ -415,10 +424,13 @@ export class AppDatabase {
     return this.sqlite.prepare(`SELECT ${conversationSelect} FROM conversations WHERE id=? AND user_id=? AND deleted_at IS NULL`).get(id, userId) as ConversationRow | undefined;
   }
 
-  createConversation(id: string, title: string, selection?: StoredAgentSelection, userId = LEGACY_USER_ID): ConversationRow {
+  createConversation(id: string, title: string, selection?: StoredAgentSelection, userId = LEGACY_USER_ID, workingDir?: string | null): ConversationRow {
     const now = new Date().toISOString();
-    this.sqlite.prepare("INSERT INTO conversations(id,user_id,title,title_source,agent_model,reasoning_effort,status,created_at,updated_at) VALUES(?,?,?,'default',?,?,'idle',?,?)").run(
-      id, userId, title, selection?.model ?? null, selection?.reasoningEffort ?? null, now, now,
+    this.sqlite.prepare(`
+      INSERT INTO conversations(id,user_id,title,title_source,working_dir,agent_model,reasoning_effort,status,created_at,updated_at)
+      VALUES(?,?,?,'default',?,?,?,'idle',?,?)
+    `).run(
+      id, userId, title, workingDir ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null, now, now,
     );
     return this.getConversation(id)!;
   }
@@ -457,10 +469,11 @@ export class AppDatabase {
     return this.getConversation(input.id)!;
   }
 
-  updateConversation(id: string, fields: { title?: string; titleSource?: ConversationTitleSource; codexThreadId?: string; agentSelection?: StoredAgentSelection; status?: "idle" | "running" }): void {
+  updateConversation(id: string, fields: { title?: string; titleSource?: ConversationTitleSource; codexThreadId?: string; workingDir?: string | null; agentSelection?: StoredAgentSelection; status?: "idle" | "running" }): void {
     if (fields.title !== undefined) this.sqlite.prepare("UPDATE conversations SET title=?, title_source=COALESCE(?,title_source), updated_at=? WHERE id=?")
       .run(fields.title, fields.titleSource ?? null, new Date().toISOString(), id);
     if (fields.codexThreadId !== undefined) this.sqlite.prepare("UPDATE conversations SET codex_thread_id=?, updated_at=? WHERE id=?").run(fields.codexThreadId, new Date().toISOString(), id);
+    if (fields.workingDir !== undefined) this.sqlite.prepare("UPDATE conversations SET working_dir=?, updated_at=? WHERE id=?").run(fields.workingDir, new Date().toISOString(), id);
     if (fields.agentSelection !== undefined) this.sqlite.prepare("UPDATE conversations SET agent_model=?, reasoning_effort=?, updated_at=? WHERE id=?").run(
       fields.agentSelection.model, fields.agentSelection.reasoningEffort, new Date().toISOString(), id,
     );
@@ -890,6 +903,57 @@ export class AppDatabase {
     return fontSize;
   }
 
+  getFavoriteWorkingDirectories(userId = LEGACY_USER_ID): WorkingDirectoryFavorite[] {
+    const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='favorite_working_dirs'").get(userId) as { value: string } | undefined;
+    if (!row) return [];
+    try {
+      const parsed = JSON.parse(row.value) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      const favorites: WorkingDirectoryFavorite[] = [];
+      for (const item of parsed) {
+        if (!item || typeof item !== "object") continue;
+        const record = item as Partial<WorkingDirectoryFavorite>;
+        if (typeof record.path !== "string" || !record.path || typeof record.label !== "string") continue;
+        favorites.push({
+          path: record.path,
+          label: record.label,
+          added_at: typeof record.added_at === "string" ? record.added_at : new Date(0).toISOString(),
+        });
+      }
+      return favorites;
+    } catch {
+      return [];
+    }
+  }
+
+  setFavoriteWorkingDirectories(favorites: WorkingDirectoryFavorite[], userId = LEGACY_USER_ID): void {
+    const safe = favorites.map((favorite) => ({
+      path: favorite.path,
+      label: favorite.label,
+      added_at: favorite.added_at,
+    }));
+    this.sqlite.prepare(`
+      INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'favorite_working_dirs',?,?)
+      ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    `).run(userId, JSON.stringify(safe), new Date().toISOString());
+  }
+
+  getDefaultWorkingDir(userId = LEGACY_USER_ID): string | null {
+    const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='default_working_dir'").get(userId) as { value: string } | undefined;
+    return row?.value || null;
+  }
+
+  setDefaultWorkingDir(workingDir: string | null, userId = LEGACY_USER_ID): void {
+    if (workingDir === null) {
+      this.sqlite.prepare("DELETE FROM user_settings WHERE user_id=? AND key='default_working_dir'").run(userId);
+      return;
+    }
+    this.sqlite.prepare(`
+      INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'default_working_dir',?,?)
+      ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    `).run(userId, workingDir, new Date().toISOString());
+  }
+
   createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection): JobRow {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
@@ -926,7 +990,15 @@ export class AppDatabase {
         AND conversation.deleted_at IS NULL
         AND NOT EXISTS (
           SELECT 1 FROM jobs running
-          WHERE running.conversation_id=queued.conversation_id AND running.status='running'
+          JOIN conversations running_conversation ON running_conversation.id=running.conversation_id
+          WHERE running.status='running'
+            AND (
+              running.conversation_id=queued.conversation_id
+              OR (
+                running_conversation.working_dir IS NOT NULL
+                AND running_conversation.working_dir=conversation.working_dir
+              )
+            )
         )
       ORDER BY queued.queue_seq
       LIMIT 1
@@ -947,6 +1019,17 @@ export class AppDatabase {
 
   listActiveJobsForConversation(conversationId: string): JobRow[] {
     return this.sqlite.prepare("SELECT * FROM jobs WHERE conversation_id=? AND status IN ('queued','running') ORDER BY queue_seq,id").all(conversationId) as JobRow[];
+  }
+
+  listActiveJobsForWorkingDir(workingDir: string): JobRow[] {
+    return this.sqlite.prepare(`
+      SELECT job.* FROM jobs job
+      JOIN conversations conversation ON conversation.id=job.conversation_id
+      WHERE job.status IN ('queued','running')
+        AND conversation.deleted_at IS NULL
+        AND conversation.working_dir=?
+      ORDER BY job.queue_seq,job.id
+    `).all(workingDir) as JobRow[];
   }
 
   getLatestJobForConversation(conversationId: string): JobRow | undefined {

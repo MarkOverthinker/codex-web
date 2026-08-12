@@ -9,6 +9,7 @@ export type TenantWorkerRunRequest = {
   pythonRuntimeRoot: string;
   tenantRoot: string;
   workspace: string;
+  workingDir?: string;
   runtimeRoot: string;
   codexHome: string;
   library: string;

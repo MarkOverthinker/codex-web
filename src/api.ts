@@ -3,7 +3,10 @@ export const BASE_PATH = "/codex-web";
 export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; voiceEnabled?: boolean };
 export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
+  working_dir: string | null;
 };
+export type WorkingDirFavorite = { path: string; label: string; added_at: string };
+export type WorkingDirSettings = { enabled: boolean; favorites: WorkingDirFavorite[]; defaultWorkingDir: string | null };
 export type WorkFile = {
   id: string; original_name: string; relative_path: string; mime_type: string; size: number; kind: "upload" | "output";
 };
@@ -127,7 +130,15 @@ export const api = {
   updateChatFontSize: (chatFontSize: number) => request<{ chatFontSize: number }>("/user-settings/chat-font-size", {
     method: "PUT", body: JSON.stringify({ chatFontSize }),
   }),
-  createConversation: () => request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST" }),
+  workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
+  updateFavoriteWorkingDir: (payload: { action: "add" | "remove" | "rename"; path?: string; label?: string }) =>
+    request<{ settings: WorkingDirSettings }>("/working-dirs/favorites", { method: "PUT", body: JSON.stringify(payload) }),
+  setDefaultWorkingDir: (path: string | null) =>
+    request<{ settings: WorkingDirSettings }>("/working-dirs/default", { method: "PUT", body: JSON.stringify({ path }) }),
+  createConversation: (workingDir?: string | null) =>
+    request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST", body: JSON.stringify({ workingDir }) }),
+  updateConversationWorkingDir: (id: string, workingDir: string | null) =>
+    request<{ conversation: Conversation }>(`/conversations/${id}/working-dir`, { method: "PUT", body: JSON.stringify({ workingDir }) }),
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
   conversationMessages: (id: string, before: string) => request<ConversationMessagesPage>(
     `/conversations/${id}/messages?before=${encodeURIComponent(before)}`,

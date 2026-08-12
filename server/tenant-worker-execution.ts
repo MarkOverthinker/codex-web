@@ -30,7 +30,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
   }
   return startAppServerTurn({
     executablePath: process.env.CODEX_RUNTIME_PATH || undefined,
-    cwd: request.workspace,
+    cwd: request.workingDir ?? request.workspace,
     env: codexEnvironment,
     threadId: request.codexThreadId,
     prompt: request.effectivePrompt,
@@ -92,6 +92,14 @@ export function validateTenantWorkerRequest(request: TenantWorkerRunRequest, exp
   ];
   for (const [actual, expected] of exactPaths) {
     if (path.resolve(actual) !== path.resolve(expected)) throw new Error("Worker path mismatch");
+  }
+  if (request.workingDir !== undefined) {
+    if (!request.hostMode) throw new Error("Worker working dir requires host mode");
+    if (!request.workingDir || !path.isAbsolute(request.workingDir)) throw new Error("Invalid worker working dir");
+    const workingDir = path.resolve(request.workingDir);
+    if (workingDir === tenantRoot || workingDir.startsWith(`${tenantRoot}${path.sep}`)) {
+      throw new Error("Worker working dir escapes tenant boundary");
+    }
   }
   for (const imagePath of request.imagePaths) {
     const resolved = path.resolve(imagePath);

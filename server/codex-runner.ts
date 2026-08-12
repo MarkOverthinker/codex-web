@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import type { AppConfig } from "./config.js";
 import { AppDatabase, type FileRow } from "./db.js";
-import { chownTenantStorageIfNeeded, codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, newId, normalizeStoredRelativePath, persistDeliverable, resolveInside, snapshotDeliverables } from "./paths.js";
+import { assertHostWorkingDirAccessible, chownTenantStorageIfNeeded, codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, newId, normalizeStoredRelativePath, persistDeliverable, resolveHostWorkingDir, resolveInside, snapshotDeliverables } from "./paths.js";
 import { cleanupJobRuntime, prepareJobRuntime, resolvePythonRuntime } from "./python-runtime.js";
 import { assessTaskPolicy } from "./task-policy.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -152,6 +152,12 @@ export class CodexRunner {
         chownTenantStorageIfNeeded(tenant.root, hostTenant.uid, hostTenant.gid);
         chownTenantStorageIfNeeded(workspace, hostTenant.uid, hostTenant.gid);
       }
+      let workingDir: string | undefined;
+      if (conversation.working_dir) {
+        if (!hostTenant) throw new Error("该会话选择了宿主工作目录，但当前部署不是 host 模式或用户没有对应的系统账户。");
+        workingDir = resolveHostWorkingDir(conversation.working_dir, { dataRoot: this.config.dataRoot, tenantRoot: tenant.root, workspaceRoot: this.config.workspaceRoot });
+        assertHostWorkingDirAccessible(workingDir, hostTenant.username);
+      }
       const before = await snapshotDeliverables(workspace);
       runtimeRoot = prepareJobRuntime(workspace, jobId, hostTenant ? { uid: hostTenant.uid, gid: hostTenant.gid } : undefined);
       const pythonRuntime = resolvePythonRuntime(this.config);
@@ -174,6 +180,7 @@ export class CodexRunner {
           ? "共享 Python 尚未初始化；如本轮需要 Python 或第三方包，请说明需要管理员先初始化，勿修改系统 Python。"
           : undefined,
         isolationReason: taskPolicy.isolated ? taskPolicy.reason : undefined,
+        workingDirContext: workingDir ? { path: workingDir, workspace } : undefined,
       });
       const request: TenantWorkerRunRequest = {
         jobId,
@@ -183,6 +190,7 @@ export class CodexRunner {
         pythonRuntimeRoot: this.config.pythonRuntimeRoot,
         tenantRoot: tenant.root,
         workspace,
+        workingDir,
         runtimeRoot,
         codexHome: hostTenant?.codexHome ?? tenant.codexHome,
         library: tenant.library,
@@ -290,7 +298,7 @@ export class CodexRunner {
     return uploads.map((file) => ({
       name: file.original_name,
       mimeType: file.mime_type,
-      path: normalizeStoredRelativePath(path.relative(workspace, resolveInside(workspace, file.relative_path))),
+      path: normalizeStoredRelativePath(resolveInside(workspace, file.relative_path)),
     }));
   }
 
