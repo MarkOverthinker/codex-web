@@ -38,6 +38,7 @@ import type { Conversation, WorkFile } from "../src/api.js";
 import { buildAgentSteerPrompt, buildAgentTurnPrompt } from "../server/agent-context.js";
 import { buildProcessJournal } from "../src/process-journal.js";
 import { collectReasoningSteps } from "../src/reasoning-steps.js";
+import { formatElapsed, taskElapsedSeconds } from "../src/task-timing.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES, buildOptionalCapabilityConfig, detectOptionalAgentCapabilities } from "../server/optional-capabilities.js";
 import { USER_CANCELLED_TASK_MARKER, latestUserCancellationContext } from "../server/cancellation-summary.js";
 import { formatRolloutBytes, ROLLOUT_WARNING_BYTES, shouldWarnAboutRollout } from "../src/rollout-capacity.js";
@@ -351,6 +352,28 @@ test("completed reasoning panel collects incremental steps and legacy details", 
   assert.match(appSource, /思考过程/);
   assert.match(styles, /\.reasoning-panel \{/);
   assert.match(styles, /\.reasoning-step-detail/);
+});
+
+test("task timing shows live elapsed time and completed total duration", () => {
+  assert.equal(formatElapsed(0), "0 秒");
+  assert.equal(formatElapsed(45), "45 秒");
+  assert.equal(formatElapsed(125), "2 分 05 秒");
+  const activities = [
+    { seq: 1, kind: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" },
+    { seq: 2, kind: "status", label: "正在登记结果文件", created_at: "2026-08-12T00:02:05.000Z" },
+    { seq: 3, type: "done", status: "completed", created_at: "2026-08-12T00:02:05.000Z" },
+  ];
+  assert.equal(taskElapsedSeconds(activities), 125);
+  assert.equal(taskElapsedSeconds([{ seq: 1, kind: "status", status: "running", created_at: "2026-08-12T00:00:00.000Z" }]), null);
+  assert.equal(taskElapsedSeconds([]), null);
+
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(appSource, /reasoningMessageIndex/);
+  assert.match(appSource, /reasoningAbove/);
+  assert.match(appSource, /总用时/);
+  assert.match(appSource, /已用时/);
+  assert.match(styles, /\.process-timer/);
 });
 
 test("running progress expands inline without a nested vertical scroller", () => {

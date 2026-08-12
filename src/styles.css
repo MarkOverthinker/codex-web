@@ -549,6 +549,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .activity-card { width: min(680px, 100%); padding: 15px 16px 14px; border: 1px solid #d5d9e8; border-radius: 5px 14px 14px 14px; background: #f7f8fc; box-shadow: 0 7px 22px rgba(15, 17, 32, .045); }
 .activity-title { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: #29356f; font-size: 12px; }
 .activity-title > span { margin-left: auto; color: #9599aa; font-size: 10px; font-weight: 500; }
+.process-timer { color: #6570a5; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .process-section-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 1px 6px; color: #555b71; font-size: 10px; }
 .process-section-title > span { color: #999dac; font-weight: 600; }
 .process-plan { margin-bottom: 12px; }
@@ -903,6 +904,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 :root[data-theme="dark"] .activity-line { color: #bec0c7; }
 :root[data-theme="dark"] .technical-detail { color: #a2a4ac; }
 :root[data-theme="dark"] .technical-detail code { border-color: #43454d; color: #c7c8ce; background: #1d1e22; }
+:root[data-theme="dark"] .process-timer { color: #aeb9f5; }
 :root[data-theme="dark"] .reasoning-panel { border-color: #41434b; background: #27282d; box-shadow: 0 7px 22px rgba(0, 0, 0, .14); }
 :root[data-theme="dark"] .reasoning-panel > summary { color: #bdc6fa; }
 :root[data-theme="dark"] .reasoning-panel[open] > summary { border-bottom-color: #41434b; }
