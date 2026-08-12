@@ -180,6 +180,38 @@ otherwise the new service fails to bind the port (the unit restarts and binds
 as soon as the port frees up). `TimeoutStopSec=1800` preserves the graceful
 30-minute drain for in-flight Codex jobs on shutdown/restart.
 
+### On-demand rebuild and restart (host mode)
+
+The checkout owner can trigger a rebuild and restart without switching to
+root. A small root service listens on loopback port `37822`, runs
+`npm run build` in the checkout, and only restarts `codex-web.service` after a
+successful build. The request is authenticated with a random token generated
+at install time.
+
+Install it once as root:
+
+```bash
+sudo ./deploy/install-codex-web-reloader.sh
+```
+
+The installer reads `WorkingDirectory` and the service `PATH` from
+`/etc/systemd/system/codex-web.service`, writes the token and service
+configuration under `/etc/codex-web-reloader`, installs
+`codex-web-reloader.service`, and starts it. Afterwards the checkout owner
+runs:
+
+```bash
+npm run reload
+```
+
+The reloader answers `GET /status` and authenticated `POST /restart` on
+`http://127.0.0.1:37822`. It returns HTTP 409 while a rebuild/restart is
+already running, and HTTP 500 with the build log when compilation fails
+(leaving the running service untouched). The token file
+`/etc/codex-web-reloader/token` is readable only by root and the checkout
+owner. To uninstall, stop and disable the unit and remove
+`/etc/codex-web-reloader`.
+
 ## Reverse proxy
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
