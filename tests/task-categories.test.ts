@@ -97,6 +97,10 @@ test("custom category groups repeated conversations without mutating settings", 
     hidden: [],
   };
   const originalSettings = structuredClone(settings);
+  Object.freeze(settings.customCategories[0].assignedDirs);
+  Object.freeze(settings.customCategories[0]);
+  Object.freeze(settings.customCategories);
+  Object.freeze(settings);
   const conversations = [
     conversation("custom-a-old", "/tmp/custom-a", "2026-01-01T00:00:00.000Z"),
     conversation("custom-a-new", "/tmp/custom-a", "2026-01-03T00:00:00.000Z"),

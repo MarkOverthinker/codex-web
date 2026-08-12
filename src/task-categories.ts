@@ -129,9 +129,10 @@ function addPendingView(groups: Map<string, PendingView>, view: PendingView): vo
   const existing = groups.get(view.key);
   if (existing) {
     for (const conversation of view.conversations) existing.conversations.push(conversation);
-    for (const dir of view.assignedDirs) {
-      if (!existing.assignedDirs.includes(dir)) existing.assignedDirs.push(dir);
-    }
+    // assignedDirs is category metadata: every view with the same key has the
+    // same directory set. It was copied and de-duplicated when the group was
+    // created, so merging it for every conversation only adds quadratic work.
+    return;
   } else {
     // Pending views are accumulated below, so never retain arrays owned by
     // API settings or callers. In particular, custom categories reuse their
