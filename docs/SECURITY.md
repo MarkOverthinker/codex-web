@@ -3,6 +3,10 @@
 - Keep `.env` private and use a unique password plus a random session secret.
 - Bind the application to loopback and expose it only through an HTTPS reverse proxy.
 - Codex can execute code and modify files inside its tenant workspace. Only upload files you trust and review generated changes.
+- Custom host working directories are accepted only in host mode and never
+  point at Codex Web's own data, tenant, or workspace roots; the worker
+  revalidates the absolute path and the tenant system user's access before
+  starting.
 - The container is not a complete security boundary for hostile workloads. Its Codex sandbox requires relaxed seccomp/AppArmor settings for user namespaces.
 - The container keeps `CHOWN`, `FOWNER`, and `DAC_OVERRIDE` in addition to
   `SETUID`/`SETGID`/`KILL` because startup must migrate tenant volume

@@ -12,10 +12,10 @@ import { CodexRunner, extractLeakedAutoTitleAnswer } from "./codex-runner.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
-import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow } from "./db.js";
+import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow, type WorkingDirectoryFavorite } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
-import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveInside, safeUploadName, type TenantPaths } from "./paths.js";
+import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { discoverImportableSessions, importSessionThread } from "./session-importer.js";
@@ -55,6 +55,25 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     const host = config.hostMode ? hostTenantFor(config, db, userId) : null;
     if (host) chownTenantStorageIfNeeded(workspace, host.uid, host.gid);
     return workspace;
+  }
+
+  function workingDirSettingsFor(userId: string): { enabled: boolean; favorites: WorkingDirectoryFavorite[]; defaultWorkingDir: string | null } {
+    const host = config.hostMode ? hostTenantFor(config, db, userId) : null;
+    return {
+      enabled: Boolean(host),
+      favorites: db.getFavoriteWorkingDirectories(userId),
+      defaultWorkingDir: db.getDefaultWorkingDir(userId),
+    };
+  }
+
+  function requireHostWorkingTenant(session: SessionRow) {
+    if (!config.hostMode) return null;
+    return hostTenantFor(config, db, session.user_id);
+  }
+
+  function resolveSubmittedWorkingDir(raw: unknown): string {
+    if (typeof raw !== "string" || !raw.trim()) throw new Error("工作目录必须是绝对路径。");
+    return resolveHostWorkingDir(raw, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot });
   }
 
   function userAgentSelection(userId: string, options: AgentOptions = optionsForUser(userId)): AgentSelection {
@@ -454,12 +473,127 @@ export function createApp(overrides: Partial<AppConfig> = {}) {
     return res.json({ chatFontSize });
   });
 
-  api.post("/conversations", (_req, res) => {
+  api.get("/working-dirs", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    return res.json({ settings: workingDirSettingsFor(session.user_id) });
+  });
+
+  api.put("/working-dirs/favorites", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "工作目录收藏仅支持已映射系统账户的 host 模式。" });
+    }
+    const action = req.body?.action;
+    if (!["add", "remove", "rename"].includes(action)) return res.status(400).json({ error: "收藏操作无效。" });
+    let target: string;
+    try {
+      target = action === "add"
+        ? resolveSubmittedWorkingDir(req.body?.path)
+        : resolveStoredWorkingDirInput(typeof req.body?.path === "string" ? req.body.path : "");
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" });
+    }
+    const favorites = db.getFavoriteWorkingDirectories(session.user_id);
+    if (action === "add") {
+      const label = typeof req.body?.label === "string" && req.body.label.trim()
+        ? req.body.label.trim().slice(0, 100)
+        : path.basename(target);
+      const existing = favorites.find((favorite) => favorite.path === target);
+      if (existing) {
+        existing.label = label;
+      } else {
+        if (favorites.length >= 50) return res.status(400).json({ error: "最多收藏 50 个目录。" });
+        favorites.unshift({ path: target, label, added_at: new Date().toISOString() });
+      }
+    } else if (action === "remove") {
+      const removed = favorites.filter((favorite) => favorite.path !== target);
+      db.setFavoriteWorkingDirectories(removed, session.user_id);
+      if (db.getDefaultWorkingDir(session.user_id) === target) db.setDefaultWorkingDir(null, session.user_id);
+      return res.json({ settings: workingDirSettingsFor(session.user_id) });
+    } else {
+      const favorite = favorites.find((candidate) => candidate.path === target);
+      if (!favorite) return res.status(404).json({ error: "收藏目录不存在。" });
+      const label = typeof req.body?.label === "string" && req.body.label.trim()
+        ? req.body.label.trim().slice(0, 100)
+        : favorite.label;
+      favorite.label = label;
+    }
+    db.setFavoriteWorkingDirectories(favorites, session.user_id);
+    return res.json({ settings: workingDirSettingsFor(session.user_id) });
+  });
+
+  api.put("/working-dirs/default", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "默认工作目录仅支持已映射系统账户的 host 模式。" });
+    }
+    const raw = req.body?.path;
+    let next: string | null = null;
+    if (raw !== null && raw !== undefined && raw !== "") {
+      let target: string;
+      try { target = resolveSubmittedWorkingDir(raw); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" }); }
+      const exists = db.getFavoriteWorkingDirectories(session.user_id).some((favorite) => favorite.path === target);
+      if (!exists) return res.status(400).json({ error: "请先收藏该目录，再设为默认。" });
+      next = target;
+    }
+    db.setDefaultWorkingDir(next, session.user_id);
+    return res.json({ settings: workingDirSettingsFor(session.user_id) });
+  });
+
+  api.post("/conversations", (req, res) => {
     const session = res.locals.session as SessionRow;
     const id = newId();
+    const rawWorkingDir = req.body?.workingDir;
+    let workingDir: string | null = null;
+    if (rawWorkingDir === undefined) {
+      const storedDefault = requireHostWorkingTenant(session) ? db.getDefaultWorkingDir(session.user_id) : null;
+      if (storedDefault) {
+        try {
+          workingDir = resolveHostWorkingDir(storedDefault, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot });
+        } catch {
+          workingDir = null;
+        }
+      }
+    } else if (rawWorkingDir !== null && rawWorkingDir !== "") {
+      if (!requireHostWorkingTenant(session)) {
+        return res.status(403).json({ error: "自定义工作目录仅支持已映射系统账户的 host 模式。" });
+      }
+      try { workingDir = resolveSubmittedWorkingDir(rawWorkingDir); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" }); }
+    }
     workspaceFor(session.user_id, id);
     const agentSelection = userAgentSelection(session.user_id);
-    res.status(201).json({ conversation: db.createConversation(id, "新任务", agentSelection, session.user_id), agentSelection });
+    res.status(201).json({ conversation: db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir), agentSelection });
+  });
+
+  api.put("/conversations/:id/working-dir", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    if (conversation.archived_at) return res.status(409).json({ error: "会话已归档，请恢复后再修改工作目录。" });
+    if (
+      conversation.status === "running"
+      || db.listActiveJobsForConversation(conversation.id).length > 0
+      || db.listPendingPrompts(conversation.id).length > 0
+      || db.listPendingPrompts(conversation.id, "editing").length > 0
+    ) {
+      return res.status(409).json({ error: "会话仍有运行或待发送任务，请处理完成后再修改工作目录。" });
+    }
+    const raw = req.body?.workingDir;
+    let workingDir: string | null = null;
+    if (raw !== null && raw !== undefined && raw !== "") {
+      if (!requireHostWorkingTenant(session)) {
+        return res.status(403).json({ error: "自定义工作目录仅支持已映射系统账户的 host 模式。" });
+      }
+      try { workingDir = resolveSubmittedWorkingDir(raw); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" }); }
+    }
+    if (workingDir && db.listActiveJobsForWorkingDir(workingDir).length > 0) {
+      return res.status(409).json({ error: "该工作目录已有其他会话正在排队或运行任务，请处理完成后再切换。" });
+    }
+    db.updateConversation(conversation.id, { workingDir });
+    return res.json({ conversation: db.getConversationForUser(conversation.id, session.user_id) });
   });
 
   api.post("/conversations/:id/archive", (req, res) => {

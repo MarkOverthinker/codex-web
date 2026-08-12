@@ -209,6 +209,93 @@ export function normalizeStoredRelativePath(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
 }
 
+/**
+ * Resolve a user-supplied host directory to its canonical absolute path.
+ * Host mode grants the tenant machine user danger-full-access, so the only
+ * paths that must be rejected are the application's own managed storage roots
+ * and non-directories. The caller is responsible for enforcing host mode.
+ */
+export function resolveHostWorkingDir(input: string, options: { dataRoot: string; tenantRoot: string; workspaceRoot?: string }): string {
+  if (typeof input !== "string" || !input.trim()) throw new Error("请输入有效的工作目录绝对路径。");
+  const raw = input.trim();
+  if (!path.isAbsolute(raw)) throw new Error("工作目录必须是绝对路径。");
+  const resolved = path.resolve(raw);
+  if (resolved === path.parse(resolved).root) throw new Error("不能选择文件系统根目录作为工作目录。");
+  let canonical: string;
+  try {
+    canonical = fs.realpathSync(resolved);
+  } catch {
+    throw new Error("工作目录不存在或当前无法访问。");
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(canonical);
+  } catch {
+    throw new Error("工作目录不存在或当前无法访问。");
+  }
+  if (!stat.isDirectory()) throw new Error("工作目录必须是一个目录。");
+  const forbiddenRoots = [options.dataRoot, options.tenantRoot, options.workspaceRoot].filter((root): root is string => Boolean(root));
+  for (const candidateRoot of forbiddenRoots) {
+    const resolvedRoot = path.resolve(candidateRoot);
+    const forbiddenRoot = (() => {
+      try {
+        return fs.realpathSync(resolvedRoot);
+      } catch {
+        return resolvedRoot;
+      }
+    })();
+    if (canonical === forbiddenRoot || canonical.startsWith(`${forbiddenRoot}${path.sep}`)) {
+      throw new Error("不能选择 Codex Web 自身的租户或数据目录作为工作目录。");
+    }
+  }
+  return canonical;
+}
+
+/**
+ * Resolve a management-path input without requiring it to still exist. This is
+ * used when renaming or removing a stale favorite: a directory may have been
+ * deleted since it was saved, but the user must still be able to clean it up.
+ */
+export function resolveStoredWorkingDirInput(input: string): string {
+  if (typeof input !== "string" || !input.trim()) throw new Error("请输入有效的工作目录绝对路径。");
+  const raw = input.trim();
+  if (!path.isAbsolute(raw)) throw new Error("工作目录必须是绝对路径。");
+  const resolved = path.resolve(raw);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/**
+ * Verify the mapped tenant user can enter and write the selected directory.
+ * When the web service runs as root, fs.accessSync would always succeed for
+ * the root process, so the check must run as the tenant user.
+ */
+export function assertHostWorkingDirAccessible(workingDir: string, username?: string): void {
+  if (process.platform === "win32" || process.getuid?.() !== 0) {
+    fs.accessSync(workingDir, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+    return;
+  }
+  if (username) {
+    try {
+      // GNU coreutils test accepts only one unary operator per invocation, so
+      // "test -r -w -x DIR" is a syntax error that always fails. Chain three
+      // separate tests through sh to check read, write, and traverse access.
+      execFileSync("runuser", ["-u", username, "--", "sh", "-c", 'test -r "$1" && test -w "$1" && test -x "$1"', "sh", workingDir], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      return;
+    } catch (error) {
+      // Preserve the underlying probe failure so permission problems can be
+      // diagnosed instead of being hidden behind a generic message.
+      const stderr = error instanceof Error && "stderr" in error ? String((error as { stderr?: unknown }).stderr ?? "").trim() : "";
+      const detail = stderr ? `（${stderr}）` : "";
+      throw new Error(`无法验证工作目录对当前系统用户可读写，请检查目录权限。${detail}`);
+    }
+  }
+  throw new Error("无法验证工作目录对当前系统用户可读写，请检查目录权限。");
+}
+
 export function removeWorkspace(workspaceRoot: string, conversationId: string): void {
   const root = ensureWorkspace(workspaceRoot, conversationId);
   const expectedParent = path.resolve(workspaceRoot);

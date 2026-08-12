@@ -212,6 +212,15 @@ system users (copying a `.codex` template) and reuses existing users' own
 `~/.codex`. See [Host mode](docs/DEPLOYMENT.md#host-mode-machine-users-as-tenants)
 for setup and the security trade-offs.
 
+In host mode, a new task can choose its Codex working directory: pick one of
+your saved favorite directories or type any absolute path the machine user can
+access. Favorites and a per-user default are stored in the web database, and
+each conversation remembers its own directory. Attachments, generated outputs
+and temporary runtime files still live in the conversation's own workspace;
+deleting a conversation never removes the selected host directory. Tasks that
+share one directory run one at a time to avoid conflicting writes. This
+feature is deliberately unavailable in the isolated tenant deployment.
+
 ## Optional voice transcription
 
 Set `DASHSCOPE_API_KEY` and an HTTPS `PUBLIC_BASE_URL` in `.env` to enable the microphone button. The default model is `qwen3.5-omni-plus`; you can override it with `DASHSCOPE_ASR_MODEL`. Microphone access requires a secure browser context.

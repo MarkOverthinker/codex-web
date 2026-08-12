@@ -28,10 +28,18 @@ type TurnPromptOptions = {
   interruptedContext?: string;
   isolationReason?: string;
   runtimeWarning?: string;
+  workingDirContext?: { path: string; workspace: string };
 };
 
 export function buildAgentTurnPrompt(options: TurnPromptOptions): string {
   const parts = [options.userPrompt.trim() || "请根据本轮附件完成用户要求，并说明结果。"];
+  if (options.workingDirContext) {
+    parts.push(
+      `本任务使用宿主项目目录 ${options.workingDirContext.path} 作为工作目录，请优先遵循该项目自身的 AGENTS.md 与仓库约定。`
+      + `对话附件仍然位于 ${options.workingDirContext.workspace}/uploads；最终交付物请写入 ${options.workingDirContext.workspace}/outputs。`
+      + `不要修改该目录之外的无关项目，也不要删除或重置该目录（包括其中的 .git）。`,
+    );
+  }
   if (options.attachments.length > 0) {
     parts.push(`本轮附件：\n${options.attachments.map((file) => `- ${file.name}: ${file.path}`).join("\n")}`);
   }

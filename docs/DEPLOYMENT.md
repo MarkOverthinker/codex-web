@@ -126,6 +126,31 @@ Security trade-off: this mode runs the web service as root and gives each
 tenant full host access under its own Unix identity. Only add users you trust;
 this is not a boundary for hostile workloads.
 
+### Custom working directory (host mode)
+
+In host mode, a new task can choose the Codex working directory. Click the
+arrow next to **新建任务** to pick a saved favorite or type any absolute path
+the machine user can access; a **目录** menu in the conversation header
+changes the directory later. Each user has a favorite list and an optional
+default directory, stored in the web database (`user_settings`); each
+conversation remembers its own directory (`conversations.working_dir`).
+
+Behavior and limits:
+
+- Attachments, `outputs/` deliverables, and the temporary runtime area stay in
+  the conversation's own workspace; only the Codex `cwd` moves to the selected
+  host directory. Deliverable persistence and deletion semantics are
+  unchanged.
+- The directory must exist, be an absolute path, and must not point at the
+  application's own `DATA_ROOT`, `TENANT_ROOT`, or `WORKSPACE_ROOT`.
+- Deleting or archiving a conversation never removes the selected host
+  directory, and the application never overwrites `AGENTS.md` files inside it.
+- Tasks that share the same working directory run one at a time; the next task
+  waits until the current one finishes, avoiding concurrent writes to the
+  same repository.
+- The feature is unavailable in the isolated tenant deployment (non-host
+  mode); there each conversation keeps its own workspace.
+
 ### Systemd autostart (host mode)
 
 The repository ships a systemd unit template at

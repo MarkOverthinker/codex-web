@@ -12,8 +12,9 @@ import { createApp, migrateExistingOutputFiles } from "../server/app.js";
 import { assertProductionConfig, loadConfig } from "../server/config.js";
 import { AUTO_TITLE_OUTPUT_SCHEMA, extractLeakedAutoTitleAnswer, parseAutoTitleResponse, redactBrandForDisplay, summarizeEvent } from "../server/codex-runner.js";
 import { AppDatabase, LEGACY_USER_ID } from "../server/db.js";
+import { resolveSystemUser } from "../server/host-mode.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection } from "../server/model-options.js";
-import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, ensureWorkspace, isDeliverablePath, isPersistedDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName, persistDeliverable, resolveInside, safeUploadName } from "../server/paths.js";
+import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, ensureWorkspace, isDeliverablePath, isPersistedDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName, persistDeliverable, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName } from "../server/paths.js";
 import { buildShellEnvironment, cleanupJobRuntime, prepareJobRuntime } from "../server/python-runtime.js";
 import { assessTaskPolicy } from "../server/task-policy.js";
 import { listTenantIdentities, tenantIdentityForUser } from "../server/tenant-identities.js";
@@ -120,6 +121,23 @@ test("switching conversations hides stale detail until the selected task loads",
   assert.match(appSource, /\(!selectedId \|\| \(currentDetail && !currentDetail\.conversation\.archived_at\)\) && <Composer/);
   assert.match(appSource, /role="status" aria-live="polite"/);
   assert.match(styles, /\.conversation-loading \{[^}]*place-content: center;/);
+});
+test("host working directory picker exposes favorites, manual paths, and per-conversation overrides", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(apiSource, /working_dir: string \| null/);
+  assert.match(apiSource, /workingDirs: \(\) => request<\{ settings: WorkingDirSettings \}>\(\"\/working-dirs\"\)/);
+  assert.match(apiSource, /updateFavoriteWorkingDir:/);
+  assert.match(apiSource, /createConversation: \(workingDir\?: string \| null\)/);
+  assert.match(appSource, /className="new-task-dir-panel"/);
+  assert.match(appSource, /管理收藏…/);
+  assert.match(appSource, /或手动输入绝对路径/);
+  assert.match(appSource, /className="chat-working-dir"/);
+  assert.match(styles, /\.new-task-dir-panel \{/);
+  assert.match(styles, /\.working-dir-manager \{/);
+  assert.match(styles, /\.chat-working-dir \{/);
+  assert.match(styles, /:root\[data-theme="dark"\] \.working-dir-manager/);
 });
 test("closed mobile sidebar is not painted as an offscreen shadow layer", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
@@ -388,6 +406,31 @@ test("path confinement rejects traversal", () => {
   assert.equal(safe.displayName, "bad_name_.pptx");
 });
 
+test("host working directory validation canonicalizes and rejects managed roots", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-working-dir-test-"));
+  const dataRoot = path.join(root, "data");
+  const tenantRoot = path.join(root, "tenants");
+  const project = path.join(root, "projects", "alpha");
+  const regularFile = path.join(root, "file.txt");
+  fs.mkdirSync(dataRoot, { recursive: true });
+  fs.mkdirSync(tenantRoot, { recursive: true });
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(regularFile, "x", "utf8");
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  assert.equal(resolveHostWorkingDir(project, { dataRoot, tenantRoot }), fs.realpathSync(project));
+  assert.throws(() => resolveHostWorkingDir("relative/project", { dataRoot, tenantRoot }), /绝对路径/);
+  assert.throws(() => resolveHostWorkingDir(path.join(root, "missing"), { dataRoot, tenantRoot }), /不存在/);
+  assert.throws(() => resolveHostWorkingDir(regularFile, { dataRoot, tenantRoot }), /目录/);
+  assert.throws(() => resolveHostWorkingDir(dataRoot, { dataRoot, tenantRoot }), /租户或数据目录/);
+  assert.throws(() => resolveHostWorkingDir(tenantRoot, { dataRoot, tenantRoot }), /租户或数据目录/);
+  assert.throws(() => resolveHostWorkingDir(path.parse(root).root, { dataRoot, tenantRoot }), /根目录/);
+
+  const stale = path.join(root, "deleted-project");
+  assert.equal(resolveStoredWorkingDirInput(stale), stale);
+  assert.throws(() => resolveStoredWorkingDirInput("relative"), /绝对路径/);
+});
+
 test("the owner tenant has a dedicated Unix identity and workers reject cross-tenant paths", () => {
   const identities = listTenantIdentities();
   assert.deepEqual(identities.map((identity) => identity.label), ["owner"]);
@@ -421,6 +464,21 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
   assert.doesNotThrow(() => validateTenantWorkerRequest(request, owner.userId, tenantRoot));
   assert.throws(() => validateTenantWorkerRequest({ ...request, tenantRoot: path.join(os.tmpdir(), "other") }, owner.userId, tenantRoot), /path mismatch/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, imagePaths: [path.join(tenantRoot, "..", "secret.png")] }, owner.userId, tenantRoot), /escapes workspace/);
+  assert.throws(
+    () => validateTenantWorkerRequest({ ...request, workingDir: process.cwd() }, owner.userId, tenantRoot),
+    /requires host mode/,
+  );
+  assert.doesNotThrow(
+    () => validateTenantWorkerRequest({ ...request, workingDir: process.cwd(), hostMode: true }, owner.userId, tenantRoot),
+  );
+  assert.throws(
+    () => validateTenantWorkerRequest({ ...request, workingDir: "relative/project", hostMode: true }, owner.userId, tenantRoot),
+    /Invalid worker working dir/,
+  );
+  assert.throws(
+    () => validateTenantWorkerRequest({ ...request, workingDir: path.join(tenantRoot, "projects", "shared"), hostMode: true }, owner.userId, tenantRoot),
+    /escapes tenant boundary/,
+  );
   const executionSource = fs.readFileSync(path.join(process.cwd(), "server", "tenant-worker-execution.ts"), "utf8");
   const composeSource = fs.readFileSync(path.join(process.cwd(), "compose.yaml"), "utf8");
   assert.match(executionSource, /executablePath: process\.env\.CODEX_RUNTIME_PATH/);
@@ -624,6 +682,52 @@ test("legacy databases gain durable selections and preserve existing titles", (c
   assert.equal(reopened.getConversation("legacy")?.reasoning_effort, "low");
 });
 
+test("working directory favorites, defaults, and conversation overrides persist in settings", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-working-dir-db-test-"));
+  const db = new AppDatabase(root);
+  context.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  assert.deepEqual(db.getFavoriteWorkingDirectories(), []);
+  const favorite = { path: "/srv/projects/alpha", label: "Alpha", added_at: new Date().toISOString() };
+  db.setFavoriteWorkingDirectories([favorite]);
+  assert.deepEqual(db.getFavoriteWorkingDirectories(), [favorite]);
+  assert.equal(db.getDefaultWorkingDir(), null);
+  db.setDefaultWorkingDir(favorite.path);
+  assert.equal(db.getDefaultWorkingDir(), favorite.path);
+  db.setDefaultWorkingDir(null);
+  assert.equal(db.getDefaultWorkingDir(), null);
+
+  const conversationId = crypto.randomUUID();
+  const stored = db.createConversation(conversationId, "工作目录", undefined, LEGACY_USER_ID, favorite.path);
+  assert.equal(stored.working_dir, favorite.path);
+  assert.equal(db.getConversation(conversationId)?.working_dir, favorite.path);
+  db.updateConversation(conversationId, { workingDir: null });
+  assert.equal(db.getConversation(conversationId)?.working_dir, null);
+});
+
+test("shared host working dirs serialize queued jobs across conversations", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-working-dir-queue-test-"));
+  const db = new AppDatabase(root);
+  context.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const shared = path.join(root, "shared-project");
+  fs.mkdirSync(shared, { recursive: true });
+  const first = crypto.randomUUID();
+  const second = crypto.randomUUID();
+  db.createConversation(first, "first", undefined, LEGACY_USER_ID, shared);
+  db.createConversation(second, "second", undefined, LEGACY_USER_ID, shared);
+  const runningJob = crypto.randomUUID();
+  const queuedJob = crypto.randomUUID();
+  db.createJob(runningJob, first);
+  db.updateJob(runningJob, "running");
+  db.createJob(queuedJob, second);
+  assert.equal(db.getNextRunnableQueuedJob()?.id, undefined);
+  db.finishJob(runningJob, first, "completed");
+  assert.equal(db.getNextRunnableQueuedJob()?.id, queuedJob);
+  db.finishJob(queuedJob, second, "completed");
+  assert.equal(db.getNextRunnableQueuedJob(), undefined);
+});
+
 test("only finished files under outputs are deliverables", () => {
   assert.equal(isDeliverablePath("outputs/ConditionType 统计结果.xlsx"), true);
   assert.equal(isDeliverablePath("outputs/reports/final.pdf"), true);
@@ -758,7 +862,16 @@ test("single-user login and CSRF protection", async (context) => {
   assert.equal(created.body.conversation.title, "新任务");
   assert.equal(created.body.conversation.title_source, "default");
   assert.equal(created.body.conversation.has_unread_result, 0);
+  assert.equal(created.body.conversation.working_dir, null);
   assert.deepEqual(created.body.agentSelection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+  const workingDirSettings = await agent.get("/codex-web/api/working-dirs").expect(200);
+  assert.equal(workingDirSettings.body.settings.enabled, false);
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ action: "add", path: process.cwd() }).expect(403);
+  await agent.post("/codex-web/api/conversations")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ workingDir: process.cwd() }).expect(403);
   await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/agent-selection`)
     .set("X-CSRF-Token", login.body.csrfToken)
     .send({ model: "gpt-5.6-luna", reasoningEffort: "low" }).expect(200);
@@ -843,6 +956,100 @@ test("host mode reports unconfigured tenants and blocks task sends until ~/.code
   const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
   await agent.post(`/codex-web/api/conversations/${created.body.conversation.id}/messages`)
     .set("X-CSRF-Token", csrf).field("message", "hello").expect(409);
+});
+
+test("host mode persists favorite working directories and applies them to new conversations", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-working-dir-api-test-"));
+  const username = process.env.USER || process.env.LOGNAME || "root";
+  assert.ok(resolveSystemUser(username), `expected the current machine user ${username} to resolve`);
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username,
+    passwordHash: bcrypt.hashSync("WorkingDir-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: true,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username, password: "WorkingDir-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const settings = await agent.get("/codex-web/api/working-dirs").expect(200);
+  assert.equal(settings.body.settings.enabled, true);
+
+  const project = path.join(root, "projects", "web-project");
+  fs.mkdirSync(project, { recursive: true });
+  const canonicalProject = fs.realpathSync(project);
+  const added = await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "add", path: project, label: "Web 项目" }).expect(200);
+  assert.equal(added.body.settings.favorites.length, 1);
+  assert.equal(added.body.settings.favorites[0].path, canonicalProject);
+  assert.equal(added.body.settings.favorites[0].label, "Web 项目");
+
+  const stale = path.join(root, "projects", "stale");
+  fs.mkdirSync(stale, { recursive: true });
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "add", path: stale }).expect(200);
+  fs.rmSync(stale, { recursive: true, force: true });
+  const removedStale = await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "remove", path: stale }).expect(200);
+  assert.equal(removedStale.body.settings.favorites.length, 1);
+
+  await agent.put("/codex-web/api/working-dirs/default")
+    .set("X-CSRF-Token", csrf)
+    .send({ path: project }).expect(200);
+  const defaulted = await agent.get("/codex-web/api/working-dirs").expect(200);
+  assert.equal(defaulted.body.settings.defaultWorkingDir, canonicalProject);
+
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  assert.equal(created.body.conversation.working_dir, canonicalProject);
+  const custom = await agent.post("/codex-web/api/conversations")
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project }).expect(201);
+  assert.equal(custom.body.conversation.working_dir, canonicalProject);
+  await agent.post("/codex-web/api/conversations")
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: "relative/project" }).expect(400);
+
+  await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: null }).expect(200);
+  assert.equal(
+    (await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200)).body.conversation.working_dir,
+    null,
+  );
+
+  const blocker = await agent.post("/codex-web/api/conversations")
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project }).expect(201);
+  const blockerJob = crypto.randomUUID();
+  instance.db.createJob(blockerJob, blocker.body.conversation.id);
+  instance.db.updateJob(blockerJob, "running");
+  instance.db.updateConversation(blocker.body.conversation.id, { status: "running" });
+  await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project }).expect(409);
+  instance.db.finishJob(blockerJob, blocker.body.conversation.id, "completed");
+
+  await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/working-dir`)
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project }).expect(200);
+  assert.equal(
+    (await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200)).body.conversation.working_dir,
+    canonicalProject,
+  );
+
+  await agent.put("/codex-web/api/working-dirs/default")
+    .set("X-CSRF-Token", csrf)
+    .send({ path: null }).expect(200);
+  const clearedDefault = await agent.get("/codex-web/api/working-dirs").expect(200);
+  assert.equal(clearedDefault.body.settings.defaultWorkingDir, null);
 });
 
 test("quoted selections stay outside the visible message body and survive the pending queue", async (context) => {

@@ -7,7 +7,7 @@ import {
   CornerUpLeft, GripVertical, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Plus, Search, Settings2, Square, Sun,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile } from "./api";
+import { api, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type PendingPrompt, type ReasoningEffort, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import { isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
@@ -122,6 +122,15 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [selectedSessionThreadIds, setSelectedSessionThreadIds] = useState<ReadonlySet<string>>(new Set());
   const [chatFontSize, setChatFontSize] = useState(() => normalizeChatFontSize(session.chatFontSize, CHAT_FONT_SIZE_DEFAULT));
   const [fontSizeSaving, setFontSizeSaving] = useState(false);
+  const [workingDirSettings, setWorkingDirSettings] = useState<WorkingDirSettings | null>(null);
+  const [newTaskDirPanelOpen, setNewTaskDirPanelOpen] = useState(false);
+  const [workingDirManagerOpen, setWorkingDirManagerOpen] = useState(false);
+  const [workingDirSaving, setWorkingDirSaving] = useState(false);
+  const [manualWorkingDir, setManualWorkingDir] = useState("");
+  const [favoritePathInput, setFavoritePathInput] = useState("");
+  const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
+  const [editingFavoriteLabel, setEditingFavoriteLabel] = useState<string | null>(null);
+  const [editingFavoriteLabelValue, setEditingFavoriteLabelValue] = useState("");
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -144,6 +153,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const draftMutationGenerationRef = useRef(new Map<string, number>());
   const draftSaveTimerRef = useRef<number | null>(null);
   const draftSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const newTaskDirPanelRef = useRef<HTMLDivElement>(null);
   selectedIdRef.current = selectedId;
   editingPendingRef.current = editingPending;
   inputRef.current = input;
@@ -303,7 +313,17 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         setReasoningEffort(options.selection.reasoningEffort);
       }
     }).catch((reason) => setError(reason instanceof Error ? reason.message : "模型选项加载失败"));
+    void api.workingDirs().then(({ settings }) => setWorkingDirSettings(settings))
+      .catch(() => setWorkingDirSettings(null));
   }, []);
+  useEffect(() => {
+    if (!newTaskDirPanelOpen) return;
+    function closeFromOutside(event: PointerEvent) {
+      if (!newTaskDirPanelRef.current?.contains(event.target as Node)) setNewTaskDirPanelOpen(false);
+    }
+    window.addEventListener("pointerdown", closeFromOutside);
+    return () => window.removeEventListener("pointerdown", closeFromOutside);
+  }, [newTaskDirPanelOpen]);
   useEffect(() => {
     autoFollowRef.current = true;
     lastScrollTopRef.current = 0;
@@ -503,10 +523,79 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
-  async function newConversation() {
-    setError(""); const result = await api.createConversation();
+  async function newConversation(workingDir?: string | null) {
+    setError(""); const result = await api.createConversation(workingDir);
     setSelectedModel(result.agentSelection.model); setReasoningEffort(result.agentSelection.reasoningEffort);
     await refreshList(); setSelectedId(result.conversation.id);
+    setNewTaskDirPanelOpen(false);
+  }
+
+  async function changeConversationWorkingDir(conversationId: string, workingDir: string | null) {
+    setWorkingDirSaving(true); setError("");
+    try {
+      const result = await api.updateConversationWorkingDir(conversationId, workingDir);
+      syncConversation(result.conversation);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "工作目录修改失败");
+    } finally {
+      setWorkingDirSaving(false);
+    }
+  }
+
+  async function addFavoriteWorkingDir() {
+    const path = favoritePathInput.trim();
+    if (!path || workingDirSaving) return;
+    setWorkingDirSaving(true); setError("");
+    try {
+      const { settings } = await api.updateFavoriteWorkingDir({ action: "add", path, label: favoriteLabelInput.trim() || undefined });
+      setWorkingDirSettings(settings);
+      setFavoritePathInput(""); setFavoriteLabelInput("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "添加收藏失败");
+    } finally {
+      setWorkingDirSaving(false);
+    }
+  }
+
+  async function removeFavoriteWorkingDir(path: string) {
+    if (workingDirSaving) return;
+    setWorkingDirSaving(true); setError("");
+    try {
+      const { settings } = await api.updateFavoriteWorkingDir({ action: "remove", path });
+      setWorkingDirSettings(settings);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除收藏失败");
+    } finally {
+      setWorkingDirSaving(false);
+    }
+  }
+
+  async function saveFavoriteLabel(path: string) {
+    const label = editingFavoriteLabelValue.trim();
+    setEditingFavoriteLabel(null);
+    if (!label || workingDirSaving) return;
+    setWorkingDirSaving(true); setError("");
+    try {
+      const { settings } = await api.updateFavoriteWorkingDir({ action: "rename", path, label });
+      setWorkingDirSettings(settings);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "重命名收藏失败");
+    } finally {
+      setWorkingDirSaving(false);
+    }
+  }
+
+  async function setFavoriteAsDefault(path: string) {
+    if (workingDirSaving) return;
+    setWorkingDirSaving(true); setError("");
+    try {
+      const { settings } = await api.setDefaultWorkingDir(path);
+      setWorkingDirSettings(settings);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "设置默认目录失败");
+    } finally {
+      setWorkingDirSaving(false);
+    }
   }
 
   async function addComposerFiles(incoming: File[]) {
@@ -541,7 +630,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "草稿附件上传失败");
     } finally {
-      const ids = new Set(uploads.map((upload) => upload.id));
+      const ids = new Set<string>(uploads.map((upload) => upload.id));
       setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
     }
   }
@@ -902,7 +991,34 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <div className="wordmark"><span className="brand-mark small"><Zap size={15} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭"><X size={19} /></button>
       </div>
-      <button className="new-task" onClick={() => void newConversation()}><Plus size={17} />新建任务</button>
+      {workingDirSettings?.enabled
+        ? <div className="new-task-wrap" ref={newTaskDirPanelRef}>
+            <button className="new-task" onClick={() => void newConversation()}><Plus size={17} />新建任务</button>
+            <button className="new-task-toggle" aria-label="选择工作目录" aria-expanded={newTaskDirPanelOpen} title="选择工作目录" onClick={() => setNewTaskDirPanelOpen((open) => !open)}><ChevronDown size={14} /></button>
+            {newTaskDirPanelOpen && <div className="new-task-dir-panel" role="dialog" aria-label="选择工作目录">
+              <div className="new-task-dir-heading"><FolderOpen size={15} /><strong>工作目录</strong></div>
+              <div className="new-task-dir-options">
+                <button type="button" className="new-task-dir-option" onClick={() => void newConversation(null)}>
+                  <span><strong>独立工作区</strong><small>每个对话使用系统隔离目录</small></span>
+                </button>
+                {workingDirSettings.favorites.map((favorite) => (
+                  <button type="button" key={favorite.path} className="new-task-dir-option" onClick={() => void newConversation(favorite.path)}>
+                    <span><strong>{favorite.label}</strong><small>{favorite.path}</small></span>
+                  </button>
+                ))}
+              </div>
+              <div className="new-task-dir-manual">
+                <input value={manualWorkingDir} onChange={(event) => setManualWorkingDir(event.target.value)} placeholder="或手动输入绝对路径" />
+                <button type="button" className="primary-button" disabled={!manualWorkingDir.trim() || workingDirSaving} onClick={() => void newConversation(manualWorkingDir.trim())}>创建</button>
+              </div>
+              <div className="new-task-dir-footer">
+                <button type="button" onClick={() => { setWorkingDirManagerOpen(true); setNewTaskDirPanelOpen(false); }}>管理收藏…</button>
+                {workingDirSettings.defaultWorkingDir
+                  && <small title={workingDirSettings.defaultWorkingDir}>默认：{workingDirSettings.favorites.find((favorite) => favorite.path === workingDirSettings.defaultWorkingDir)?.label ?? workingDirSettings.defaultWorkingDir}</small>}
+              </div>
+            </div>}
+          </div>
+        : <button className="new-task" onClick={() => void newConversation()}><Plus size={17} />新建任务</button>}
       <button className="import-sessions-button" onClick={() => void openImportDialog()} title="导入本地 Codex 历史会话"><Download size={15} />导入历史会话</button>
       <div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索任务" /></div>
       <div className="conversation-section"><div className="section-label"><span>任务</span><strong>{filtered.length}</strong></div>
@@ -1006,9 +1122,39 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       </section>
     </div>, document.body)}
 
+    {workingDirManagerOpen && workingDirSettings?.enabled && createPortal(<div className="working-dir-manager-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorkingDirManagerOpen(false); }}>
+      <section className="working-dir-manager" role="dialog" aria-modal="true" aria-label="管理工作目录收藏">
+        <header><div><FolderOpen size={19} /><strong>工作目录收藏</strong></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setWorkingDirManagerOpen(false)}><X size={18} /></button></header>
+        <div className="working-dir-add">
+          <input value={favoritePathInput} onChange={(event) => setFavoritePathInput(event.target.value)} placeholder="绝对路径，例如 /home/you/projects/alpha" />
+          <input value={favoriteLabelInput} onChange={(event) => setFavoriteLabelInput(event.target.value)} placeholder="名称（可选，默认取目录名）" />
+          <button type="button" className="primary-button" disabled={workingDirSaving || !favoritePathInput.trim()} onClick={() => void addFavoriteWorkingDir()}>添加</button>
+        </div>
+        <div className="working-dir-favorite-list">
+          {workingDirSettings.favorites.length === 0
+            ? <div className="working-dir-favorite-empty">还没有收藏目录</div>
+            : workingDirSettings.favorites.map((favorite) => (
+              <div className="working-dir-favorite-row" key={favorite.path}>
+                <span className="working-dir-favorite-copy">
+                  {editingFavoriteLabel === favorite.path
+                    ? <input autoFocus value={editingFavoriteLabelValue} onChange={(event) => setEditingFavoriteLabelValue(event.target.value)} onBlur={() => void saveFavoriteLabel(favorite.path)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setEditingFavoriteLabel(null); }} />
+                    : <><strong>{favorite.label}</strong><small>{favorite.path}</small></>}
+                </span>
+                <span className="working-dir-favorite-actions">
+                  <button type="button" className={workingDirSettings.defaultWorkingDir === favorite.path ? "default" : ""} title={workingDirSettings.defaultWorkingDir === favorite.path ? "当前默认" : "设为默认"} disabled={workingDirSaving || workingDirSettings.defaultWorkingDir === favorite.path} onClick={() => void setFavoriteAsDefault(favorite.path)}>默认</button>
+                  <button type="button" title="重命名" onClick={() => { setEditingFavoriteLabel(favorite.path); setEditingFavoriteLabelValue(favorite.label); }}><Pencil size={14} /></button>
+                  <button type="button" className="danger" title="删除收藏" onClick={() => void removeFavoriteWorkingDir(favorite.path)}><Trash2 size={14} /></button>
+                </span>
+              </div>
+            ))}
+        </div>
+        <footer className="working-dir-manager-footer"><small>仅 host 模式可用；目录必须存在且为绝对路径，不能指向应用自身的数据目录。</small></footer>
+      </section>
+    </div>, document.body)}
+
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <Chat detail={currentDetail} activities={activities} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} />
+      {currentDetail ? <Chat detail={currentDetail} activities={activities} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={(workingDir) => void changeConversationWorkingDir(currentDetail.conversation.id, workingDir)} />
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -1049,7 +1195,10 @@ function Welcome({ onSuggestion }: { onSuggestion: (value: string) => void }) {
 
 type AskAgentSelection = { text: string; left: number; top: number; below: boolean };
 
-function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize }: { detail: ConversationDetail; activities: JobEvent[]; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number }) {
+function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange }: {
+  detail: ConversationDetail; activities: JobEvent[]; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number;
+  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void;
+}) {
   const citationFiles = detail.messages.flatMap((message) => message.files);
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
@@ -1099,7 +1248,19 @@ function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, 
     window.getSelection()?.removeAllRanges();
   }
 
-  return <section ref={chatRef} className="chat"><div className="chat-header"><div><span className="chat-kicker">CODEX WEB <i>/</i> AI 工作台</span><h1>{detail.conversation.title}</h1></div><div className="chat-header-actions"><span className="message-count">已加载 {detail.messages.length} 条</span>{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
+  return <section ref={chatRef} className="chat"><div className="chat-header"><div><span className="chat-kicker">CODEX WEB <i>/</i> AI 工作台</span><h1>{detail.conversation.title}</h1>{workingDirSettings?.enabled && <div className="chat-working-dir" title={detail.conversation.working_dir ?? undefined}>{detail.conversation.working_dir ?? "独立工作区"}</div>}</div><div className="chat-header-actions"><span className="message-count">已加载 {detail.messages.length} 条</span>{workingDirSettings?.enabled && <SettingMenu
+      className="working-dir"
+      label="目录"
+      value={detail.conversation.working_dir ?? ""}
+      options={[
+        { id: "", label: "独立工作区", description: "使用对话自己的隔离目录" },
+        ...workingDirSettings.favorites.map((favorite) => ({ id: favorite.path, label: favorite.label, description: favorite.path })),
+      ]}
+      placeholder="独立工作区"
+      title="选择本对话的 Codex 工作目录"
+      disabled={workingDirSaving || detail.conversation.status === "running" || detail.conversation.has_pending_work > 0}
+      onChange={(value) => onWorkingDirChange(value || null)}
+    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
     <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
       {detail.messagePage.hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
       {detail.messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
