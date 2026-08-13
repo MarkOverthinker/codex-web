@@ -349,19 +349,20 @@ scripts/package-offline.sh --output-dir /path/to/outputs
 
 ## 升级已部署的实例
 
-把新版本的离线包放到目标机任意位置，然后在旧安装目录中运行：
+把新版本的离线包、`.sha256` 与 `upgrade.sh` 一起放到目标机（例如部署根上一级），
+在旧安装目录中运行：
 
 ```bash
-./upgrade.sh --archive /path/to/codex-web-offline-linux-x64-node-*.tar.zst
+./upgrade.sh codex-web-offline-linux-x64-node-*.tar.zst
 ```
 
-脚本会校验新包的 SHA256（旁边有 `.sha256` 时）、停止正在运行的 autostart
-守护、把 `app/data`、`app/tenants` 和 `app/.env*` 备份到安装目录旁边的
-`codex-web-backup-<时间戳>/`，然后解压新包、保留这些状态并原地替换。完成后
-按提示运行 `./start.sh`（前台）或 `./autostart.sh`（后台守护，原有
-cron/systemd 自启条目无需修改）即可。默认会删除旧代码目录（用户数据已有
-备份）；需要保留旧代码目录时加 `--keep-old`。若服务是前台 `./start.sh`
-启动的，请先自行停止再运行升级。
+脚本会依次：校验包 SHA256（旁边有 `.sha256` 时）、自动停止服务（autostart
+守护 / systemd --user / 系统服务均可识别，前台运行且健康检查可达时提示先
+停止）、把 `app/.env`、`app/data`（不含 `data/python`）、`app/tenants`、
+`app/workspaces` 备份为部署根同级的 `codex-web-backups/codex-web-backup-<时间戳>.tar.zst`，
+然后解压新包并只同步程序文件，完整保留目标机数据与配置，最后按原方式重新
+启动并等待健康检查就绪。部署根不是当前目录时可作为第二个参数传入；只想
+同步文件、由你手动启动时加 `--no-start`。升级完成后会输出备份路径与回滚命令。
 EOF
 
 echo "==> checking bundled Codex CLI"

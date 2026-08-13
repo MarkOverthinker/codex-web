@@ -254,9 +254,10 @@ test("offline bundle packaging ships the in-place upgrade script", () => {
   assert.match(packageScript, /copying upgrade script/);
   assert.match(packageScript, /cp "\$REPO_ROOT\/scripts\/upgrade.sh" "\$STAGING\/upgrade.sh"/);
   assert.match(packageScript, /升级已部署的实例/);
-  assert.match(upgradeScript, /--archive/);
-  assert.match(upgradeScript, /backing up data\/tenants\/\.env/);
-  assert.match(upgradeScript, /swapping in the new bundle/);
+  assert.match(upgradeScript, /\.\/upgrade\.sh <离线包\.tar\.zst> \[部署根\] \[--no-start\]/);
+  assert.match(upgradeScript, /备份运行数据到:/);
+  assert.match(upgradeScript, /只同步程序文件/);
+  assert.match(upgradeScript, /回滚命令:/);
 });
 test("closed mobile sidebar is not painted as an offscreen shadow layer", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");

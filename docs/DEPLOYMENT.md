@@ -287,12 +287,15 @@ or through `systemctl --user enable --now codex-web` plus
 depending on the distribution's polkit policy; without it the user service
 only starts after the user logs in).
 
-To upgrade an already deployed bundle, place the new offline archive on the
-target machine and run `./upgrade.sh --archive /path/to/codex-web-offline-*.tar.zst`
-from the old install directory. The script verifies the archive checksum,
-stops the autostart daemon, backs up `app/data`, `app/tenants` and `app/.env*`
-next to the install, then extracts the new bundle and swaps it in place while
-preserving that state. See the generated `README-OFFLINE.md` inside the bundle
+To upgrade an already deployed bundle, copy the new offline archive (and its
+`.sha256`) to the target machine and run
+`./upgrade.sh codex-web-offline-*.tar.zst` from the old install directory
+(pass the install path as a second argument when the script runs elsewhere).
+The script verifies the checksum, stops the service (autostart daemon or
+systemd), backs up `app/.env`, `app/data` (minus the rebuildable
+`data/python`), `app/tenants` and `app/workspaces` to `codex-web-backups/`,
+then syncs only program files and restarts the service; `--no-start` skips
+the automatic restart. See the generated `README-OFFLINE.md` inside the bundle
 for details.
 
 The web service itself starts fully offline, but Codex tasks still require a
