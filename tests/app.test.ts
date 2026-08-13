@@ -32,6 +32,7 @@ import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSel
 import { mergeMessagePages, preservePrependedScrollTop } from "../src/message-history.js";
 import { resolveScrollFollow } from "../src/scroll-follow.js";
 import { CHAT_FONT_SIZE_DEFAULT, CHAT_FONT_SIZE_MAX, CHAT_FONT_SIZE_MIN, normalizeChatFontSize } from "../src/chat-font-size.js";
+import { CHAT_COLUMN_WIDTH_DEFAULT, CHAT_COLUMN_WIDTH_MAX, CHAT_COLUMN_WIDTH_MIN, normalizeChatColumnWidth } from "../src/chat-column-width.js";
 import { chooseSelectedConversation, isTerminalJob, mergeJobEvents } from "../src/recovery.js";
 import { normalizeThemePreference, readStoredThemePreference, resolveTheme, THEME_PREFERENCE_KEY } from "../src/theme.js";
 import type { Conversation, WorkFile } from "../src/api.js";
@@ -157,6 +158,13 @@ test("chat font sizing keeps readable bounds and scales from the default", () =>
   assert.equal(normalizeChatFontSize("18"), 18);
   assert.equal(normalizeChatFontSize(9), CHAT_FONT_SIZE_MIN);
   assert.equal(normalizeChatFontSize(99), CHAT_FONT_SIZE_MAX);
+});
+
+test("chat column width keeps usable bounds and scales from the default", () => {
+  assert.equal(normalizeChatColumnWidth(undefined), CHAT_COLUMN_WIDTH_DEFAULT);
+  assert.equal(normalizeChatColumnWidth("1000"), 1000);
+  assert.equal(normalizeChatColumnWidth(640), CHAT_COLUMN_WIDTH_MIN);
+  assert.equal(normalizeChatColumnWidth(1600), CHAT_COLUMN_WIDTH_MAX);
 });
 
 test("appearance setting supports light, dark, and live system preference", () => {
@@ -1162,6 +1170,7 @@ test("single-user login and CSRF protection", async (context) => {
   assert.equal(login.body.authenticated, true);
   assert.ok(login.body.csrfToken);
   assert.equal(login.body.chatFontSize, CHAT_FONT_SIZE_DEFAULT);
+  assert.equal(login.body.chatColumnWidth, CHAT_COLUMN_WIDTH_DEFAULT);
   await agent.put("/codex-web/api/user-settings/chat-font-size")
     .set("X-CSRF-Token", login.body.csrfToken)
     .send({ chatFontSize: 19 }).expect(200, { chatFontSize: 19 });
@@ -1170,6 +1179,14 @@ test("single-user login and CSRF protection", async (context) => {
   await agent.put("/codex-web/api/user-settings/chat-font-size")
     .set("X-CSRF-Token", login.body.csrfToken)
     .send({ chatFontSize: "large" }).expect(400);
+  await agent.put("/codex-web/api/user-settings/chat-column-width")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ chatColumnWidth: 1080 }).expect(200, { chatColumnWidth: 1080 });
+  const restoredSessionWidth = await agent.get("/codex-web/api/auth/session").expect(200);
+  assert.equal(restoredSessionWidth.body.chatColumnWidth, 1080);
+  await agent.put("/codex-web/api/user-settings/chat-column-width")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ chatColumnWidth: "huge" }).expect(400);
 
   const options = await agent.get("/codex-web/api/agent-options").expect(200);
   assert.equal(options.body.defaults.model, "gpt-5.6-sol");
@@ -1830,6 +1847,12 @@ test("web users have isolated conversations, files, jobs, settings, and tenant d
   assert.equal(instance.db.getChatFontSize(LEGACY_USER_ID), CHAT_FONT_SIZE_DEFAULT);
   assert.equal((await owner.get("/codex-web/api/auth/session").expect(200)).body.chatFontSize, CHAT_FONT_SIZE_DEFAULT);
   assert.equal((await member.get("/codex-web/api/auth/session").expect(200)).body.chatFontSize, 20);
+  await member.put("/codex-web/api/user-settings/chat-column-width")
+    .set("X-CSRF-Token", memberLogin.body.csrfToken).send({ chatColumnWidth: 1120 }).expect(200);
+  assert.equal(instance.db.getChatColumnWidth(memberId), 1120);
+  assert.equal(instance.db.getChatColumnWidth(LEGACY_USER_ID), CHAT_COLUMN_WIDTH_DEFAULT);
+  assert.equal((await owner.get("/codex-web/api/auth/session").expect(200)).body.chatColumnWidth, CHAT_COLUMN_WIDTH_DEFAULT);
+  assert.equal((await member.get("/codex-web/api/auth/session").expect(200)).body.chatColumnWidth, 1120);
 
   const memberMessageId = crypto.randomUUID();
   instance.db.addMessage({ id: memberMessageId, conversation_id: memberConversation.body.conversation.id, role: "user", content: "private", created_at: now });

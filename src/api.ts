@@ -2,7 +2,7 @@ import type { TaskListCategorySettings } from "./task-categories.js";
 
 export const BASE_PATH = "/codex-web";
 
-export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; voiceEnabled?: boolean };
+export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean };
 export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
   working_dir: string | null;
@@ -160,6 +160,9 @@ export const api = {
   ),
   updateChatFontSize: (chatFontSize: number) => request<{ chatFontSize: number }>("/user-settings/chat-font-size", {
     method: "PUT", body: JSON.stringify({ chatFontSize }),
+  }),
+  updateChatColumnWidth: (chatColumnWidth: number) => request<{ chatColumnWidth: number }>("/user-settings/chat-column-width", {
+    method: "PUT", body: JSON.stringify({ chatColumnWidth }),
   }),
   workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
   reloadStatus: () => request<ReloadStatus>("/reload-status"),

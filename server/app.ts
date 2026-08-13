@@ -13,6 +13,7 @@ import { CodexRunner, extractLeakedAutoTitleAnswer } from "./codex-runner.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
+import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
 import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow, type WorkingDirectoryFavorite } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
@@ -395,13 +396,29 @@ export function createApp(overrides: AppOverrides = {}) {
       path: config.basePath || "/",
       expires: expiresAt,
     });
-    return res.json({ authenticated: true, username: user.username, displayName: user.display_name, csrfToken, chatFontSize: db.getChatFontSize(user.id), voiceEnabled });
+    return res.json({
+      authenticated: true,
+      username: user.username,
+      displayName: user.display_name,
+      csrfToken,
+      chatFontSize: db.getChatFontSize(user.id),
+      chatColumnWidth: db.getChatColumnWidth(user.id),
+      voiceEnabled,
+    });
   });
 
   api.get("/auth/session", (req, res) => {
     const session = readSession(req, db, config);
     if (!session) return res.json({ authenticated: false });
-    return res.json({ authenticated: true, username: session.username, displayName: session.display_name, csrfToken: session.csrf_token, chatFontSize: db.getChatFontSize(session.user_id), voiceEnabled });
+    return res.json({
+      authenticated: true,
+      username: session.username,
+      displayName: session.display_name,
+      csrfToken: session.csrf_token,
+      chatFontSize: db.getChatFontSize(session.user_id),
+      chatColumnWidth: db.getChatColumnWidth(session.user_id),
+      voiceEnabled,
+    });
   });
 
   api.use((req, res, next) => {
@@ -541,6 +558,16 @@ export function createApp(overrides: AppOverrides = {}) {
     }
     const chatFontSize = db.setChatFontSize(normalizeChatFontSize(rawValue, CHAT_FONT_SIZE_DEFAULT), session.user_id);
     return res.json({ chatFontSize });
+  });
+
+  api.put("/user-settings/chat-column-width", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const rawValue = req.body?.chatColumnWidth;
+    if ((typeof rawValue !== "number" && typeof rawValue !== "string") || !Number.isFinite(Number(rawValue))) {
+      return res.status(400).json({ error: "聊天区宽度设置无效。" });
+    }
+    const chatColumnWidth = db.setChatColumnWidth(normalizeChatColumnWidth(rawValue, CHAT_COLUMN_WIDTH_DEFAULT), session.user_id);
+    return res.json({ chatColumnWidth });
   });
 
   api.get("/working-dirs", (req, res) => {

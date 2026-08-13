@@ -21,6 +21,7 @@ import { chooseComposerPrimaryAction } from "./composer-action";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
 import { resolveAccountIdentity } from "./account-identity";
 import { CHAT_FONT_SIZE_DEFAULT, CHAT_FONT_SIZE_MAX, CHAT_FONT_SIZE_MIN, normalizeChatFontSize } from "./chat-font-size";
+import { CHAT_COLUMN_WIDTH_DEFAULT, CHAT_COLUMN_WIDTH_MAX, CHAT_COLUMN_WIDTH_MIN, CHAT_COLUMN_WIDTH_STEP, normalizeChatColumnWidth } from "./chat-column-width";
 import { applyThemePreference, readStoredThemePreference, THEME_PREFERENCE_KEY, type ThemePreference } from "./theme";
 import { ASK_AGENT_SELECTION_MAX_CHARS, normalizeAskAgentSelection } from "./ask-agent-selection";
 import { mergeMessagePages, preservePrependedScrollTop } from "./message-history";
@@ -326,6 +327,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [selectedSessionThreadIds, setSelectedSessionThreadIds] = useState<ReadonlySet<string>>(new Set());
   const [chatFontSize, setChatFontSize] = useState(() => normalizeChatFontSize(session.chatFontSize, CHAT_FONT_SIZE_DEFAULT));
   const [fontSizeSaving, setFontSizeSaving] = useState(false);
+  const [chatColumnWidth, setChatColumnWidth] = useState(() => normalizeChatColumnWidth(session.chatColumnWidth, CHAT_COLUMN_WIDTH_DEFAULT));
+  const [columnWidthSaving, setColumnWidthSaving] = useState(false);
   const [workingDirSettings, setWorkingDirSettings] = useState<WorkingDirSettings | null>(null);
   const [taskCategorySettings, setTaskCategorySettings] = useState<TaskListCategorySettings | null>(null);
   const [newTaskDirPanelOpen, setNewTaskDirPanelOpen] = useState(false);
@@ -1345,6 +1348,25 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
+  async function changeChatColumnWidth(delta: number) {
+    if (columnWidthSaving) return;
+    const previous = chatColumnWidth;
+    const next = normalizeChatColumnWidth(previous + delta, previous);
+    if (next === previous) return;
+    setChatColumnWidth(next);
+    setColumnWidthSaving(true);
+    setError("");
+    try {
+      const saved = await api.updateChatColumnWidth(next);
+      setChatColumnWidth(saved.chatColumnWidth);
+    } catch (reason) {
+      setChatColumnWidth(previous);
+      setError(reason instanceof Error ? reason.message : "聊天区宽度设置保存失败");
+    } finally {
+      setColumnWidthSaving(false);
+    }
+  }
+
   function renderConversationRow(conversation: Conversation) {
     return <ConversationRow
       key={conversation.id}
@@ -1710,6 +1732,14 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
               <button type="button" aria-label="增大聊天正文字号" disabled={fontSizeSaving || chatFontSize >= CHAT_FONT_SIZE_MAX} onClick={() => void changeChatFontSize(1)}><Plus size={15} /></button>
             </div>
           </div>
+          <div className="chat-width-setting">
+            <div><strong>聊天区宽度</strong><small>消息与输入框内容的最大宽度，移动端不适用</small></div>
+            <div className="font-size-stepper">
+              <button type="button" aria-label="减小聊天区宽度" disabled={columnWidthSaving || chatColumnWidth <= CHAT_COLUMN_WIDTH_MIN} onClick={() => void changeChatColumnWidth(-CHAT_COLUMN_WIDTH_STEP)}><Minus size={15} /></button>
+              <output aria-live="polite">{chatColumnWidth}px</output>
+              <button type="button" aria-label="增大聊天区宽度" disabled={columnWidthSaving || chatColumnWidth >= CHAT_COLUMN_WIDTH_MAX} onClick={() => void changeChatColumnWidth(CHAT_COLUMN_WIDTH_STEP)}><Plus size={15} /></button>
+            </div>
+          </div>
           <div className="theme-setting">
             <div><strong>外观</strong><small>选择固定主题或跟随设备设置</small></div>
             <div className="theme-options" role="group" aria-label="外观模式">
@@ -1927,7 +1957,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       </section>
     </div>, document.body)}
 
-    <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`}>
+    <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
       {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
