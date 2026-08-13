@@ -2785,20 +2785,6 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     pasteTimer.current = window.setTimeout(() => setPasteNotice(""), 2600);
   }
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(); } }
-  function handleComposerResizeKey(event: KeyboardEvent<HTMLButtonElement>) {
-    const current = composerTextHeight ?? COMPOSER_TEXT_HEIGHT_MIN;
-    const min = COMPOSER_TEXT_HEIGHT_MIN;
-    const max = composerTextMaxHeight();
-    const step = event.shiftKey ? 40 : 16;
-    let next: number | null = null;
-    if (event.key === "ArrowUp") next = current + step;
-    else if (event.key === "ArrowDown") next = current - step;
-    else if (event.key === "Home") next = min;
-    else if (event.key === "End") next = max;
-    if (next === null) return;
-    event.preventDefault();
-    setComposerTextHeight(Math.round(Math.min(max, Math.max(min, next))));
-  }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
   const modelOptions = agentOptions?.models.map((model) => ({ id: model.id, label: model.label, description: model.description })) ?? [];
@@ -2822,15 +2808,9 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
       onReorder={onReorderPending} onEdit={onEditPending} onDelete={onDeletePending} onSteer={onSteerPending} />}
     {editingPending && <div className={`editing-pending-banner ${awaitingInstruction ? "awaiting-instruction" : ""}`}><span>{awaitingInstruction ? <Paperclip size={13} /> : <Pencil size={13} />}{awaitingInstruction ? `已上传 ${editingPending.files.length} 个文件，请输入具体操作` : "正在编辑待发送任务"}</span><button type="button" onClick={onCancelPendingEdit} disabled={submitting}><X size={14} />{awaitingInstruction ? "清除文件" : "取消编辑"}</button></div>}
     <div className="composer" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}>
-    <button
-      type="button"
+    <div
       className="composer-resize-handle"
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="调整输入框高度"
-      aria-valuemin={COMPOSER_TEXT_HEIGHT_MIN}
-      aria-valuemax={composerTextMaxHeight()}
-      aria-valuenow={Math.round(composerTextHeight ?? COMPOSER_TEXT_HEIGHT_MIN)}
+      aria-hidden="true"
       title="拖动调整输入框高度"
       onPointerDown={(event) => {
         const textarea = textareaRef.current;
@@ -2842,7 +2822,6 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
           setComposerTextHeight,
         );
       }}
-      onKeyDown={handleComposerResizeKey}
     />
     {askAgentQuote && <div className="ask-agent-reference" title={askAgentQuote}><CornerUpLeft size={15} /><span>{askAgentQuote}</span><button type="button" onClick={onClearAskAgentQuote} aria-label="移除引用" title="移除引用"><X size={14} /></button></div>}
     {editingPending && editingPending.files.length > 0 && <div className="editing-pending-files">{editingPending.files.map((file) => {

@@ -153,16 +153,15 @@ test("composer replaces stop with send as soon as there is sendable input", () =
   assert.equal(chooseComposerPrimaryAction({ running: false, hasText: false, hasAttachments: false, voiceActive: false }), "send");
 });
 
-test("composer top edge resizes the input height with pointer and keyboard controls", () => {
+test("composer top edge resizes the input height by pointer drag", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   assert.match(appSource, /className="composer-resize-handle"/);
-  assert.match(appSource, /role="separator"[\s\S]*aria-orientation="horizontal"/);
-  assert.match(appSource, /aria-label="调整输入框高度"/);
+  assert.match(appSource, /aria-hidden="true"/);
+  assert.match(appSource, /title="拖动调整输入框高度"/);
   assert.match(appSource, /beginComposerResize\(/);
   assert.match(appSource, /startHeight \+ \(startY - moveEvent\.clientY\)/);
   assert.match(appSource, /document\.body\.classList\.add\("resizing-composer"\)/);
-  assert.match(appSource, /event\.key === "ArrowUp"/);
   assert.match(styles, /\.composer-resize-handle \{[^}]*cursor: ns-resize;/);
   assert.match(styles, /body\.resizing-composer \* \{[^}]*cursor: ns-resize !important;/);
 });
