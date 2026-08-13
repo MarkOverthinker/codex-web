@@ -430,7 +430,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .messages::-webkit-scrollbar { width: 6px; }
 .messages::-webkit-scrollbar-thumb { border-radius: 99px; background: #c4c8d8; }
 .history-loader { height: 28px; display: flex; align-items: center; justify-content: center; gap: 6px; margin: -12px 0 12px; color: var(--muted); font-size: 10px; font-weight: 650; }
-.message { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; margin-bottom: 26px; }
+.message {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 26px;
+  /* Keep offscreen Markdown cards out of layout and paint while scrolling a
+     long thread. The remembered size keeps the scrollbar stable. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
 .message-avatar { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(57, 70, 137, .1); border-radius: 10px; color: var(--indigo); background: var(--indigo-pale); box-shadow: 0 5px 14px rgba(15, 17, 32, .07); font-size: 9px; font-weight: 800; }
 .message.assistant .message-avatar { color: var(--navy); border-color: rgba(240, 170, 60, .38); background: linear-gradient(145deg, #f8bb55, var(--amber)); }
 .message-body { min-width: 0; }

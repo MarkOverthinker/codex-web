@@ -263,6 +263,11 @@ test("mobile Safari keeps the app shell fixed while only inner regions scroll", 
   assert.match(styles, /\.messages \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*-webkit-overflow-scrolling: touch;/);
 });
 
+test("offscreen message cards stay out of scroll painting", () => {
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(styles, /\.message \{[^}]*content-visibility: auto;[^}]*contain-intrinsic-size: auto 320px;/);
+});
+
 test("rollout capacity warning uses a 500 MiB threshold and readable binary units", () => {
   assert.equal(ROLLOUT_WARNING_BYTES, 524_288_000);
   assert.equal(shouldWarnAboutRollout(ROLLOUT_WARNING_BYTES - 1), false);

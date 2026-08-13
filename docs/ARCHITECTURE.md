@@ -26,8 +26,9 @@ The browser keeps the long-running task view responsive by batching SSE
 progress events into short render frames and by memoizing the message list,
 individual Markdown messages, and conversation rows. Conversation polling
 compares list fields before replacing state, search uses a deferred value, and
-off-screen sidebar rows use `content-visibility` so idle tasks do not repaint
-the whole sidebar on every progress event.
+off-screen sidebar rows and message cards use `content-visibility` so idle
+tasks do not repaint the whole sidebar on every progress event and long chat
+threads stay cheap to scroll on slower devices.
 
 Markdown rendering uses GFM, KaTeX for `$...$`/`$$...$$` math, and static
 highlight.js token styling for fenced code blocks; malformed math falls back
