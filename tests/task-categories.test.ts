@@ -7,18 +7,19 @@ import {
   buildHiddenCategoryInfos,
   buildDirectoryAssignments,
   buildTaskCategoryViews,
+  countRunningConversations,
   customCategoryKey,
   listValidHiddenCategoryKeys,
   TASK_LIST_AUTO_STANDALONE_KEY,
   type TaskListCategorySettings,
 } from "../src/task-categories.js";
 
-function conversation(id: string, workingDir: string | null, updatedAt: string): Conversation {
+function conversation(id: string, workingDir: string | null, updatedAt: string, status: "idle" | "running" = "idle"): Conversation {
   return {
     id,
     title: id,
     title_source: "default",
-    status: "idle",
+    status,
     has_unread_result: 0,
     has_pending_work: 0,
     rollout_bytes: null,
@@ -212,4 +213,14 @@ test("category body keeps the collapse control visible after full expansion", ()
   assert.deepEqual(buildTaskCategoryBodyState(5, true), { visibleCount: 5, remaining: 2, showExpandControl: true });
   assert.deepEqual(buildTaskCategoryBodyState(3, true), { visibleCount: 3, remaining: 0, showExpandControl: false });
   assert.deepEqual(buildTaskCategoryBodyState(0, false), { visibleCount: 0, remaining: 0, showExpandControl: false });
+});
+
+test("countRunningConversations counts only executing tasks in a category", () => {
+  const idle = conversation("idle", favorite.path, "2026-01-01T00:00:00.000Z");
+  const runningOne = conversation("running-one", favorite.path, "2026-01-02T00:00:00.000Z", "running");
+  const runningTwo = conversation("running-two", favorite.path, "2026-01-03T00:00:00.000Z", "running");
+  assert.equal(countRunningConversations([idle]), 0);
+  assert.equal(countRunningConversations([idle, runningOne]), 1);
+  assert.equal(countRunningConversations([runningOne, runningTwo, idle]), 2);
+  assert.equal(countRunningConversations([]), 0);
 });

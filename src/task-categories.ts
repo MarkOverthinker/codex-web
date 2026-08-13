@@ -365,6 +365,14 @@ export type TaskCategoryBodyState = {
 };
 
 /**
+ * Count conversations that are currently executing in a category, used to
+ * surface the running status on the category label itself.
+ */
+export function countRunningConversations(conversations: readonly Conversation[]): number {
+  return conversations.reduce((sum, conversation) => sum + (conversation.status === "running" ? 1 : 0), 0);
+}
+
+/**
  * Decide how many tasks a category body shows and whether the expand/collapse
  * control is needed. The remaining count always refers to the collapsed
  * preview limit instead of the currently visible count, so fully expanding a
