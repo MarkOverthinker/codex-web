@@ -22,6 +22,7 @@ export type AppConfig = {
   codexWindowsSandbox: "elevated" | "unelevated";
   containerized: boolean;
   hostMode: boolean;
+  allowHostPublicBind: boolean;
   codexHome: string;
   reloaderStatusUrl: string;
   codexModel?: string;
@@ -68,6 +69,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     codexWindowsSandbox: overrides.codexWindowsSandbox ?? (process.env.CODEX_WINDOWS_SANDBOX === "unelevated" ? "unelevated" : "elevated"),
     containerized: overrides.containerized ?? process.env.CONTAINERIZED === "true",
     hostMode: overrides.hostMode ?? process.env.HOST_MODE === "true",
+    allowHostPublicBind: overrides.allowHostPublicBind ?? process.env.ALLOW_HOST_PUBLIC_BIND === "true",
     codexHome: overrides.codexHome ?? (process.env.CODEX_HOME || path.join(os.homedir(), ".codex")),
     reloaderStatusUrl: overrides.reloaderStatusUrl ?? (process.env.CODEX_WEB_RELOADER_URL || "http://127.0.0.1:37822"),
     codexModel: overrides.codexModel ?? (process.env.CODEX_MODEL || undefined),
@@ -102,8 +104,10 @@ export function assertProductionConfig(config: AppConfig): void {
     throw new Error("SESSION_SECRET must contain at least 32 characters");
   }
   const loopback = config.host === "127.0.0.1" || config.host === "::1";
-  const containerBind = config.containerized && config.host === "0.0.0.0";
-  if (!loopback && !containerBind) {
-    throw new Error("The service must bind to loopback, or 0.0.0.0 only inside the hardened container");
+  const publicBind = config.host === "0.0.0.0";
+  const containerBind = config.containerized && publicBind;
+  const hostBind = config.hostMode && publicBind && config.allowHostPublicBind;
+  if (!loopback && !containerBind && !hostBind) {
+    throw new Error("The service must bind to loopback, or 0.0.0.0 only when explicitly allowed (CONTAINERIZED=true, or ALLOW_HOST_PUBLIC_BIND=true in host mode)");
   }
 }
