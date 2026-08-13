@@ -209,7 +209,8 @@ test("switching conversations hides stale detail until the selected task loads",
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   assert.match(appSource, /currentDetail = detail\?\.conversation\.id === selectedId \? detail : null/);
   assert.match(appSource, /loadingConversation \? <ConversationLoading \/>/);
-  assert.match(appSource, /\(!selectedId \|\| \(currentDetail && !currentDetail\.conversation\.archived_at\)\) && <Composer/);
+  assert.match(appSource, /const composerElement = useMemo\(\(\) => <Composer/);
+  assert.match(appSource, /\(!selectedId \|\| \(currentDetail && !currentDetail\.conversation\.archived_at\)\) && composerElement/);
   assert.match(appSource, /role="status" aria-live="polite"/);
   assert.match(styles, /\.conversation-loading \{[^}]*place-content: center;/);
 });
@@ -341,6 +342,16 @@ test("live updates pause while reading older paged messages", () => {
   assert.doesNotMatch(appSource, /scrollIntoView/);
   assert.match(appSource, /messages\.scrollTop <= 80/);
   assert.match(appSource, /conversationMessages\(conversationId, before\)/);
+});
+
+test("streaming activity flushes stay outside message list and composer renders", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  // Derived chat values stay constant while a turn streams, so memoized
+  // MessageList/MessageCard subtrees can bail out on every 60ms flush.
+  assert.match(appSource, /sending \? EMPTY_REASONING_STEPS : collectReasoningSteps\(activities\)/);
+  assert.match(appSource, /LiveActivitiesContext\.Provider value=\{activities\}/);
+  // Already rendered journal notes keep their identity and are not re-parsed.
+  assert.match(appSource, /const ProcessJournalNote = memo\(/);
 });
 
 test("progress labels do not report intermediate agent messages as complete", () => {
