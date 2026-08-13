@@ -691,8 +691,43 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .editing-pending-banner.awaiting-instruction { border-color: #c7d7ca; color: #28563a; background: #f1f8f3; }
 .editing-pending-banner button { padding: 4px 6px; border: 0; border-radius: 6px; color: #70758a; background: transparent; cursor: pointer; font-size: 10px; }
 .editing-pending-banner button:hover:not(:disabled) { color: #2f3975; background: #e7eaf4; }
-.composer { padding: 10px 11px; border: 1px solid rgba(36, 42, 78, .17); border-radius: 16px; background: #fff; box-shadow: 0 14px 40px rgba(15, 17, 32, .1); transition: border-color .16s ease, box-shadow .16s ease; }
+.composer { position: relative; padding: 10px 11px; border: 1px solid rgba(36, 42, 78, .17); border-radius: 16px; background: #fff; box-shadow: 0 14px 40px rgba(15, 17, 32, .1); transition: border-color .16s ease, box-shadow .16s ease; }
 .composer:focus-within { border-color: #8e98c2; box-shadow: 0 16px 44px rgba(15, 17, 32, .13), 0 0 0 3px rgba(72, 85, 156, .08); }
+.composer-resize-handle {
+  position: absolute;
+  top: -7px;
+  left: 14px;
+  right: 14px;
+  z-index: 2;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+  background: transparent;
+  -webkit-tap-highlight-color: transparent;
+}
+.composer-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 36px;
+  height: 3px;
+  border-radius: 99px;
+  transform: translate(-50%, -50%);
+  background: transparent;
+  content: "";
+  transition: background .14s ease;
+}
+.composer-resize-handle:hover::after,
+.composer-resize-handle:focus-visible::after {
+  background: rgba(88, 103, 178, .55);
+}
+.composer-resize-handle:focus-visible { outline: none; }
+body.resizing-composer { cursor: ns-resize; user-select: none; }
+body.resizing-composer * { cursor: ns-resize !important; user-select: none !important; }
 .composer textarea { display: block; width: 100%; min-height: 56px; max-height: 160px; resize: none; padding: 8px 9px; border: 0; outline: 0; color: var(--ink); background: transparent; line-height: 1.55; }
 .composer textarea::placeholder { color: #9699a8; }
 .composer-actions { display: flex; align-items: center; justify-content: space-between; }
