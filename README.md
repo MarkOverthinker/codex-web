@@ -233,9 +233,11 @@ definitions, directory assignment, pin order, and hidden categories are
 persisted on the server while expanded/collapsed state stays in the browser.
 Hidden categories can be restored from the category manager. The sidebar offers
 both a vertical list and a grid view; in grid view each card is a category with
-its tasks, and “N more” expands the card to show all tasks. The view choice is
-stored in the browser. This feature is deliberately unavailable in the
-isolated tenant deployment.
+its tasks, and “N more” expands the card to show all tasks. When one column
+cannot hold every card, cards automatically flow into additional columns and
+rows, bounded by the sidebar width, and fall back to vertical scrolling when
+the width is too narrow. The view choice is stored in the browser. This
+feature is deliberately unavailable in the isolated tenant deployment.
 
 ## Optional voice transcription
 

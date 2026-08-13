@@ -31,6 +31,7 @@ import { collectReasoningSteps } from "./reasoning-steps";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
+import { useTaskCategoryGridLayout } from "./task-grid-layout";
 
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
@@ -1629,6 +1630,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     () => buildTaskCategoryViews(filtered, workingDirSettings?.favorites ?? [], taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS),
     [filtered, workingDirSettings, taskCategorySettings],
   );
+  const categoryGridLayout = useTaskCategoryGridLayout(taskViewMode === "grid", categoryViews.length);
   const categoryDirectoryAssignments = useMemo(
     () => buildDirectoryAssignments(conversations, workingDirSettings?.favorites ?? [], taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS),
     [conversations, workingDirSettings, taskCategorySettings],
@@ -1740,10 +1742,10 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
           <button type="button" className={taskViewMode === "list" ? "active" : ""} aria-pressed={taskViewMode === "list"} title="竖列列表" onClick={() => changeTaskViewMode("list")}><List size={13} /></button>
           <button type="button" className={taskViewMode === "grid" ? "active" : ""} aria-pressed={taskViewMode === "grid"} title="多宫格" onClick={() => changeTaskViewMode("grid")}><LayoutGrid size={13} /></button>
         </div>}{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
-        <div className="conversation-list" onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
+        <div className="conversation-list" ref={categoryGridLayout.containerRef} onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
           {workingDirSettings?.enabled && taskCategorySettings
             ? taskViewMode === "grid"
-              ? <div className="task-category-grid">{categoryViews.map(renderCategoryView)}</div>
+              ? <div className="task-category-grid" style={categoryGridLayout.gridStyle}>{categoryViews.map(renderCategoryView)}</div>
               : categoryViews.map(renderCategoryView)
             : filtered.map(renderConversationRow)}
           {visibleTaskCount === 0 && <div className="empty-list">{query ? "没有匹配任务" : filtered.length > 0 ? "所有任务都在隐藏分类中" : "还没有任务"}</div>}
