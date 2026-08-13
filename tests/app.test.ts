@@ -248,6 +248,16 @@ test("host working directory picker exposes favorites, manual paths, and per-con
   assert.match(styles, /\.chat-working-dir \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.working-dir-manager/);
 });
+test("offline bundle packaging ships the in-place upgrade script", () => {
+  const packageScript = fs.readFileSync(path.join(process.cwd(), "scripts", "package-offline.sh"), "utf8");
+  const upgradeScript = fs.readFileSync(path.join(process.cwd(), "scripts", "upgrade.sh"), "utf8");
+  assert.match(packageScript, /copying upgrade script/);
+  assert.match(packageScript, /cp "\$REPO_ROOT\/scripts\/upgrade.sh" "\$STAGING\/upgrade.sh"/);
+  assert.match(packageScript, /升级已部署的实例/);
+  assert.match(upgradeScript, /--archive/);
+  assert.match(upgradeScript, /backing up data\/tenants\/\.env/);
+  assert.match(upgradeScript, /swapping in the new bundle/);
+});
 test("closed mobile sidebar is not painted as an offscreen shadow layer", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   const mobileBlock = styles.match(/@media \(max-width: 720px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
