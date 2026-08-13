@@ -328,6 +328,15 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .archive-dialog > header > div, .import-dialog > header > div { display: flex; align-items: center; gap: 9px; }
 .archive-dialog > header svg, .import-dialog > header svg { color: var(--indigo); }
 .import-dialog-hint { margin: 0; padding: 11px 17px 0; color: #6c7080; font-size: 12px; line-height: 1.6; }
+.import-session-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 12px; padding: 10px 13px 0; }
+.import-session-select-all { display: inline-flex; align-items: center; gap: 6px; color: #4c5269; font-size: 12px; font-weight: 650; cursor: pointer; user-select: none; }
+.import-session-select-all input { flex: 0 0 auto; accent-color: var(--indigo); }
+.import-session-time-range { display: inline-flex; align-items: center; gap: 6px; }
+.import-session-time-range input[type="date"] { min-height: 30px; max-width: 150px; padding: 3px 7px; border: 1px solid #d4d8e5; border-radius: 8px; color: #4c5269; background: #fff; font: inherit; font-size: 11px; }
+.import-session-time-range span { color: #8a8e9e; font-size: 11px; }
+.import-session-time-range button { min-height: 26px; padding: 2px 8px; border: 1px solid #d4d8e5; border-radius: 7px; color: #5b6074; background: #fff; cursor: pointer; font-size: 11px; }
+.import-session-time-range button:hover { border-color: #b9bfd4; background: #f6f7fb; }
+.import-session-count { margin-left: auto; color: #8a8e9e; font-size: 11px; }
 .import-session-list { min-height: 170px; max-height: min(480px, calc(100dvh - 230px)); display: flex; flex-direction: column; gap: 7px; padding: 13px; overflow-y: auto; }
 .import-session-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e1e3eb; border-radius: 11px; background: #fafbfe; cursor: pointer; }
 .import-session-row.selected { border-color: #aab4e8; background: #f2f4fd; }
@@ -786,6 +795,10 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
   .message.user .message-body { max-width: 88%; }
   .message.assistant .markdown { padding: 13px 14px; }
   .composer-wrap { width: calc(100% - 20px); padding-bottom: 9px; }
+  .import-session-toolbar { align-items: flex-start; }
+  .import-session-count { margin-left: 0; }
+  .import-session-time-range { width: 100%; }
+  .import-session-time-range input[type="date"] { flex: 1 1 0; min-width: 0; max-width: none; }
   .pending-queue-copy small { display: none; }
   .pending-queue-actions .steer-action span { display: none; }
   .pending-queue-actions button { padding-inline: 5px; }

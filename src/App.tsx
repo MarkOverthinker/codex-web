@@ -30,6 +30,7 @@ import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
+import { filterImportableSessionsByDateRange } from "./import-session-filter";
 
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
@@ -325,6 +326,9 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [importSessionsLoading, setImportSessionsLoading] = useState(false);
   const [importingSessions, setImportingSessions] = useState(false);
   const [selectedSessionThreadIds, setSelectedSessionThreadIds] = useState<ReadonlySet<string>>(new Set());
+  const [importFromDate, setImportFromDate] = useState("");
+  const [importToDate, setImportToDate] = useState("");
+  const selectAllImportRef = useRef<HTMLInputElement>(null);
   const [chatFontSize, setChatFontSize] = useState(() => normalizeChatFontSize(session.chatFontSize, CHAT_FONT_SIZE_DEFAULT));
   const [fontSizeSaving, setFontSizeSaving] = useState(false);
   const [chatColumnWidth, setChatColumnWidth] = useState(() => normalizeChatColumnWidth(session.chatColumnWidth, CHAT_COLUMN_WIDTH_DEFAULT));
@@ -356,6 +360,19 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<ConversationDetail | null>(detail);
+  const filteredImportableSessions = useMemo(
+    () => importableSessions ? filterImportableSessionsByDateRange(importableSessions, importFromDate, importToDate) : [],
+    [importableSessions, importFromDate, importToDate],
+  );
+  const allFilteredSelected = filteredImportableSessions.length > 0
+    && filteredImportableSessions.every((item) => selectedSessionThreadIds.has(item.threadId));
+  const someFilteredSelected = filteredImportableSessions.some((item) => selectedSessionThreadIds.has(item.threadId));
+
+  useEffect(() => {
+    if (selectAllImportRef.current) {
+      selectAllImportRef.current.indeterminate = someFilteredSelected && !allFilteredSelected;
+    }
+  }, [someFilteredSelected, allFilteredSelected]);
   const autoFollowRef = useRef(true);
   const lastScrollTopRef = useRef(0);
   const loadingOlderMessagesRef = useRef(false);
@@ -1241,6 +1258,17 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     });
   }
 
+  function toggleSelectAllImportableSessions() {
+    setSelectedSessionThreadIds((current) => {
+      const next = new Set(current);
+      for (const item of filteredImportableSessions) {
+        if (allFilteredSelected) next.delete(item.threadId);
+        else next.add(item.threadId);
+      }
+      return next;
+    });
+  }
+
   async function importSelectedSessions() {
     if (selectedSessionThreadIds.size === 0) return;
     setImportingSessions(true);
@@ -1834,17 +1862,32 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       <section className="import-dialog" role="dialog" aria-modal="true" aria-label="导入历史会话">
         <header><div><Download size={19} /><strong>导入历史会话</strong></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setImportDialogOpen(false)}><X size={18} /></button></header>
         <p className="import-dialog-hint">扫描当前执行器的 Codex Home，把尚未接入网页的本地 Codex 会话导入为网页任务。导入后可以继续对话；删除任务时也会清理对应的 Codex 会话文件。</p>
+        <div className="import-session-toolbar">
+          <label className="import-session-select-all">
+            <input ref={selectAllImportRef} type="checkbox" checked={allFilteredSelected} disabled={filteredImportableSessions.length === 0} onChange={toggleSelectAllImportableSessions} />
+            全选当前结果
+          </label>
+          <div className="import-session-time-range">
+            <input type="date" value={importFromDate} max={importToDate || undefined} aria-label="开始日期" onChange={(event) => setImportFromDate(event.target.value)} />
+            <span>至</span>
+            <input type="date" value={importToDate} min={importFromDate || undefined} aria-label="结束日期" onChange={(event) => setImportToDate(event.target.value)} />
+            {(importFromDate || importToDate) && <button type="button" onClick={() => { setImportFromDate(""); setImportToDate(""); }}>清除</button>}
+          </div>
+          <span className="import-session-count">共 {filteredImportableSessions.length} 条</span>
+        </div>
         <div className="import-session-list">
           {importSessionsLoading ? <div className="import-session-empty"><LoaderCircle className="spin" size={18} /><span>正在扫描本地会话…</span></div>
             : importableSessions === null || importableSessions.length === 0
               ? <div className="import-session-empty"><Download size={18} /><span>没有发现可导入的本地 Codex 会话</span></div>
-              : importableSessions.map((session) => {
-                const selected = selectedSessionThreadIds.has(session.threadId);
-                return <label className={`import-session-row ${selected ? "selected" : ""}`} key={session.threadId}>
-                  <input type="checkbox" checked={selected} onChange={() => toggleImportSession(session.threadId)} />
-                  <span className="import-session-copy"><strong>{session.title}</strong><small>{formatMessageDateTime(session.updatedAt)} · {session.model || "未知模型"}{session.cwd ? ` · ${session.cwd}` : ""} · {formatSize(session.fileSize)}</small></span>
-                </label>;
-              })}
+              : filteredImportableSessions.length === 0
+                ? <div className="import-session-empty"><Download size={18} /><span>没有符合当前时间范围的会话</span></div>
+                : filteredImportableSessions.map((session) => {
+                  const selected = selectedSessionThreadIds.has(session.threadId);
+                  return <label className={`import-session-row ${selected ? "selected" : ""}`} key={session.threadId}>
+                    <input type="checkbox" checked={selected} onChange={() => toggleImportSession(session.threadId)} />
+                    <span className="import-session-copy"><strong>{session.title}</strong><small>{formatMessageDateTime(session.updatedAt)} · {session.model || "未知模型"}{session.cwd ? ` · ${session.cwd}` : ""} · {formatSize(session.fileSize)}</small></span>
+                  </label>;
+                })}
         </div>
         <footer className="import-dialog-footer">
           <button type="button" className="import-dialog-cancel" onClick={() => setImportDialogOpen(false)}>取消</button>

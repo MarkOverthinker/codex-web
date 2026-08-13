@@ -498,7 +498,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const rawThreadIds = Array.isArray(req.body?.threadIds) ? req.body.threadIds as unknown : [];
     const threadIds = (Array.isArray(rawThreadIds) ? rawThreadIds : [])
       .filter((value): value is string => typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value))
-      .slice(0, 50);
+      .slice(0, 500);
     if (threadIds.length === 0) return res.status(400).json({ error: "请选择要导入的历史会话。" });
     const codexHome = codexHomeFor(session.user_id);
     const existingThreadIds = new Set(db.listCodexThreadIds());
