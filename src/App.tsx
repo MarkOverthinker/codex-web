@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
-  buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
+  buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
@@ -1274,6 +1274,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     const fullyExpanded = categoryFullyExpanded[category.key] === true;
     const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded);
     const visible = category.conversations.slice(0, bodyState.visibleCount);
+    const runningCount = countRunningConversations(category.conversations);
     return <section key={category.key} className={`task-category ${category.pinned ? "pinned" : ""} ${taskViewMode === "grid" ? "task-category-card" : ""}`}>
       <div className="task-category-header">
         <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
@@ -1283,6 +1284,10 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
             <small title={category.detail}>{category.detail}</small>
           </span>
           <span className="task-category-count">{category.conversations.length}</span>
+          {runningCount > 0 && <span className="task-category-status" title={runningCount > 1 ? `${runningCount} 个任务正在执行` : "有任务正在执行"}>
+            <LoaderCircle size={11} className="spin" />
+            {runningCount > 1 ? runningCount : null}
+          </span>}
         </button>
         <div className="task-category-actions">
           <button type="button" className={category.pinned ? "pinned" : ""} aria-label={category.pinned ? `取消置顶 ${category.name}` : `置顶 ${category.name}`} aria-pressed={category.pinned} title={category.pinned ? "取消置顶" : "置顶"} onClick={() => void toggleCategoryPinned(category)}>
