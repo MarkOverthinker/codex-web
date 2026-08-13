@@ -22,5 +22,19 @@ export function mergeJobEvents(current: JobEvent[], incoming: JobEvent[]): JobEv
     .slice(0, rollingStart)
     .filter((event) => event.kind === "update")
     .slice(-RETAINED_STAGE_FEEDBACK_LIMIT);
-  return [...retainedStageFeedback, ...ordered.slice(rollingStart)];
+  // Long tasks overflow the rolling window, which would otherwise drop the
+  // first "running" event and make the completed "总用时" start from a status
+  // update near the end (showing ~1 second). Keep the execution boundaries so
+  // taskElapsedSeconds can still measure from the real start to the terminal
+  // event.
+  const firstRunning = ordered.find((event) => (event.kind === "status" || event.type === "status") && event.status === "running");
+  const lastTerminal = ordered.findLast((event) => event.type === "done" || event.type === "failed");
+  const retainedBoundaries: JobEvent[] = [];
+  for (const event of [firstRunning, lastTerminal]) {
+    if (event && event.seq !== undefined) retainedBoundaries.push(event);
+  }
+  const combined = [...retainedBoundaries, ...retainedStageFeedback, ...ordered.slice(rollingStart)];
+  const deduped = new Map<number, JobEvent>();
+  for (const event of combined) deduped.set(event.seq ?? -(deduped.size + 1), event);
+  return [...deduped.values()].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
 }

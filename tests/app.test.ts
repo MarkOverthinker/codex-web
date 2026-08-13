@@ -2375,6 +2375,22 @@ test("activity recovery keeps five expired stage updates above the rolling event
   assert.equal(retained.at(-1)?.seq, 62);
 });
 
+test("activity recovery keeps the task start and terminal events for long-running jobs", () => {
+  const events = Array.from({ length: 120 }, (_, index) => {
+    const seq = index + 1;
+    if (seq === 1) return { seq, type: "status", status: "running", label: "Codex Web 正在处理", created_at: "2026-08-12T00:00:00.000Z" };
+    if (seq === 120) return { seq, type: "done", status: "completed", created_at: "2026-08-12T00:10:00.000Z" };
+    return { seq, type: "progress", kind: "command", label: `步骤 ${seq}`, created_at: "2026-08-12T00:00:01.000Z" };
+  });
+  const retained = mergeJobEvents([], events);
+  const firstRunning = retained.find((event) => (event.type === "status" || event.kind === "status") && event.status === "running");
+  const terminal = retained.findLast((event) => event.type === "done" || event.type === "failed");
+  assert.equal(firstRunning?.seq, 1);
+  assert.equal(terminal?.seq, 120);
+  assert.equal(taskElapsedSeconds(retained), 600);
+  assert.equal(retained.length, 51);
+});
+
 test("job finalization makes job and conversation terminal atomically", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-db-test-"));
   const db = new AppDatabase(root);
