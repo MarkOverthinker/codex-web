@@ -238,6 +238,8 @@ test("host working directory picker exposes favorites, manual paths, and per-con
   assert.match(appSource, /或手动输入绝对路径/);
   assert.match(appSource, /moveFavoriteWorkingDir/);
   assert.match(appSource, /title="上移"/);
+  assert.match(appSource, /toggleFavoriteAsDefault/);
+  assert.match(appSource, /title=\{workingDirSettings\.defaultWorkingDir === favorite\.path \? "取消默认" : "设为默认"\}/);
   assert.match(appSource, /className="chat-working-dir"/);
   assert.match(appSource, /reason\.code !== "working-dir-busy"/);
   assert.match(appSource, /window\.confirm\("该工作目录已有其他会话/);
