@@ -241,6 +241,29 @@ The config directory is owned by `root` with the checkout owner's group and
 mode `0750`, so only root and the checkout owner can enter it and read the
 token.
 
+## Offline bundle (host mode)
+
+For a Linux x86_64 machine without a checkout or npm registry access, build a
+self-contained archive that includes the production build, production
+node_modules (with the bundled Codex CLI), a Node.js runtime, and the shared
+Python runtime:
+
+```bash
+scripts/package-offline.sh --output-dir /path/to/outputs
+```
+
+The bundle contains `start.sh`, which generates `.env` on first run, asks for
+the web login password, and repairs the Python runtime from the bundled wheels
+cache when the unpack path differs from the build machine. It deliberately
+excludes `.env`, `data` (except `data/python`), `tenants`, workspaces and git
+metadata.
+
+The web service itself starts fully offline, but Codex tasks still require a
+configured `~/.codex` for the `APP_USERNAME` system user and network reach to
+the model API (or an internal endpoint configured in `config.toml`). Optional
+voice transcription additionally needs `ffmpeg` and DashScope access. See the
+generated `README-OFFLINE.md` inside the bundle for details.
+
 ## Reverse proxy
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
