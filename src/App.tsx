@@ -44,6 +44,8 @@ const SIDEBAR_WIDTH_MIN = 220;
 const SIDEBAR_WIDTH_MAX = 460;
 const PREVIEW_WIDTH_MIN = 320;
 const PREVIEW_WIDTH_MAX = 960;
+const COMPOSER_TEXT_HEIGHT_MIN = 56;
+const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
@@ -142,6 +144,47 @@ function defaultPreviewWidth(): number {
 }
 
 type PaneResizeDirection = "grow-left" | "grow-right";
+
+function composerTextMaxHeight(): number {
+  if (typeof window === "undefined") return COMPOSER_TEXT_HEIGHT_MAX;
+  return Math.max(COMPOSER_TEXT_HEIGHT_MIN, Math.min(COMPOSER_TEXT_HEIGHT_MAX, Math.round(window.innerHeight * 0.55)));
+}
+
+/**
+ * Pointer-driven drag for the composer's top edge. Dragging upward makes the
+ * input area taller while the composer stays anchored to the bottom of the
+ * chat column.
+ */
+function beginComposerResize(
+  event: ReactPointerEvent<HTMLElement>,
+  startHeight: number,
+  min: number,
+  max: number,
+  onHeight: (height: number) => void,
+): void {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const startY = event.clientY;
+  let committed = startHeight;
+  const move = (moveEvent: globalThis.PointerEvent) => {
+    const raw = startHeight + (startY - moveEvent.clientY);
+    const next = Math.round(Math.min(max, Math.max(min, raw)));
+    if (next !== committed) {
+      committed = next;
+      onHeight(next);
+    }
+  };
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+    document.body.classList.remove("resizing-composer");
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+  document.body.classList.add("resizing-composer");
+}
 
 /**
  * Pointer-driven drag for pane resizers. The sidebar handle grows rightwards
@@ -2538,6 +2581,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   const fileInput = useRef<HTMLInputElement>(null);
   const pasteTimer = useRef<number | undefined>(undefined);
   const [pasteNotice, setPasteNotice] = useState("");
+  const [composerTextHeight, setComposerTextHeight] = useState<number | null>(null);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [voiceElapsed, setVoiceElapsed] = useState(0);
   const [voiceError, setVoiceError] = useState("");
@@ -2554,6 +2598,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledFocusRequestRef = useRef(focusRequest);
   const inputRef = useRef(input);
+  const hadInputRef = useRef(Boolean(input));
   const filesRef = useRef(files);
   const draftFilesRef = useRef(draftFiles);
   const draftUploadsRef = useRef(draftUploads);
@@ -2567,6 +2612,12 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   editingPendingRef.current = editingPending;
   removedEditingFileIdsRef.current = removedEditingFileIds;
   onSendRef.current = onSend;
+
+  useEffect(() => {
+    const hadInput = hadInputRef.current;
+    hadInputRef.current = Boolean(input);
+    if (hadInput && !input) setComposerTextHeight(null);
+  }, [input]);
 
   useEffect(() => () => {
     window.clearTimeout(pasteTimer.current);
@@ -2734,6 +2785,20 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     pasteTimer.current = window.setTimeout(() => setPasteNotice(""), 2600);
   }
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(); } }
+  function handleComposerResizeKey(event: KeyboardEvent<HTMLButtonElement>) {
+    const current = composerTextHeight ?? COMPOSER_TEXT_HEIGHT_MIN;
+    const min = COMPOSER_TEXT_HEIGHT_MIN;
+    const max = composerTextMaxHeight();
+    const step = event.shiftKey ? 40 : 16;
+    let next: number | null = null;
+    if (event.key === "ArrowUp") next = current + step;
+    else if (event.key === "ArrowDown") next = current - step;
+    else if (event.key === "Home") next = min;
+    else if (event.key === "End") next = max;
+    if (next === null) return;
+    event.preventDefault();
+    setComposerTextHeight(Math.round(Math.min(max, Math.max(min, next))));
+  }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
   const modelOptions = agentOptions?.models.map((model) => ({ id: model.id, label: model.label, description: model.description })) ?? [];
@@ -2757,6 +2822,28 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
       onReorder={onReorderPending} onEdit={onEditPending} onDelete={onDeletePending} onSteer={onSteerPending} />}
     {editingPending && <div className={`editing-pending-banner ${awaitingInstruction ? "awaiting-instruction" : ""}`}><span>{awaitingInstruction ? <Paperclip size={13} /> : <Pencil size={13} />}{awaitingInstruction ? `已上传 ${editingPending.files.length} 个文件，请输入具体操作` : "正在编辑待发送任务"}</span><button type="button" onClick={onCancelPendingEdit} disabled={submitting}><X size={14} />{awaitingInstruction ? "清除文件" : "取消编辑"}</button></div>}
     <div className="composer" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}>
+    <button
+      type="button"
+      className="composer-resize-handle"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="调整输入框高度"
+      aria-valuemin={COMPOSER_TEXT_HEIGHT_MIN}
+      aria-valuemax={composerTextMaxHeight()}
+      aria-valuenow={Math.round(composerTextHeight ?? COMPOSER_TEXT_HEIGHT_MIN)}
+      title="拖动调整输入框高度"
+      onPointerDown={(event) => {
+        const textarea = textareaRef.current;
+        beginComposerResize(
+          event,
+          textarea?.getBoundingClientRect().height ?? COMPOSER_TEXT_HEIGHT_MIN,
+          COMPOSER_TEXT_HEIGHT_MIN,
+          composerTextMaxHeight(),
+          setComposerTextHeight,
+        );
+      }}
+      onKeyDown={handleComposerResizeKey}
+    />
     {askAgentQuote && <div className="ask-agent-reference" title={askAgentQuote}><CornerUpLeft size={15} /><span>{askAgentQuote}</span><button type="button" onClick={onClearAskAgentQuote} aria-label="移除引用" title="移除引用"><X size={14} /></button></div>}
     {editingPending && editingPending.files.length > 0 && <div className="editing-pending-files">{editingPending.files.map((file) => {
       const removed = removedEditingFileIds.includes(file.id);
@@ -2767,7 +2854,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     {files.length > 0 && <div className="pending-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={14} />{file.name}<button onClick={() => setFiles(files.filter((_, i) => i !== index))}><X size={13} /></button></span>)}</div>}
     {pasteNotice && <div className="paste-notice" role="status" aria-live="polite"><Check size={14} />{pasteNotice}</div>}
     {voiceError && <div className="voice-error" role="alert"><span>{voiceError}</span><button type="button" onClick={() => setVoiceError("")}><X size={13} /></button></div>}
-    <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} />
+    <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
     {voiceState !== "idle" && <div className={`voice-panel ${voiceState}`}>
       {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
     </div>}
