@@ -1091,6 +1091,65 @@ test("conversation archive API keeps history readable, blocks new turns, and res
   assert.equal((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations[0].id, conversationId);
 });
 
+test("quote-derived task creates an independent draft and sends a source-linked message", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-quote-derived-task-api-test-"));
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username: "owner",
+    passwordHash: bcrypt.hashSync("Derived-Task-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Derived-Task-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const source = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const sourceId = source.body.conversation.id as string;
+  const sourceMessageId = crypto.randomUUID();
+  instance.db.addMessage({
+    id: sourceMessageId,
+    conversation_id: sourceId,
+    role: "user",
+    content: "原始任务内容",
+    created_at: "2026-08-13T10:00:00.000Z",
+  });
+
+  const derived = await agent.post("/codex-web/api/conversations/from-source")
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceConversationId: sourceId, sourceMessageId, excerpt: "选中的来源文本" })
+    .expect(201);
+  const derivedId = derived.body.conversation.id as string;
+  assert.notEqual(derivedId, sourceId);
+  assert.equal(derived.body.conversation.working_dir, null);
+  assert.equal(derived.body.conversation.codex_thread_id, null);
+  assert.equal(derived.body.composerDraft.content, "");
+  assert.equal(derived.body.composerDraft.quote_excerpt, "选中的来源文本");
+  assert.equal(derived.body.composerDraft.source_reference.sourceConversationId, sourceId);
+  assert.equal(derived.body.composerDraft.source_reference.sourceMessageId, sourceMessageId);
+  assert.equal(derived.body.composerDraft.source_reference.excerpt, "选中的来源文本");
+  assert.equal(instance.db.listMessages(derivedId).length, 0);
+
+  const sent = await agent.post(`/codex-web/api/conversations/${derivedId}/messages`)
+    .set("X-CSRF-Token", csrf)
+    .field("useComposerDraft", "true")
+    .field("message", "根据这段内容继续处理")
+    .expect(202);
+  assert.ok(sent.body.job?.id);
+  const messages = instance.db.listMessages(derivedId);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content, "根据这段内容继续处理");
+  assert.equal(messages[0].quote_excerpt, "选中的来源文本");
+  assert.equal(JSON.parse(messages[0].source_reference ?? "{}").sourceMessageId, sourceMessageId);
+
+  const detail = await agent.get(`/codex-web/api/conversations/${derivedId}`).expect(200);
+  assert.equal(detail.body.messages[0].source_reference.sourceConversationId, sourceId);
+  assert.equal(detail.body.messages[0].source_reference.excerpt, "选中的来源文本");
+});
+
 test("host mode restore derives a missing working directory from the rollout and recategorizes", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-restore-working-dir-test-"));
   const project = path.join(root, "projects", "restored-project");

@@ -504,6 +504,11 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
   content-visibility: auto;
   contain-intrinsic-size: auto 320px;
 }
+.message-highlight { animation: message-source-pulse 2.2s ease-out; }
+@keyframes message-source-pulse {
+  0%, 55% { box-shadow: 0 0 0 2px rgba(72, 85, 156, .32); }
+  100% { box-shadow: none; }
+}
 .message-avatar { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(57, 70, 137, .1); border-radius: 10px; color: var(--indigo); background: var(--indigo-pale); box-shadow: 0 5px 14px rgba(15, 17, 32, .07); font-size: 9px; font-weight: 800; }
 .message.assistant .message-avatar { color: var(--navy); border-color: rgba(240, 170, 60, .38); background: linear-gradient(145deg, #f8bb55, var(--amber)); }
 .message-body { min-width: 0; }
@@ -530,6 +535,11 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .message-reference > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-reference strong { margin-right: 6px; color: #343c70; font-size: 10px; }
 .message.user .message-body > p, .message.assistant .markdown { font-size: var(--chat-font-size, 16px); }
+.message-source-reference { min-width: 0; display: flex; align-items: center; gap: 7px; margin: 0 0 6px auto; padding: 7px 10px; border: 1px solid #d6dae8; border-radius: 11px; color: #62687b; background: #f5f6fa; box-shadow: 0 4px 12px rgba(15, 17, 32, .04); font-size: 11px; line-height: 1.35; }
+.message-source-reference-copy { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.message-source-reference-copy > svg { flex: 0 0 auto; color: var(--indigo); }
+.message-source-reference-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-source-link { flex: 0 0 auto; padding: 0; border: 0; color: #343c70; background: transparent; font: inherit; font-size: 10px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .reasoning-panel { border: 1px solid #d9dce9; border-radius: 12px; background: #f6f7fb; box-shadow: 0 7px 22px rgba(15, 17, 32, .045); }
 .reasoning-panel > summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; list-style: none; cursor: pointer; user-select: none; color: #33407d; font-size: 12px; }
 .reasoning-panel > summary::-webkit-details-marker { display: none; }
@@ -581,6 +591,10 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .ask-agent-selection.below { transform: translateX(-50%); }
 .ask-agent-selection svg { flex: 0 0 auto; color: var(--amber); }
 .ask-agent-selection:hover { background: #2c2e34; }
+.selection-actions { gap: 5px; padding: 5px; }
+.selection-actions button { min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 999px; color: #fff; background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; line-height: 1; }
+.selection-actions button:hover { background: rgba(255, 255, 255, .12); }
+.selection-actions button:last-child svg { color: #aeb9f5; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 9px; margin-top: 12px; }
 .file-card { min-width: 0; display: flex; align-items: center; border: 1px solid #d5d9e8; border-radius: 12px; background: #f7f8fc; transition: border-color .16s ease, background .16s ease, transform .14s ease; }
 .file-card:hover { transform: translateY(-1px); border-color: #aeb6d7; background: #eef1fa; }
@@ -781,6 +795,13 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .ask-agent-reference > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ask-agent-reference > button { width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #69708b; background: transparent; cursor: pointer; }
 .ask-agent-reference > button:hover { color: var(--ink); background: #e1e5f1; }
+.derived-task-reference { width: fit-content; max-width: min(620px, 100%); min-height: 38px; display: flex; align-items: center; gap: 7px; margin: 1px 4px 7px; padding: 6px 7px 6px 9px; border: 1px solid #d5daeb; border-radius: 11px; color: var(--indigo); background: #f2f4fa; font-size: 11px; font-weight: 700; }
+.derived-task-reference-copy { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.derived-task-reference-copy > svg { flex: 0 0 auto; }
+.derived-task-reference-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.derived-task-source-link { flex: 0 0 auto; padding: 0; border: 0; color: #33407d; background: transparent; font: inherit; font-size: 10px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.derived-task-reference-remove { width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #69708b; background: transparent; cursor: pointer; }
+.derived-task-reference-remove:hover { color: var(--ink); background: #e1e5f1; }
 .pending-files { display: flex; gap: 7px; overflow-x: auto; padding: 2px 4px 8px; }
 .editing-pending-files { display: flex; gap: 7px; overflow-x: auto; padding: 2px 4px 8px; }
 .pending-files > span, .editing-pending-files > span { max-width: 240px; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; overflow: hidden; padding: 7px 8px; border: 1px solid #d9dce8; border-radius: 9px; color: #374071; background: #f7f8fc; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
@@ -966,6 +987,9 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .message-reference { border-color: #41434b; color: #b7b9c1; background: #25262b; box-shadow: 0 4px 12px rgba(0, 0, 0, .14); }
 :root[data-theme="dark"] .message-reference > svg { color: #aeb9f5; }
 :root[data-theme="dark"] .message-reference strong { color: #d7dcff; }
+:root[data-theme="dark"] .message-source-reference { border-color: #41434b; color: #b7b9c1; background: #25262b; box-shadow: 0 4px 12px rgba(0, 0, 0, .14); }
+:root[data-theme="dark"] .message-source-reference-copy > svg { color: #aeb9f5; }
+:root[data-theme="dark"] .message-source-link { color: #d7dcff; }
 :root[data-theme="dark"] .message.user .message-avatar { border-color: #626a9d; background: linear-gradient(145deg, #4f598f, #343b69); }
 :root[data-theme="dark"] .markdown a { color: #b9c3ff; text-decoration-color: rgba(185, 195, 255, .46); }
 :root[data-theme="dark"] .markdown blockquote { border-left-color: #626674; }
@@ -977,6 +1001,8 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .unavailable-file-link { color: #ffabb3; }
 :root[data-theme="dark"] .ask-agent-selection { border-color: #f2f2f4; color: #17181b; background: #ececf1; box-shadow: 0 10px 30px rgba(0, 0, 0, .48); }
 :root[data-theme="dark"] .ask-agent-selection:hover { background: #fff; }
+:root[data-theme="dark"] .selection-actions button { color: #17181b; }
+:root[data-theme="dark"] .selection-actions button:hover { background: rgba(23, 24, 27, .1); }
 
 :root[data-theme="dark"] .file-card,
 :root[data-theme="dark"] .activity-card { border-color: #3d3f47; background: #27282d; box-shadow: 0 7px 22px rgba(0, 0, 0, .14); }
@@ -1071,6 +1097,10 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .ask-agent-reference { border-color: #3c414d; color: #69b8ff; background: #191a1e; }
 :root[data-theme="dark"] .ask-agent-reference > button { color: #a9adb7; }
 :root[data-theme="dark"] .ask-agent-reference > button:hover { color: #fff; background: #303238; }
+:root[data-theme="dark"] .derived-task-reference { border-color: #3c414d; color: #69b8ff; background: #191a1e; }
+:root[data-theme="dark"] .derived-task-source-link { color: #c8d0ff; }
+:root[data-theme="dark"] .derived-task-reference-remove { color: #a9adb7; }
+:root[data-theme="dark"] .derived-task-reference-remove:hover { color: #fff; background: #303238; }
 :root[data-theme="dark"] .pending-files > span,
 :root[data-theme="dark"] .editing-pending-files > span { border-color: #454750; color: #d9deff; background: #292b32; }
 :root[data-theme="dark"] .pending-files button,

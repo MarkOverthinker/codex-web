@@ -14,6 +14,7 @@ import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
+import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt } from "../src/message-source.js";
 import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow, type WorkingDirectoryFavorite } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
@@ -125,12 +126,24 @@ export function createApp(overrides: AppOverrides = {}) {
   function safeConversationMessages(conversation: ConversationRow, messages: Array<MessageRow & { files: FileRow[] }>) {
     const citationFiles = db.listFiles(conversation.id);
     return messages.map((message) => {
-      if (message.role !== "assistant") return message;
+      const sourceReference = parseStoredSourceReference(message.source_reference);
+      if (message.role !== "assistant") return { ...message, source_reference: sourceReference };
       const visibleContent = conversation.title_source === "ai"
         ? extractLeakedAutoTitleAnswer(message.content, true) ?? message.content
         : message.content;
-      return { ...message, content: sanitizeAgentMarkdown(visibleContent, citationFiles) };
+      return { ...message, source_reference: sourceReference, content: sanitizeAgentMarkdown(visibleContent, citationFiles) };
     });
+  }
+
+  function parseStoredSourceReference(value: string | null | undefined) {
+    if (!value) return null;
+    try { return normalizeMessageSourceReference(JSON.parse(value)); }
+    catch { return null; }
+  }
+
+  function composerDraftForClient(draft: ComposerDraftWithFiles | null | undefined) {
+    if (!draft) return null;
+    return { ...draft, source_reference: parseStoredSourceReference(draft.source_reference) };
   }
 
   function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow): AgentSelection {
@@ -226,7 +239,14 @@ export function createApp(overrides: AppOverrides = {}) {
     return normalizeAskAgentSelection(value).slice(0, ASK_AGENT_SELECTION_MAX_CHARS + 1) || null;
   }
 
-  function agentPrompt(content: string, quoteExcerpt?: string | null): string {
+  function submittedSourceReference(value: unknown): string | null {
+    const reference = normalizeMessageSourceReference(value);
+    return reference ? JSON.stringify(reference) : null;
+  }
+
+  function agentPrompt(content: string, quoteExcerpt?: string | null, sourceReference?: string | null): string {
+    const parsedSource = parseStoredSourceReference(sourceReference);
+    if (parsedSource) return buildDerivedTaskPrompt(content, parsedSource.excerpt);
     return quoteExcerpt ? buildAskAgentDraft(content, quoteExcerpt) : content;
   }
 
@@ -287,7 +307,7 @@ export function createApp(overrides: AppOverrides = {}) {
         return;
       }
       const selection = repairAgentSelection(optionsForUser(conversation.user_id), job.agent_model, job.reasoning_effort);
-      await runner.run(job.id, conversation.id, agentPrompt(message.content, message.quote_excerpt), db.listFilesForMessage(message.id), selection);
+      await runner.run(job.id, conversation.id, agentPrompt(message.content, message.quote_excerpt, message.source_reference), db.listFilesForMessage(message.id), selection);
     } finally {
       publishQueuePositions();
       await pumpQueue();
@@ -774,6 +794,53 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 
+  api.post("/conversations/from-source", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const sourceConversationId = typeof req.body?.sourceConversationId === "string" ? req.body.sourceConversationId : "";
+    const sourceMessageId = typeof req.body?.sourceMessageId === "string" ? req.body.sourceMessageId : "";
+    if (!/^[0-9a-f-]{36}$/i.test(sourceConversationId) || !/^[0-9a-f-]{36}$/i.test(sourceMessageId)) {
+      return res.status(400).json({ error: "引用来源无效。" });
+    }
+    const excerpt = normalizeSourceExcerpt(req.body?.excerpt);
+    if (!excerpt) return res.status(400).json({ error: "请选择要引用的文本。" });
+
+    const sourceConversation = db.getConversationForUser(sourceConversationId, session.user_id);
+    if (!sourceConversation) return res.status(404).json({ error: "来源任务不存在。" });
+    const sourceMessage = db.getMessage(sourceMessageId);
+    if (!sourceMessage || sourceMessage.conversation_id !== sourceConversation.id) {
+      return res.status(404).json({ error: "来源消息不存在。" });
+    }
+
+    let workingDir: string | null = null;
+    if (sourceConversation.working_dir) {
+      if (!requireHostWorkingTenant(session)) {
+        return res.status(403).json({ error: "来源任务使用了宿主工作目录，但当前用户没有可映射的系统账户。" });
+      }
+      try {
+        workingDir = resolveSubmittedWorkingDir(sourceConversation.working_dir);
+      } catch (error) {
+        return res.status(400).json({ error: error instanceof Error ? error.message : "来源任务工作目录已失效。" });
+      }
+    }
+
+    const reference = normalizeMessageSourceReference({
+      sourceConversationId: sourceConversation.id,
+      sourceMessageId: sourceMessage.id,
+      sourceConversationTitle: sourceConversation.title,
+      sourceRole: sourceMessage.role === "assistant" ? "assistant" : "user",
+      sourceCreatedAt: sourceMessage.created_at,
+      excerpt,
+    });
+    if (!reference) return res.status(400).json({ error: "无法生成引用快照。" });
+
+    const id = newId();
+    workspaceFor(session.user_id, id);
+    const agentSelection = userAgentSelection(session.user_id);
+    const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
+    const composerDraft = db.saveComposerDraft(id, "", excerpt, JSON.stringify(reference));
+    return res.status(201).json({ conversation, agentSelection, composerDraft: composerDraftForClient(composerDraft) });
+  });
+
   api.post("/conversations", (req, res) => {
     const session = res.locals.session as SessionRow;
     const id = newId();
@@ -896,7 +963,7 @@ export function createApp(overrides: AppOverrides = {}) {
       : null;
     const pendingPrompts = db.listPendingPrompts(conversation.id);
     const editingPrompt = db.listPendingPrompts(conversation.id, "editing")[0] ?? null;
-    const composerDraft = db.getComposerDraft(conversation.id) ?? null;
+    const composerDraft = composerDraftForClient(db.getComposerDraft(conversation.id));
     return res.json({
       conversation,
       agentSelection,
@@ -1018,8 +1085,9 @@ export function createApp(overrides: AppOverrides = {}) {
     if (deletingConversations.has(conversation.id)) return res.status(409).json({ error: "会话正在删除。" });
     if (typeof req.body?.content !== "string") return res.status(400).json({ error: "草稿正文无效。" });
     const content = req.body.content.slice(0, 100_000);
-    const quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
-    return res.json({ composerDraft: db.saveComposerDraft(conversation.id, content, quoteExcerpt) ?? null });
+    let quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
+    const sourceReference = submittedSourceReference(req.body?.sourceReference);
+    return res.json({ composerDraft: composerDraftForClient(db.saveComposerDraft(conversation.id, content, quoteExcerpt, sourceReference)) });
   });
 
   api.post("/conversations/:id/draft/files", upload.array("files", 12), (req, res) => {
@@ -1036,7 +1104,7 @@ export function createApp(overrides: AppOverrides = {}) {
       return res.status(400).json({ error: "单个会话草稿最多包含 12 个附件。" });
     }
     registerComposerUploads(conversation.id, uploaded);
-    return res.status(201).json({ composerDraft: db.getComposerDraft(conversation.id)! });
+    return res.status(201).json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id))! });
   });
 
   api.delete("/conversations/:id/draft/files/:fileId", (req, res) => {
@@ -1052,7 +1120,7 @@ export function createApp(overrides: AppOverrides = {}) {
     db.removeFile(file.id);
     db.pruneEmptyComposerDraft(conversation.id);
     if (db.getComposerDraft(conversation.id)) db.touchComposerDraft(conversation.id);
-    return res.json({ composerDraft: db.getComposerDraft(conversation.id) ?? null });
+    return res.json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id)) });
   });
 
   api.delete("/conversations/:id/draft", (req, res) => {
@@ -1165,13 +1233,18 @@ export function createApp(overrides: AppOverrides = {}) {
     if (conversation.archived_at) { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "会话已归档，请恢复后再继续发送。" }); }
     if (deletingConversations.has(conversation.id)) { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "会话正在删除。" }); }
     const prompt = typeof req.body?.message === "string" ? req.body.message.trim().slice(0, 100_000) : "";
-    const quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
+    let quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
     const useComposerDraft = req.body?.useComposerDraft === "true";
     if (useComposerDraft && uploaded.length > 0) {
       removeUnregisteredUploads(uploaded);
       return res.status(400).json({ error: "服务器草稿附件无需重复上传。" });
     }
     const composerDraft = useComposerDraft ? db.getComposerDraft(conversation.id) : undefined;
+    const sourceReference = useComposerDraft ? composerDraft?.source_reference ?? null : submittedSourceReference(req.body?.sourceReference);
+    if (useComposerDraft && sourceReference) {
+      const parsedSource = parseStoredSourceReference(sourceReference);
+      if (parsedSource) quoteExcerpt = parsedSource.excerpt;
+    }
     const attachmentCount = uploaded.length + (composerDraft?.files.length ?? 0);
     if (!prompt && !quoteExcerpt && attachmentCount === 0) return res.status(400).json({ error: "请输入内容、添加引用或上传文件。" });
     const selection = conversationAgentSelection(conversation);
@@ -1228,14 +1301,14 @@ export function createApp(overrides: AppOverrides = {}) {
     const messageId = newId();
     const createdAt = new Date().toISOString();
     if (useComposerDraft) {
-      const job = db.materializeComposerDraftAsJob(messageId, newId(), conversation.id, prompt, selection, quoteExcerpt);
+      const job = db.materializeComposerDraftAsJob(messageId, newId(), conversation.id, prompt, selection, quoteExcerpt, sourceReference);
       const queuePosition = db.getQueuePosition(job.id) ?? 1;
       publishQueuePositions();
       res.status(202).json({ job: { ...job, queuePosition }, message: { id: messageId }, queued: true });
       if (config.queueAutoStart) setImmediate(() => void pumpQueue());
       return;
     }
-    db.addMessage({ id: messageId, conversation_id: conversation.id, role: "user", content: prompt, quote_excerpt: quoteExcerpt, created_at: createdAt });
+    db.addMessage({ id: messageId, conversation_id: conversation.id, role: "user", content: prompt, quote_excerpt: quoteExcerpt, source_reference: sourceReference, created_at: createdAt });
     const fileRows = uploaded.map((file) => {
       const row = {
         id: newId(), conversation_id: conversation.id, message_id: messageId, pending_prompt_id: null,
