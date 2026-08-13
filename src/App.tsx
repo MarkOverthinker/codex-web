@@ -7,7 +7,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
-  Eye, EyeOff, CornerUpLeft, GripVertical, LayoutList, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
+  Eye, EyeOff, CornerUpLeft, GripVertical, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
@@ -33,6 +33,7 @@ import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
 const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expanded";
+const TASK_VIEW_MODE_KEY = "codex-web:task-view-mode";
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
@@ -122,6 +123,12 @@ function readCategoryDisplayState(key: string): Record<string, boolean> {
 
 function persistCategoryDisplayState(key: string, value: Record<string, boolean>): void {
   writeLocalStorageValue(key, JSON.stringify(value));
+}
+
+type TaskViewMode = "list" | "grid";
+
+function readTaskViewMode(): TaskViewMode {
+  return readLocalStorageValue(TASK_VIEW_MODE_KEY) === "grid" ? "grid" : "list";
 }
 
 export default function App() {
@@ -258,6 +265,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [categoryMenu, setCategoryMenu] = useState<{ categoryKey: string; top: number; left: number } | null>(null);
   const [categoryExpanded, setCategoryExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY));
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
+  const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
@@ -1261,6 +1269,35 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     />;
   }
 
+  function renderCategoryView(category: TaskListCategoryView) {
+    const expanded = categoryExpanded[category.key] !== false;
+    const fullyExpanded = categoryFullyExpanded[category.key] === true;
+    const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded);
+    const visible = category.conversations.slice(0, bodyState.visibleCount);
+    return <section key={category.key} className={`task-category ${category.pinned ? "pinned" : ""} ${taskViewMode === "grid" ? "task-category-card" : ""}`}>
+      <div className="task-category-header">
+        <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
+          <ChevronDown size={14} className={expanded ? "" : "collapsed"} />
+          <span className="task-category-copy">
+            <strong>{category.name}</strong>
+            <small title={category.detail}>{category.detail}</small>
+          </span>
+          <span className="task-category-count">{category.conversations.length}</span>
+        </button>
+        <div className="task-category-actions">
+          <button type="button" className={category.pinned ? "pinned" : ""} aria-label={category.pinned ? `取消置顶 ${category.name}` : `置顶 ${category.name}`} aria-pressed={category.pinned} title={category.pinned ? "取消置顶" : "置顶"} onClick={() => void toggleCategoryPinned(category)}>
+            {category.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+          </button>
+          <button type="button" className="category-menu-trigger" data-category-menu aria-label={`分类 ${category.name} 操作`} aria-haspopup="menu" aria-expanded={categoryMenu?.categoryKey === category.key} title="分类操作" onClick={(event) => toggleCategoryMenu(category.key, event.currentTarget)}><MoreHorizontal size={15} /></button>
+        </div>
+      </div>
+      {expanded && <div className="task-category-body">
+        {visible.map(renderConversationRow)}
+        {bodyState.showExpandControl && <button type="button" className="task-category-more" aria-expanded={fullyExpanded} onClick={() => toggleCategoryFullyExpanded(category.key)}>{fullyExpanded ? "收起为最近 3 条" : `… 还有 ${bodyState.remaining} 条`}</button>}
+      </div>}
+    </section>;
+  }
+
   function toggleCategoryExpanded(key: string) {
     const expanding = categoryExpanded[key] === false;
     setCategoryExpanded((current) => ({ ...current, [key]: current[key] === false }));
@@ -1280,6 +1317,11 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       const next = { ...current, [key]: current[key] !== true };
       return next;
     });
+  }
+
+  function changeTaskViewMode(mode: TaskViewMode) {
+    setTaskViewMode(mode);
+    writeLocalStorageValue(TASK_VIEW_MODE_KEY, mode);
   }
 
   async function toggleCategoryPinned(view: TaskListCategoryView) {
@@ -1436,8 +1478,12 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     [categoryViews],
   );
   const hiddenCategoryInfos = useMemo(
-    () => buildHiddenCategoryInfos(taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS, workingDirSettings?.favorites ?? []),
-    [taskCategorySettings, workingDirSettings],
+    () => buildHiddenCategoryInfos(
+      taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS,
+      workingDirSettings?.favorites ?? [],
+      conversations.map((conversation) => conversation.working_dir).filter((dir): dir is string => Boolean(dir)),
+    ),
+    [taskCategorySettings, workingDirSettings, conversations],
   );
   // While a task streams, these derived values are not rendered by the message
   // list. Keeping them constant during streaming lets memoized subtrees below
@@ -1530,37 +1576,15 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       <button className="import-sessions-button" onClick={() => void openImportDialog()} title="导入本地 Codex 历史会话"><Download size={15} />导入历史会话</button>
       <div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索任务" /></div>
       <div className="conversation-section">
-        <div className="section-label"><span>任务</span><span className="section-label-actions"><strong>{visibleTaskCount}</strong>{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
+        <div className="section-label"><span>任务</span><span className="section-label-actions"><strong>{visibleTaskCount}</strong>{workingDirSettings?.enabled && taskCategorySettings && <div className="task-view-toggle" role="group" aria-label="任务视图">
+          <button type="button" className={taskViewMode === "list" ? "active" : ""} aria-pressed={taskViewMode === "list"} title="竖列列表" onClick={() => changeTaskViewMode("list")}><List size={13} /></button>
+          <button type="button" className={taskViewMode === "grid" ? "active" : ""} aria-pressed={taskViewMode === "grid"} title="多宫格" onClick={() => changeTaskViewMode("grid")}><LayoutGrid size={13} /></button>
+        </div>}{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
         <div className="conversation-list" onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
           {workingDirSettings?.enabled && taskCategorySettings
-            ? categoryViews.map((category) => {
-                const expanded = categoryExpanded[category.key] !== false;
-                const fullyExpanded = categoryFullyExpanded[category.key] === true;
-                const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded);
-                const visible = category.conversations.slice(0, bodyState.visibleCount);
-                return <section key={category.key} className={`task-category ${category.pinned ? "pinned" : ""}`}>
-                  <div className="task-category-header">
-                    <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
-                      <ChevronDown size={14} className={expanded ? "" : "collapsed"} />
-                      <span className="task-category-copy">
-                        <strong>{category.name}</strong>
-                        <small title={category.detail}>{category.detail}</small>
-                      </span>
-                      <span className="task-category-count">{category.conversations.length}</span>
-                    </button>
-                    <div className="task-category-actions">
-                      <button type="button" className={category.pinned ? "pinned" : ""} aria-label={category.pinned ? `取消置顶 ${category.name}` : `置顶 ${category.name}`} aria-pressed={category.pinned} title={category.pinned ? "取消置顶" : "置顶"} onClick={() => void toggleCategoryPinned(category)}>
-                        {category.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-                      </button>
-                      <button type="button" className="category-menu-trigger" data-category-menu aria-label={`分类 ${category.name} 操作`} aria-haspopup="menu" aria-expanded={categoryMenu?.categoryKey === category.key} title="分类操作" onClick={(event) => toggleCategoryMenu(category.key, event.currentTarget)}><MoreHorizontal size={15} /></button>
-                    </div>
-                  </div>
-                  {expanded && <div className="task-category-body">
-                    {visible.map(renderConversationRow)}
-                    {bodyState.showExpandControl && <button type="button" className="task-category-more" aria-expanded={fullyExpanded} onClick={() => toggleCategoryFullyExpanded(category.key)}>{fullyExpanded ? "收起为最近 3 条" : `… 还有 ${bodyState.remaining} 条`}</button>}
-                  </div>}
-                </section>;
-              })
+            ? taskViewMode === "grid"
+              ? <div className="task-category-grid">{categoryViews.map(renderCategoryView)}</div>
+              : categoryViews.map(renderCategoryView)
             : filtered.map(renderConversationRow)}
           {visibleTaskCount === 0 && <div className="empty-list">{query ? "没有匹配任务" : filtered.length > 0 ? "所有任务都在隐藏分类中" : "还没有任务"}</div>}
         </div>
