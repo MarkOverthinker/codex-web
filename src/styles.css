@@ -366,10 +366,10 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .account-settings { position: absolute; z-index: 8; inset: auto 0 calc(100% + 9px); padding: 12px; border: 1px solid rgba(255, 255, 255, .13); border-radius: 13px; color: #f7f7fb; background: #25283d; box-shadow: 0 16px 40px rgba(5, 7, 18, .32); }
 .account-settings-heading { display: flex; align-items: center; gap: 7px; padding: 1px 2px 10px; font-size: 12px; }
 .account-settings-heading svg { color: var(--amber); }
-.font-size-setting { display: grid; gap: 10px; padding: 11px; border-radius: 10px; background: rgba(255, 255, 255, .06); }
-.font-size-setting > div:first-child { display: grid; gap: 3px; }
-.font-size-setting strong { font-size: 12px; }
-.font-size-setting small { color: #aeb2c4; font-size: 10px; line-height: 1.45; }
+.font-size-setting, .chat-width-setting { display: grid; gap: 10px; padding: 11px; border-radius: 10px; background: rgba(255, 255, 255, .06); }
+.font-size-setting > div:first-child, .chat-width-setting > div:first-child { display: grid; gap: 3px; }
+.font-size-setting strong, .chat-width-setting strong { font-size: 12px; }
+.font-size-setting small, .chat-width-setting small { color: #aeb2c4; font-size: 10px; line-height: 1.45; }
 .font-size-stepper { display: grid; grid-template-columns: 34px 1fr 34px; align-items: center; gap: 8px; }
 .font-size-stepper button { display: grid; place-items: center; width: 34px; height: 31px; border: 1px solid rgba(255, 255, 255, .13); border-radius: 8px; color: #fff; background: rgba(255, 255, 255, .07); cursor: pointer; }
 .font-size-stepper button:hover:not(:disabled) { border-color: rgba(240, 170, 60, .55); color: var(--amber); background: rgba(240, 170, 60, .1); }
@@ -419,7 +419,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .welcome-logo { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 18px; color: var(--navy); background: linear-gradient(145deg, #f8bb55, var(--amber)); box-shadow: 0 13px 30px rgba(240, 170, 60, .22); }
 .welcome h1 { margin: 20px 0 8px; color: var(--ink); font-size: clamp(29px, 3vw, 40px); font-weight: 650; letter-spacing: -1.4px; }
 .welcome > p { margin: 0 0 31px; color: var(--ink-soft); }
-.suggestions { width: min(790px, 100%); display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; }
+.suggestions { width: min(calc(var(--chat-column-width, 960px) - 170px), 100%); display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; }
 .suggestions button {
   min-height: 122px;
   display: grid;
@@ -475,7 +475,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
   overflow-y: auto;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 34px max(28px, calc((100% - 960px) / 2)) 210px;
+  padding: 34px max(28px, calc((100% - var(--chat-column-width, 960px)) / 2)) 210px;
   background:
     radial-gradient(circle at 90% 0, rgba(72, 85, 156, .075), transparent 24rem),
     linear-gradient(180deg, rgba(246, 247, 251, .82), rgba(255, 255, 255, .25));
@@ -498,7 +498,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .message-avatar { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(57, 70, 137, .1); border-radius: 10px; color: var(--indigo); background: var(--indigo-pale); box-shadow: 0 5px 14px rgba(15, 17, 32, .07); font-size: 9px; font-weight: 800; }
 .message.assistant .message-avatar { color: var(--navy); border-color: rgba(240, 170, 60, .38); background: linear-gradient(145deg, #f8bb55, var(--amber)); }
 .message-body { min-width: 0; }
-.message.assistant .message-body { width: min(780px, 100%); }
+.message.assistant .message-body { width: min(calc(var(--chat-column-width, 960px) - 180px), 100%); }
 .message-meta { min-height: 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 2px 6px; }
 .message-name { color: #606474; font-size: 11px; font-weight: 750; }
 .message-meta time, .live-label { color: #9a9dab; font-size: 10px; font-weight: 500; letter-spacing: .01em; white-space: nowrap; }
@@ -512,7 +512,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 }
 .message.user { grid-template-columns: minmax(0, 1fr) 32px; }
 .message.user .message-avatar { grid-column: 2; grid-row: 1; color: #fff; border-color: rgba(72, 85, 156, .48); background: linear-gradient(145deg, #4a58a0, #28336b); }
-.message.user .message-body { grid-column: 1; grid-row: 1; max-width: min(640px, 78%); justify-self: end; }
+.message.user .message-body { grid-column: 1; grid-row: 1; max-width: min(calc(var(--chat-column-width, 960px) - 320px), 78%); justify-self: end; }
 .message.user .message-meta { flex-direction: row-reverse; }
 .message-body > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.68; }
 .message.user .message-body > p { padding: .75em .9375em; border-radius: 15px 5px 15px 15px; color: #fff; background: linear-gradient(145deg, #36458a, #20264d); box-shadow: 0 8px 24px rgba(15, 17, 32, .17); }
@@ -651,7 +651,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
   left: 50%;
   bottom: 0;
   z-index: 5;
-  width: min(900px, calc(100% - 52px));
+  width: min(calc(var(--chat-column-width, 960px) - 60px), calc(100% - 52px));
   transform: translateX(-50%);
   padding: 45px 0 12px;
   background: linear-gradient(transparent, var(--canvas) 37%);
@@ -767,6 +767,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 @media (max-width: 720px) {
   .sidebar { width: min(288px, 86vw) !important; position: fixed; inset: 0 auto 0 0; z-index: 40; visibility: hidden; transform: translateX(-102%); pointer-events: none; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
   .sidebar-resizer { display: none; }
+  .chat-width-setting { display: none; }
   .sidebar.open { visibility: visible; transform: translateX(0); pointer-events: auto; transition-delay: 0s; box-shadow: 12px 0 34px rgba(15, 17, 32, .25); }
   .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 35; border: 0; background: rgba(15, 17, 32, .48); backdrop-filter: blur(2px); }
   .mobile-only { display: inline-grid; }

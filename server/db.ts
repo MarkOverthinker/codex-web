@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
+import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
 import { type TaskListCategorySettings, type TaskListCustomCategory } from "../src/task-categories.js";
 import { isDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName } from "./paths.js";
 
@@ -903,6 +904,20 @@ export class AppDatabase {
       ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
     `).run(userId, String(fontSize), new Date().toISOString());
     return fontSize;
+  }
+
+  getChatColumnWidth(userId = LEGACY_USER_ID): number {
+    const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='chat_column_width'").get(userId) as { value: string } | undefined;
+    return normalizeChatColumnWidth(row?.value, CHAT_COLUMN_WIDTH_DEFAULT);
+  }
+
+  setChatColumnWidth(value: unknown, userId = LEGACY_USER_ID): number {
+    const columnWidth = normalizeChatColumnWidth(value, CHAT_COLUMN_WIDTH_DEFAULT);
+    this.sqlite.prepare(`
+      INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'chat_column_width',?,?)
+      ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    `).run(userId, String(columnWidth), new Date().toISOString());
+    return columnWidth;
   }
 
   getFavoriteWorkingDirectories(userId = LEGACY_USER_ID): WorkingDirectoryFavorite[] {
