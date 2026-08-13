@@ -28,3 +28,8 @@ test("packTaskGrid accounts for gaps between cards", () => {
   assert.deepEqual(packTaskGrid([100, 100], 208, 320, 150, 8), { columns: 1, rows: 2 });
   assert.deepEqual(packTaskGrid([100, 100], 207, 320, 150, 8), { columns: 2, rows: 1 });
 });
+
+test("packTaskGrid computes rows with row-major heights", () => {
+  assert.deepEqual(packTaskGrid([80, 120, 100, 60], 250, 320, 150, 8), { columns: 2, rows: 2 });
+  assert.deepEqual(packTaskGrid([200, 20, 20, 20, 20], 250, 500, 150, 8), { columns: 3, rows: 2 });
+});
