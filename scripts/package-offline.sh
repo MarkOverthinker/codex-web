@@ -124,6 +124,13 @@ fi
 
 echo "==> writing launchers"
 mkdir -p "$STAGING/bin"
+cat > "$STAGING/autostart.sh" <<'EOF'
+#!/usr/bin/env bash
+# Rootless background daemon entry point. Delegates to the bundled launcher.
+set -Eeuo pipefail
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/app/scripts/autostart.sh" "$@"
+EOF
+chmod +x "$STAGING/autostart.sh"
 if [[ "$SKIP_NODE" -ne 1 ]]; then
   cat > "$STAGING/bin/codex" <<'EOF'
 #!/usr/bin/env bash
@@ -233,6 +240,51 @@ cd codex-web
 非 root 下会自动跳过 `chown`/`setpriv` 特权路径（这些只在 root 服务向其他
 系统用户降权时才使用）。`APP_USERNAME` 默认是当前系统用户，保持默认即可；
 如确实需要让任务以另一个系统账号运行，才需要额外配置。
+
+## 长期运行与重启后自动启动（无需 root）
+
+日常前台运行用 `./start.sh`。需要后台常驻、崩溃自动重启，并在机器重启后
+自动恢复时，使用 `autostart.sh`：
+
+```bash
+./autostart.sh            # 后台启动守护进程（崩溃后 3 秒自动拉起）
+./autostart.sh status     # 查看状态
+./autostart.sh stop       # 停止守护进程与服务
+```
+
+守护日志在 `app/data/logs/autostart.log`，重复运行 `autostart.sh` 不会启动
+第二个实例。首次使用前先运行一次 `./start.sh` 完成 `.env` 初始化。
+
+开机自启二选一：
+
+方案 A：用户 crontab（推荐，通常不需要任何特权）
+
+```bash
+crontab -e
+```
+
+添加一行（改成你的实际绝对路径）：
+
+```
+@reboot /home/你的用户名/codex-web/autostart.sh
+```
+
+目标机需要已安装并运行系统 cron 服务；`@reboot` 会在开机时以你的用户身份
+执行，不依赖登录。
+
+方案 B：systemd --user
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp app/deploy/codex-web-user.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now codex-web
+loginctl enable-linger "$USER"
+```
+
+最后一行是“重启后不登录也自动启动”的关键；普通用户能否自行执行取决于
+发行版的 polkit 策略，被拒绝时需要 root 执行一次。没有 linger 时，
+systemd --user 服务只会在用户登录后启动。
 
 ## 目标机器前置条件
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Codex Web (rootless user service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/codex-web/app
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/codex-web/autostart.sh --foreground
+Restart=always
+RestartSec=5
+TimeoutStopSec=1800
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target
