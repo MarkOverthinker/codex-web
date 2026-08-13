@@ -214,6 +214,10 @@ exec "$NODE_BIN" dist-server/server/index.js
 EOF
 chmod +x "$STAGING/start.sh"
 
+echo "==> copying upgrade script"
+cp "$REPO_ROOT/scripts/upgrade.sh" "$STAGING/upgrade.sh"
+chmod +x "$STAGING/upgrade.sh"
+
 cat > "$STAGING/README-OFFLINE.md" <<'EOF'
 # Codex Web 离线便携包
 
@@ -342,6 +346,22 @@ scripts/package-offline.sh --output-dir /path/to/outputs
 
 常用参数：`--skip-build` 复用现有构建产物；`--skip-node` 不内置 Node.js；
 `--node-version 22.21.0` 指定内置 Node 版本；`--keep-staging` 保留中间目录。
+
+## 升级已部署的实例
+
+把新版本的离线包放到目标机任意位置，然后在旧安装目录中运行：
+
+```bash
+./upgrade.sh --archive /path/to/codex-web-offline-linux-x64-node-*.tar.zst
+```
+
+脚本会校验新包的 SHA256（旁边有 `.sha256` 时）、停止正在运行的 autostart
+守护、把 `app/data`、`app/tenants` 和 `app/.env*` 备份到安装目录旁边的
+`codex-web-backup-<时间戳>/`，然后解压新包、保留这些状态并原地替换。完成后
+按提示运行 `./start.sh`（前台）或 `./autostart.sh`（后台守护，原有
+cron/systemd 自启条目无需修改）即可。默认会删除旧代码目录（用户数据已有
+备份）；需要保留旧代码目录时加 `--keep-old`。若服务是前台 `./start.sh`
+启动的，请先自行停止再运行升级。
 EOF
 
 echo "==> checking bundled Codex CLI"
