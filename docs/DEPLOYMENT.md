@@ -263,6 +263,21 @@ user-writable directory and run `./start.sh` as that user. Both the web
 service and Codex task processes then run as the same user; the chown/setpriv
 privilege paths are only exercised when the service itself runs as root.
 
+For long-running rootless deployments, the bundle ships
+`scripts/autostart.sh` (background daemon with crash auto-restart, duplicate
+guard, `status`/`stop` subcommands) and `deploy/codex-web-user.service` (a
+`systemd --user` unit template). Reboot persistence works without root
+through a user crontab entry:
+
+```
+@reboot /absolute/path/to/codex-web/autostart.sh
+```
+
+or through `systemctl --user enable --now codex-web` plus
+`loginctl enable-linger "$USER"` (the linger step may require root once,
+depending on the distribution's polkit policy; without it the user service
+only starts after the user logs in).
+
 The web service itself starts fully offline, but Codex tasks still require a
 configured `~/.codex` for the `APP_USERNAME` system user and network reach to
 the model API (or an internal endpoint configured in `config.toml`). Optional
