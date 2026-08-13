@@ -1439,13 +1439,13 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
   }
 
-  function renderCategoryView(category: TaskListCategoryView) {
+  function renderCategoryView(category: TaskListCategoryView, style?: CSSProperties) {
     const expanded = categoryExpanded[category.key] !== false;
     const fullyExpanded = categoryFullyExpanded[category.key] === true;
     const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded);
     const visible = category.conversations.slice(0, bodyState.visibleCount);
     const runningCount = countRunningConversations(category.conversations);
-    return <section key={category.key} className={`task-category ${category.pinned ? "pinned" : ""} ${taskViewMode === "grid" ? "task-category-card" : ""}`}>
+    return <section key={category.key} style={style} className={`task-category ${category.pinned ? "pinned" : ""} ${taskViewMode === "grid" ? "task-category-card" : ""}`}>
       <div className="task-category-header">
         <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
           <ChevronDown size={14} className={expanded ? "" : "collapsed"} />
@@ -1759,8 +1759,10 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <div className="conversation-list" ref={categoryGridLayout.containerRef} onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
           {workingDirSettings?.enabled && taskCategorySettings
             ? taskViewMode === "grid"
-              ? <div className="task-category-grid" style={categoryGridLayout.gridStyle}>{categoryViews.map(renderCategoryView)}</div>
-              : categoryViews.map(renderCategoryView)
+              ? <div className="task-category-grid" style={categoryGridLayout.gridStyle}>
+                  {categoryViews.map((category, index) => renderCategoryView(category, categoryGridLayout.cardStyles[index]))}
+                </div>
+              : categoryViews.map((category) => renderCategoryView(category))
             : filtered.map(renderConversationRow)}
           {visibleTaskCount === 0 && <div className="empty-list">{query ? "没有匹配任务" : filtered.length > 0 ? "所有任务都在隐藏分类中" : "还没有任务"}</div>}
         </div>
