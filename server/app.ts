@@ -330,9 +330,14 @@ export function createApp(overrides: AppOverrides = {}) {
       directives: {
         defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "blob:"], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"],
+        // Helmet 默认会在 CSP 里加入 upgrade-insecure-requests，纯 HTTP 部署
+        // 时浏览器会把 JS/CSS 请求强制升级为 HTTPS 导致白屏，这里显式移除。
+        upgradeInsecureRequests: null,
       },
     },
     crossOriginEmbedderPolicy: false,
+    // 自托管默认走纯 HTTP/局域网，关闭 HSTS，避免普通 HTTP 响应携带该头。
+    strictTransportSecurity: false,
   }));
   app.use(cookieParser());
   app.use(express.json({ limit: "1mb" }));
