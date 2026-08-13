@@ -229,12 +229,15 @@ test("host working directory picker exposes favorites, manual paths, and per-con
   assert.match(apiSource, /working_dir: string \| null/);
   assert.match(apiSource, /workingDirs: \(\) => request<\{ settings: WorkingDirSettings \}>\(\"\/working-dirs\"\)/);
   assert.match(apiSource, /updateFavoriteWorkingDir:/);
+  assert.match(apiSource, /action: "add" \| "remove" \| "rename" \| "move"/);
   assert.match(apiSource, /createConversation: \(workingDir\?: string \| null\)/);
   assert.match(apiSource, /export class ApiError extends Error/);
   assert.match(apiSource, /updateConversationWorkingDir: \(id: string, workingDir: string \| null, confirm = false\)/);
   assert.match(appSource, /className="new-task-dir-panel"/);
   assert.match(appSource, /管理收藏…/);
   assert.match(appSource, /或手动输入绝对路径/);
+  assert.match(appSource, /moveFavoriteWorkingDir/);
+  assert.match(appSource, /title="上移"/);
   assert.match(appSource, /className="chat-working-dir"/);
   assert.match(appSource, /reason\.code !== "working-dir-busy"/);
   assert.match(appSource, /window\.confirm\("该工作目录已有其他会话/);
@@ -1411,6 +1414,66 @@ test("host mode persists favorite working directories and applies them to new co
     .send({ path: null }).expect(200);
   const clearedDefault = await agent.get("/codex-web/api/working-dirs").expect(200);
   assert.equal(clearedDefault.body.settings.defaultWorkingDir, null);
+});
+
+test("host mode reorders favorite working directories from the manage dialog", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-working-dir-reorder-test-"));
+  const username = process.env.USER || process.env.LOGNAME || "root";
+  assert.ok(resolveSystemUser(username), `expected the current machine user ${username} to resolve`);
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username,
+    passwordHash: bcrypt.hashSync("WorkingDir-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: true,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username, password: "WorkingDir-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const paths = ["alpha", "beta", "gamma"].map((name) => {
+    const dir = path.join(root, "projects", name);
+    fs.mkdirSync(dir, { recursive: true });
+    return { raw: dir, canonical: fs.realpathSync(dir) };
+  });
+  const [alpha, beta, gamma] = paths.map((item) => item.canonical);
+  for (const item of paths) {
+    await agent.put("/codex-web/api/working-dirs/favorites")
+      .set("X-CSRF-Token", csrf)
+      .send({ action: "add", path: item.raw }).expect(200);
+  }
+  const initial = await agent.get("/codex-web/api/working-dirs").expect(200);
+  // Newly added favorites go to the front: gamma, beta, alpha.
+  assert.deepEqual(initial.body.settings.favorites.map((favorite: { path: string }) => favorite.path), [gamma, beta, alpha]);
+
+  // Move the first favorite down and the last favorite up.
+  const movedDown = await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "move", path: gamma, direction: "down" }).expect(200);
+  assert.deepEqual(movedDown.body.settings.favorites.map((favorite: { path: string }) => favorite.path), [beta, gamma, alpha]);
+  const movedUp = await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "move", path: alpha, direction: "up" }).expect(200);
+  assert.deepEqual(movedUp.body.settings.favorites.map((favorite: { path: string }) => favorite.path), [beta, alpha, gamma]);
+
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "move", path: beta, direction: "up" }).expect(400);
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "move", path: gamma, direction: "down" }).expect(400);
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "move", path: alpha, direction: "sideways" }).expect(400);
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "move", path: "/srv/not-favorited", direction: "up" }).expect(404);
+  const finalOrder = await agent.get("/codex-web/api/working-dirs").expect(200);
+  assert.deepEqual(finalOrder.body.settings.favorites.map((favorite: { path: string }) => favorite.path), [beta, alpha, gamma]);
 });
 
 test("task list categories persist custom grouping, directory assignment, and pin order", async (context) => {

@@ -948,6 +948,19 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
+  async function moveFavoriteWorkingDir(path: string, direction: "up" | "down") {
+    if (workingDirSaving) return;
+    setWorkingDirSaving(true); setError("");
+    try {
+      const { settings } = await api.updateFavoriteWorkingDir({ action: "move", path, direction });
+      setWorkingDirSettings(settings);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "调整收藏顺序失败");
+    } finally {
+      setWorkingDirSaving(false);
+    }
+  }
+
   async function setFavoriteAsDefault(path: string) {
     if (workingDirSaving) return;
     setWorkingDirSaving(true); setError("");
@@ -1911,7 +1924,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <div className="working-dir-favorite-list">
           {workingDirSettings.favorites.length === 0
             ? <div className="working-dir-favorite-empty">还没有收藏目录</div>
-            : workingDirSettings.favorites.map((favorite) => (
+            : workingDirSettings.favorites.map((favorite, index) => (
               <div className="working-dir-favorite-row" key={favorite.path}>
                 <span className="working-dir-favorite-copy">
                   {editingFavoriteLabel === favorite.path
@@ -1919,6 +1932,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
                     : <><strong>{favorite.label}</strong><small>{favorite.path}</small></>}
                 </span>
                 <span className="working-dir-favorite-actions">
+                  <button type="button" className="move" title="上移" aria-label={`上移 ${favorite.label}`} disabled={workingDirSaving || index === 0} onClick={() => void moveFavoriteWorkingDir(favorite.path, "up")}><ArrowUp size={14} /></button>
+                  <button type="button" className="move" title="下移" aria-label={`下移 ${favorite.label}`} disabled={workingDirSaving || index === workingDirSettings.favorites.length - 1} onClick={() => void moveFavoriteWorkingDir(favorite.path, "down")}><ArrowDown size={14} /></button>
                   <button type="button" className={workingDirSettings.defaultWorkingDir === favorite.path ? "default" : ""} title={workingDirSettings.defaultWorkingDir === favorite.path ? "当前默认" : "设为默认"} disabled={workingDirSaving || workingDirSettings.defaultWorkingDir === favorite.path} onClick={() => void setFavoriteAsDefault(favorite.path)}>默认</button>
                   <button type="button" title="重命名" onClick={() => { setEditingFavoriteLabel(favorite.path); setEditingFavoriteLabelValue(favorite.label); }}><Pencil size={14} /></button>
                   <button type="button" className="danger" title="删除收藏" onClick={() => void removeFavoriteWorkingDir(favorite.path)}><Trash2 size={14} /></button>
