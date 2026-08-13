@@ -8,9 +8,10 @@ export type TaskCategoryGridLayout = {
 
 /**
  * Measure the category cards and the scroll container, then lay the cards out
- * in column-major order so a column that cannot hold every card automatically
- * wraps into additional columns. Re-measures whenever cards resize, the
- * container resizes, or new cards appear.
+ * in row-major order: cards fill the first row from left to right, then wrap
+ * to the next row, so the first (highest-priority) card is always top-left.
+ * Re-measures whenever cards resize, the container resizes, or new cards
+ * appear.
  */
 export function useTaskCategoryGridLayout(active: boolean, layoutKey: number): TaskCategoryGridLayout {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -52,7 +53,7 @@ export function useTaskCategoryGridLayout(active: boolean, layoutKey: number): T
           display: "grid",
           gridTemplateColumns: `repeat(${pack.columns}, minmax(0, 1fr))`,
           gridTemplateRows: `repeat(${Math.max(1, pack.rows)}, max-content)`,
-          gridAutoFlow: "column",
+          gridAutoFlow: "row",
           alignItems: "start",
         });
       });

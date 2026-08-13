@@ -7,10 +7,11 @@ export type TaskGridPack = {
 };
 
 /**
- * Pack category cards into columns from top to bottom: as long as the next
- * card fits in the current column it stays there, otherwise it starts a new
- * column. The column count never exceeds what the available width can hold,
- * so the grid falls back to vertical scrolling instead of overflowing
+ * Pack category cards in row-major (priority) order: the first card sits in
+ * the top-left cell, the next one moves right, and a full row wraps to the
+ * next row below. The grid starts with one column and widens until the total
+ * row height fits the available height, or until the width limit is reached;
+ * beyond that it falls back to vertical scrolling instead of overflowing
  * horizontally.
  */
 export function packTaskGrid(
@@ -26,21 +27,24 @@ export function packTaskGrid(
   if (availableHeight <= 0 || maxColumns <= 1) {
     return { columns: 1, rows: cardHeights.length };
   }
-  let columns = 1;
-  let rows = 0;
-  let itemsInColumn = 0;
-  let columnHeight = 0;
-  for (const rawHeight of cardHeights) {
-    const height = Math.max(0, Number.isFinite(rawHeight) ? rawHeight : 0);
-    if (itemsInColumn > 0 && columnHeight + gap + height > availableHeight && columns < maxColumns) {
-      columns += 1;
-      itemsInColumn = 1;
-      columnHeight = height;
-    } else {
-      columnHeight = itemsInColumn > 0 ? columnHeight + gap + height : height;
-      itemsInColumn += 1;
+  const heights = cardHeights.map((rawHeight) => Math.max(0, Number.isFinite(rawHeight) ? rawHeight : 0));
+  for (let columns = 1; columns <= maxColumns; columns += 1) {
+    const rows = Math.ceil(heights.length / columns);
+    if (rowMajorTotalHeight(heights, columns, gap) <= availableHeight) {
+      return { columns, rows };
     }
-    rows = Math.max(rows, itemsInColumn);
   }
-  return { columns, rows };
+  return { columns: maxColumns, rows: Math.ceil(heights.length / maxColumns) };
+}
+
+function rowMajorTotalHeight(heights: readonly number[], columns: number, gap: number): number {
+  let total = 0;
+  for (let start = 0; start < heights.length; start += columns) {
+    let rowHeight = 0;
+    for (let index = start; index < Math.min(start + columns, heights.length); index += 1) {
+      rowHeight = Math.max(rowHeight, heights[index]);
+    }
+    total += rowHeight;
+  }
+  return total + Math.max(0, Math.ceil(heights.length / columns) - 1) * gap;
 }
