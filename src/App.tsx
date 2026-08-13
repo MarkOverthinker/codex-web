@@ -961,14 +961,15 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }
   }
 
-  async function setFavoriteAsDefault(path: string) {
+  async function toggleFavoriteAsDefault(path: string) {
     if (workingDirSaving) return;
+    const isDefault = workingDirSettings?.defaultWorkingDir === path;
     setWorkingDirSaving(true); setError("");
     try {
-      const { settings } = await api.setDefaultWorkingDir(path);
+      const { settings } = await api.setDefaultWorkingDir(isDefault ? null : path);
       setWorkingDirSettings(settings);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "设置默认目录失败");
+      setError(reason instanceof Error ? reason.message : (isDefault ? "取消默认目录失败" : "设置默认目录失败"));
     } finally {
       setWorkingDirSaving(false);
     }
@@ -1934,7 +1935,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
                 <span className="working-dir-favorite-actions">
                   <button type="button" className="move" title="上移" aria-label={`上移 ${favorite.label}`} disabled={workingDirSaving || index === 0} onClick={() => void moveFavoriteWorkingDir(favorite.path, "up")}><ArrowUp size={14} /></button>
                   <button type="button" className="move" title="下移" aria-label={`下移 ${favorite.label}`} disabled={workingDirSaving || index === workingDirSettings.favorites.length - 1} onClick={() => void moveFavoriteWorkingDir(favorite.path, "down")}><ArrowDown size={14} /></button>
-                  <button type="button" className={workingDirSettings.defaultWorkingDir === favorite.path ? "default" : ""} title={workingDirSettings.defaultWorkingDir === favorite.path ? "当前默认" : "设为默认"} disabled={workingDirSaving || workingDirSettings.defaultWorkingDir === favorite.path} onClick={() => void setFavoriteAsDefault(favorite.path)}>默认</button>
+                  <button type="button" className={workingDirSettings.defaultWorkingDir === favorite.path ? "default" : ""} title={workingDirSettings.defaultWorkingDir === favorite.path ? "取消默认" : "设为默认"} disabled={workingDirSaving} onClick={() => void toggleFavoriteAsDefault(favorite.path)}>{workingDirSettings.defaultWorkingDir === favorite.path ? "取消默认" : "默认"}</button>
                   <button type="button" title="重命名" onClick={() => { setEditingFavoriteLabel(favorite.path); setEditingFavoriteLabelValue(favorite.label); }}><Pencil size={14} /></button>
                   <button type="button" className="danger" title="删除收藏" onClick={() => void removeFavoriteWorkingDir(favorite.path)}><Trash2 size={14} /></button>
                 </span>
