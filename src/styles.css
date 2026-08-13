@@ -620,7 +620,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .file-preview-markdown { max-width: 860px; margin: 0 auto; padding: 2px; }
 .file-preview-loading, .file-preview-error { min-height: 220px; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .file-preview-error svg { color: #c07d10; }
-.activity-card { width: min(680px, 100%); padding: 15px 16px 14px; border: 1px solid #d5d9e8; border-radius: 5px 14px 14px 14px; background: #f7f8fc; box-shadow: 0 7px 22px rgba(15, 17, 32, .045); }
+.activity-card { width: min(calc(var(--chat-column-width, 960px) - 180px), 100%); padding: 15px 16px 14px; border: 1px solid #d5d9e8; border-radius: 5px 14px 14px 14px; background: #f7f8fc; box-shadow: 0 7px 22px rgba(15, 17, 32, .045); }
 .activity-title { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: #29356f; font-size: 12px; }
 .activity-title > span { margin-left: auto; color: #9599aa; font-size: 10px; font-weight: 500; }
 .process-timer-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #e1e4ed; color: #6570a5; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
