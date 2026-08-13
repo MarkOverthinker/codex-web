@@ -772,14 +772,17 @@ test("database startup repairs previously stored mojibake upload names", (contex
   assert.equal(reopened.getFile(fileId)?.relative_path, `uploads/${fileId}.xlsm`);
 });
 
-test("production binding permits public bind only when explicitly containerized", () => {
+test("production binding permits public bind only when explicitly containerized or host mode opts in", () => {
   const base = loadConfig({
     passwordHash: bcrypt.hashSync("password", 4),
     sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
   });
   assert.doesNotThrow(() => assertProductionConfig({ ...base, host: "127.0.0.1", containerized: false }));
   assert.doesNotThrow(() => assertProductionConfig({ ...base, host: "0.0.0.0", containerized: true }));
-  assert.throws(() => assertProductionConfig({ ...base, host: "0.0.0.0", containerized: false }), /hardened container/);
+  assert.doesNotThrow(() => assertProductionConfig({ ...base, host: "0.0.0.0", hostMode: true, allowHostPublicBind: true }));
+  assert.throws(() => assertProductionConfig({ ...base, host: "0.0.0.0", containerized: false }), /explicitly allowed/);
+  assert.throws(() => assertProductionConfig({ ...base, host: "0.0.0.0", hostMode: true, allowHostPublicBind: false }), /explicitly allowed/);
+  assert.throws(() => assertProductionConfig({ ...base, host: "0.0.0.0", containerized: false, hostMode: false, allowHostPublicBind: true }), /explicitly allowed/);
 });
 
 test("agent options use the live catalog (image-capable and text-only) and default to Sol with extra-high reasoning", (context) => {

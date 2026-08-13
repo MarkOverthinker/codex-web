@@ -93,6 +93,15 @@ mode forces direct execution). `HOST`, `PORT`, `BASE_PATH`, `DATA_ROOT` and
 `TENANT_ROOT` behave as in the container deployment; web data still lives
 under `DATA_ROOT`/`TENANT_ROOT`, while `~/.codex` stays in each user's home.
 
+### Binding beyond loopback (host mode)
+
+The service refuses to bind `0.0.0.0` by default. Host mode can opt in with
+`ALLOW_HOST_PUBLIC_BIND=true` plus `HOST=0.0.0.0`, which exposes the web UI
+(login form, sessions, uploads) on every network interface. Without TLS the
+password and session cookie travel in plaintext, so prefer a loopback reverse
+proxy with HTTPS; use this option only on trusted LANs and keep
+`PUBLIC_BASE_URL` in sync with the address browsers use.
+
 Add a tenant with one command (root required):
 
 ```bash
