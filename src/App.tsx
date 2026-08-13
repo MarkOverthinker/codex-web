@@ -36,6 +36,16 @@ const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expand
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
+const EMPTY_WORK_FILES: WorkFile[] = [];
+const EMPTY_PENDING_PROMPTS: PendingPrompt[] = [];
+const EMPTY_REASONING_STEPS: ReasoningStep[] = [];
+const MESSAGE_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+const FULL_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+});
+const ACTIVITY_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
 
 type DraftSaveState = "idle" | "unsaved" | "saving" | "saved" | "error";
 type DraftUpload = { id: string; name: string };
@@ -1429,14 +1439,58 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     () => buildHiddenCategoryInfos(taskCategorySettings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS, workingDirSettings?.favorites ?? []),
     [taskCategorySettings, workingDirSettings],
   );
+  // While a task streams, these derived values are not rendered by the message
+  // list. Keeping them constant during streaming lets memoized subtrees below
+  // the Chat bail out instead of re-rendering on every 60ms activity flush.
+  const reasoningSteps = useMemo(
+    () => sending ? EMPTY_REASONING_STEPS : collectReasoningSteps(activities),
+    [activities, sending],
+  );
+  const taskDurationSeconds = useMemo(
+    () => sending ? null : taskElapsedSeconds(activities),
+    [activities, sending],
+  );
   const visibleTaskCount = workingDirSettings?.enabled && taskCategorySettings
     ? categoryViews.reduce((sum, category) => sum + category.conversations.length, 0)
     : filtered.length;
   const currentDetail = detail?.conversation.id === selectedId ? detail : null;
   const loadingConversation = Boolean(selectedId && !currentDetail);
+  const composerPendingPrompts = currentDetail?.pendingPrompts ?? EMPTY_PENDING_PROMPTS;
+  const composerDraftFiles = composerDraft?.files ?? EMPTY_WORK_FILES;
+  const composerCanSteer = job?.status === "running";
   const taskMenuConversation = taskMenu ? conversations.find((conversation) => conversation.id === taskMenu.conversationId) : undefined;
   const categoryMenuCategory = categoryMenu ? categoryViews.find((category) => category.key === categoryMenu.categoryKey) : undefined;
   const account = resolveAccountIdentity(session);
+  // Memoize the composer element so the high-frequency activity stream does not
+  // re-render the textarea, pending queue, model menus and file chips. React
+  // skips a subtree entirely when the element reference stays identical, and
+  // every dependency below is either a state value the element renders or a
+  // value captured by the callbacks it receives.
+  const composerElement = useMemo(() => <Composer
+    key={selectedId ?? "new-conversation"}
+    input={input} setInput={setInput}
+    askAgentQuote={askAgentQuote} onClearAskAgentQuote={() => setAskAgentQuote("")}
+    focusRequest={composerFocusRequest}
+    files={files} setFiles={setFiles}
+    draftFiles={composerDraftFiles} draftUploads={draftUploads} draftSaveState={draftSaveState}
+    sending={sending} submitting={submitting} selectionSaving={selectionSaving}
+    voiceEnabled={Boolean(session.voiceEnabled)}
+    conversationId={selectedId}
+    pendingPrompts={composerPendingPrompts} editingPending={editingPending} removedEditingFileIds={removedEditingFileIds}
+    agentOptions={agentOptions} selectedModel={selectedModel} reasoningEffort={reasoningEffort}
+    onModelChange={changeModel} onReasoningChange={changeReasoning}
+    onReorderPending={(ordered) => void reorderPendingPrompts(ordered)} onEditPending={(prompt) => void beginPendingEdit(prompt)}
+    onDeletePending={(prompt) => void deletePendingPrompt(prompt)} onSteerPending={(prompt) => void steerPendingPrompt(prompt)}
+    canSteer={composerCanSteer} onCancelPendingEdit={() => void cancelPendingEdit()}
+    onAddFiles={(incoming) => void addComposerFiles(incoming)} onRemoveDraftFile={(file) => void removeComposerDraftFile(file)} onClearDraft={() => void clearComposerDraft()}
+    onRemoveEditingFile={(fileId) => setRemovedEditingFileIds((current) => [...current, fileId])}
+    onRestoreEditingFile={(fileId) => setRemovedEditingFileIds((current) => current.filter((id) => id !== fileId))}
+    onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined}
+  />, [
+    agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
+    currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort,
+    removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, submitting,
+  ]);
 
   return <div className="shell">
     {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
@@ -1729,7 +1783,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <Chat detail={currentDetail} activities={activities} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} />
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -1741,18 +1795,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <button type="button" className="icon-button" aria-label="关闭 reload 提示" onClick={() => { dismissedReloadSignatureRef.current = currentReloadSignatureRef.current; setReloadNotice(null); }}><X size={15} /></button>
       </div>}
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
-      {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && <Composer key={selectedId ?? "new-conversation"} input={input} setInput={setInput} askAgentQuote={askAgentQuote} onClearAskAgentQuote={() => setAskAgentQuote("")} focusRequest={composerFocusRequest} files={files} setFiles={setFiles} draftFiles={composerDraft?.files ?? []} draftUploads={draftUploads} draftSaveState={draftSaveState} sending={sending} submitting={submitting} selectionSaving={selectionSaving} voiceEnabled={Boolean(session.voiceEnabled)}
-        conversationId={selectedId}
-        pendingPrompts={currentDetail?.pendingPrompts ?? []} editingPending={editingPending} removedEditingFileIds={removedEditingFileIds}
-        agentOptions={agentOptions} selectedModel={selectedModel} reasoningEffort={reasoningEffort}
-        onModelChange={changeModel} onReasoningChange={changeReasoning}
-        onReorderPending={(ordered) => void reorderPendingPrompts(ordered)} onEditPending={(prompt) => void beginPendingEdit(prompt)}
-        onDeletePending={(prompt) => void deletePendingPrompt(prompt)} onSteerPending={(prompt) => void steerPendingPrompt(prompt)}
-        canSteer={job?.status === "running"} onCancelPendingEdit={() => void cancelPendingEdit()}
-        onAddFiles={(incoming) => void addComposerFiles(incoming)} onRemoveDraftFile={(file) => void removeComposerDraftFile(file)} onClearDraft={() => void clearComposerDraft()}
-        onRemoveEditingFile={(fileId) => setRemovedEditingFileIds((current) => [...current, fileId])}
-        onRestoreEditingFile={(fileId) => setRemovedEditingFileIds((current) => current.filter((id) => id !== fileId))}
-        onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined} />}
+      {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
     {previewFile && <FilePreviewPane key={previewFile.id} file={previewFile} onClose={closeFilePreview} />}
   </div>;
@@ -1903,13 +1946,11 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
-  detail: ConversationDetail; activities: JobEvent[]; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number;
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void;
 }) {
   const citationFiles = useMemo(() => detail.messages.flatMap((message) => message.files), [detail.messages]);
-  const reasoningSteps = useMemo(() => collectReasoningSteps(activities), [activities]);
-  const taskDurationSeconds = useMemo(() => taskElapsedSeconds(activities), [activities]);
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
 
@@ -1978,23 +2019,21 @@ const Chat = memo(function Chat({ detail, activities, sending, loadingOlderMessa
         ? <button type="button" key={file.id} className="chat-output-chip" title={file.original_name} onClick={() => onPreview(file)}>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></button>
         : <a key={file.id} className="chat-output-chip" href={fileUrl(file, true)} download={file.original_name} title={file.original_name}>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></a>)}</div>
     </div>}
-    <LiveActivitiesContext.Provider value={activities}>
-      <MessageList
-        messages={detail.messages}
-        detail={detail}
-        hasMore={detail.messagePage.hasMore}
-        loadingOlderMessages={loadingOlderMessages}
-        sending={sending}
-        reasoningSteps={reasoningSteps}
-        taskDurationSeconds={taskDurationSeconds}
-        messagesRef={messagesRef}
-        onMessagesScroll={onMessagesScroll}
-        userInitials={userInitials}
-        chatFontSize={chatFontSize}
-        citationFiles={citationFiles}
-        onPreview={onPreview}
-      />
-    </LiveActivitiesContext.Provider>{askSelection && <button type="button" className={`ask-agent-selection ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }} onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>}
+    <MessageList
+      messages={detail.messages}
+      detail={detail}
+      hasMore={detail.messagePage.hasMore}
+      loadingOlderMessages={loadingOlderMessages}
+      sending={sending}
+      reasoningSteps={reasoningSteps}
+      taskDurationSeconds={taskDurationSeconds}
+      messagesRef={messagesRef}
+      onMessagesScroll={onMessagesScroll}
+      userInitials={userInitials}
+      chatFontSize={chatFontSize}
+      citationFiles={citationFiles}
+      onPreview={onPreview}
+    />{askSelection && <button type="button" className={`ask-agent-selection ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }} onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>}
   </section>;
 });
 
@@ -2046,33 +2085,29 @@ function ProcessPanel({ activities, startedAt: jobStartedAt }: { activities: Job
   </div>;
 }
 
-function ProcessJournalNote({ activity }: { activity: JobEvent }) {
+const ProcessJournalNote = memo(function ProcessJournalNote({ activity }: { activity: JobEvent }) {
   return <section className="process-journal-note">
     <header><Bot size={14} /><strong>{activity.kind === "reasoning" ? "重要思路" : "阶段反馈"}</strong>{activity.created_at && <time dateTime={activity.created_at}>{formatActivityTime(activity.created_at)}</time>}</header>
     <div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{activity.detail ?? ""}</ReactMarkdown></div>
   </section>;
-}
+});
 
 function formatMessageDateTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).format(date);
+  return MESSAGE_DATE_FORMATTER.format(date);
 }
 
 function formatFullDateTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
-  }).format(date);
+  return FULL_DATE_FORMATTER.format(date);
 }
 
 function formatActivityTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date);
+  return ACTIVITY_TIME_FORMATTER.format(date);
 }
 
 function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkFile) => void }) {
