@@ -711,7 +711,12 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!Array.isArray(rawKeys)) return res.status(400).json({ error: "置顶顺序无效。" });
     const settings = taskListCategorySettingsFor(session.user_id);
     const favoritePaths = db.getFavoriteWorkingDirectories(session.user_id).map((favorite) => favorite.path);
-    settings.pinned = listValidPinnedCategoryKeys({ customCategories: settings.customCategories, pinned: rawKeys.filter((key): key is string => typeof key === "string") }, favoritePaths);
+    const activeDirs = db.listConversations(session.user_id).map((row) => row.working_dir).filter((dir): dir is string => Boolean(dir));
+    settings.pinned = listValidPinnedCategoryKeys(
+      { customCategories: settings.customCategories, pinned: rawKeys.filter((key): key is string => typeof key === "string") },
+      favoritePaths,
+      activeDirs,
+    );
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 
@@ -724,9 +729,11 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!Array.isArray(rawKeys)) return res.status(400).json({ error: "隐藏分类列表无效。" });
     const settings = taskListCategorySettingsFor(session.user_id);
     const favoritePaths = db.getFavoriteWorkingDirectories(session.user_id).map((favorite) => favorite.path);
+    const activeDirs = db.listConversations(session.user_id).map((row) => row.working_dir).filter((dir): dir is string => Boolean(dir));
     settings.hidden = listValidHiddenCategoryKeys(
       { customCategories: settings.customCategories, hidden: rawKeys.filter((key): key is string => typeof key === "string") },
       favoritePaths,
+      activeDirs,
     );
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });

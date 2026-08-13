@@ -10,7 +10,6 @@ import {
   customCategoryKey,
   listValidHiddenCategoryKeys,
   TASK_LIST_AUTO_STANDALONE_KEY,
-  TASK_LIST_AUTO_TEMP_KEY,
   type TaskListCategorySettings,
 } from "../src/task-categories.js";
 
@@ -32,7 +31,7 @@ function conversation(id: string, workingDir: string | null, updatedAt: string):
 
 const favorite: WorkingDirFavorite = { path: "/srv/favorite-project", label: "Favorite", added_at: "2026-01-01T00:00:00.000Z" };
 
-test("task category view groups standalone, favorite, temporary, and custom directories", () => {
+test("task category view groups standalone, favorite, per-directory, and custom directories", () => {
   const conversations = [
     conversation("standalone", null, "2026-01-01T00:00:00.000Z"),
     conversation("temp-a", "/tmp/temporary-a", "2026-01-02T00:00:00.000Z"),
@@ -49,20 +48,21 @@ test("task category view groups standalone, favorite, temporary, and custom dire
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
   assert.deepEqual(views.map((view) => view.key), [
     autoDirCategoryKey(favorite.path),
-    TASK_LIST_AUTO_TEMP_KEY,
+    autoDirCategoryKey("/tmp/temporary-b"),
     customCategoryKey("custom-1"),
     TASK_LIST_AUTO_STANDALONE_KEY,
   ]);
   const custom = views.find((view) => view.customId === "custom-1")!;
   const favoriteView = views.find((view) => view.key === autoDirCategoryKey(favorite.path))!;
-  const temporary = views.find((view) => view.key === TASK_LIST_AUTO_TEMP_KEY)!;
+  const temporary = views.find((view) => view.key === autoDirCategoryKey("/tmp/temporary-b"))!;
   const standalone = views.find((view) => view.key === TASK_LIST_AUTO_STANDALONE_KEY)!;
   assert.deepEqual(custom.conversations.map((item) => item.id), ["temp-a"]);
   assert.deepEqual(favoriteView.conversations.map((item) => item.id), ["favorite-new", "favorite-old"]);
   assert.deepEqual(temporary.conversations.map((item) => item.id), ["temp-b"]);
   assert.deepEqual(standalone.conversations.map((item) => item.id), ["standalone"]);
   assert.equal(favoriteView.name, favorite.label);
-  assert.equal(temporary.name, "临时工作区");
+  assert.equal(temporary.name, "temporary-b");
+  assert.equal(temporary.detail, "/tmp/temporary-b");
   assert.equal(standalone.name, "独立工作区");
 });
 
@@ -157,7 +157,9 @@ test("directory assignments report the current auto or custom bucket", () => {
     ]),
   );
   assert.equal(assignments.find((assignment) => assignment.dir === favorite.path)?.categoryName, "Favorite");
-  assert.equal(assignments.find((assignment) => assignment.dir === "/tmp/temporary-a")?.categoryName, "临时工作区");
+  assert.equal(assignments.find((assignment) => assignment.dir === "/tmp/temporary-a")?.categoryName, "temporary-a");
+  assert.equal(assignments.find((assignment) => assignment.dir === "/tmp/temporary-a")?.categoryKey, autoDirCategoryKey("/tmp/temporary-a"));
+  assert.equal(assignments.find((assignment) => assignment.dir === "/tmp/temporary-a")?.autoKind, "dir");
 });
 
 test("hidden categories are omitted from views but remain restorable", () => {
@@ -173,28 +175,35 @@ test("hidden categories are omitted from views but remain restorable", () => {
   };
 
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
-  assert.deepEqual(views.map((view) => view.key), [TASK_LIST_AUTO_TEMP_KEY]);
+  assert.deepEqual(views.map((view) => view.key), [autoDirCategoryKey("/tmp/temporary-a")]);
 
   const infos = buildHiddenCategoryInfos(settings, [favorite]);
   assert.deepEqual(infos.map((info) => info.key), [TASK_LIST_AUTO_STANDALONE_KEY, autoDirCategoryKey(favorite.path)]);
   assert.equal(infos[0].name, "独立工作区");
   assert.equal(infos[1].name, favorite.label);
+  assert.deepEqual(
+    buildHiddenCategoryInfos({ customCategories: [], pinned: [], hidden: [autoDirCategoryKey("/tmp/temporary-a")] }, [], ["/tmp/temporary-a"]),
+    [{ key: autoDirCategoryKey("/tmp/temporary-a"), kind: "auto", name: "temporary-a", detail: "/tmp/temporary-a" }],
+  );
 });
 
 test("hidden keys validation keeps only known categories and hides stale keys from recovery", () => {
   const settings: TaskListCategorySettings = {
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: [] }],
     pinned: [],
-    hidden: [customCategoryKey("custom-1"), customCategoryKey("deleted"), "auto:dir:/gone", "unknown:key"],
+    hidden: [customCategoryKey("custom-1"), customCategoryKey("deleted"), autoDirCategoryKey("/tmp/active"), "auto:dir:/gone", "unknown:key"],
   };
 
   assert.deepEqual(
-    listValidHiddenCategoryKeys(settings, [favorite.path]),
-    [customCategoryKey("custom-1")],
+    listValidHiddenCategoryKeys(settings, [favorite.path], ["/tmp/active"]),
+    [customCategoryKey("custom-1"), autoDirCategoryKey("/tmp/active")],
   );
   assert.deepEqual(
-    buildHiddenCategoryInfos(settings, [favorite]),
-    [{ key: customCategoryKey("custom-1"), kind: "custom", name: "归档项目", detail: "还没有目录" }],
+    buildHiddenCategoryInfos(settings, [favorite], ["/tmp/active"]),
+    [
+      { key: customCategoryKey("custom-1"), kind: "custom", name: "归档项目", detail: "还没有目录" },
+      { key: autoDirCategoryKey("/tmp/active"), kind: "auto", name: "active", detail: "/tmp/active" },
+    ],
   );
 });
 

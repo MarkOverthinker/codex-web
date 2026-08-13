@@ -33,7 +33,7 @@ export type DirectoryCategoryAssignment = {
   categoryKey: string | null;
   categoryName: string;
   customId: string | null;
-  autoKind: "standalone" | "favorite" | "temporary";
+  autoKind: "standalone" | "favorite" | "temporary" | "dir";
 };
 
 export const EMPTY_TASK_LIST_CATEGORY_SETTINGS: TaskListCategorySettings = {
@@ -76,12 +76,14 @@ function filterValidCategoryKeys(
   keys: string[],
   settings: Pick<TaskListCategorySettings, "customCategories">,
   favoritePaths: string[],
+  activeDirs: string[] = [],
 ): string[] {
   const customIds = new Set(settings.customCategories.map((category) => category.id));
   const valid = new Set<string>([
     TASK_LIST_AUTO_STANDALONE_KEY,
     TASK_LIST_AUTO_TEMP_KEY,
     ...favoritePaths.map(autoDirCategoryKey),
+    ...activeDirs.map(autoDirCategoryKey),
     ...settings.customCategories.map((category) => customCategoryKey(category.id)),
   ]);
   const seen = new Set<string>();
@@ -98,15 +100,17 @@ function filterValidCategoryKeys(
 export function listValidPinnedCategoryKeys(
   settings: Pick<TaskListCategorySettings, "customCategories" | "pinned">,
   favoritePaths: string[],
+  activeDirs: string[] = [],
 ): string[] {
-  return filterValidCategoryKeys(settings.pinned, settings, favoritePaths);
+  return filterValidCategoryKeys(settings.pinned, settings, favoritePaths, activeDirs);
 }
 
 export function listValidHiddenCategoryKeys(
   settings: Pick<TaskListCategorySettings, "customCategories" | "hidden">,
   favoritePaths: string[],
+  activeDirs: string[] = [],
 ): string[] {
-  return filterValidCategoryKeys(settings.hidden, settings, favoritePaths);
+  return filterValidCategoryKeys(settings.hidden, settings, favoritePaths, activeDirs);
 }
 
 function sortedByUpdatedAt(conversations: Conversation[]): Conversation[] {
@@ -177,7 +181,6 @@ export function buildTaskCategoryViews(
     });
   }
 
-  const temporary: Conversation[] = [];
   for (const conversation of conversations) {
     const dir = conversation.working_dir;
     if (!dir) continue;
@@ -207,18 +210,15 @@ export function buildTaskCategoryViews(
       });
       continue;
     }
-    temporary.push(conversation);
-  }
-  if (temporary.length) {
-    const tempDirs = [...new Set(temporary.map((conversation) => conversation.working_dir!).filter(Boolean))];
+    // 未收藏目录也各自独立成一个自动分类，避免全部堆进“临时工作区”。
     addPendingView(groups, {
-      key: TASK_LIST_AUTO_TEMP_KEY,
+      key: autoDirCategoryKey(dir),
       kind: "auto",
-      name: "临时工作区",
-      detail: `${tempDirs.length} 个未收藏目录`,
+      name: pathLabel(dir),
+      detail: dir,
       customId: null,
-      assignedDirs: tempDirs,
-      conversations: temporary,
+      assignedDirs: [dir],
+      conversations: [conversation],
     });
   }
 
@@ -259,6 +259,7 @@ export type HiddenCategoryInfo = {
 export function buildHiddenCategoryInfos(
   settings: TaskListCategorySettings,
   favorites: WorkingDirFavorite[],
+  activeDirs: string[] = [],
 ): HiddenCategoryInfo[] {
   const favoriteByPath = new Map(favorites.map((favorite) => [favorite.path, favorite]));
   const customById = new Map(settings.customCategories.map((category) => [category.id, category]));
@@ -287,8 +288,8 @@ export function buildHiddenCategoryInfos(
     }
     if (parsed.autoKind === "dir" && parsed.dir) {
       const favorite = favoriteByPath.get(parsed.dir);
-      if (!favorite) continue;
-      infos.push({ key, kind: "auto", name: favorite.label, detail: parsed.dir });
+      if (!favorite && !activeDirs.includes(parsed.dir)) continue;
+      infos.push({ key, kind: "auto", name: favorite?.label ?? pathLabel(parsed.dir), detail: parsed.dir });
     }
   }
   return infos;
@@ -348,10 +349,10 @@ export function buildDirectoryAssignments(
     rows.set(key, {
       dir,
       label: pathLabel(dir),
-      categoryKey: TASK_LIST_AUTO_TEMP_KEY,
-      categoryName: "临时工作区",
+      categoryKey: autoDirCategoryKey(dir),
+      categoryName: pathLabel(dir),
       customId: null,
-      autoKind: "temporary",
+      autoKind: "dir",
     });
   }
   return [...rows.values()].sort((left, right) => left.label.localeCompare(right.label));
