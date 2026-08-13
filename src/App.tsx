@@ -1,4 +1,4 @@
-import { createContext, Fragment, memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type Dispatch, type FormEvent, type KeyboardEvent, type SetStateAction } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -34,6 +34,13 @@ const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
 const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expanded";
 const TASK_VIEW_MODE_KEY = "codex-web:task-view-mode";
+const SIDEBAR_WIDTH_KEY = "codex-web:sidebar-width";
+const PREVIEW_WIDTH_KEY = "codex-web:preview-width";
+const SIDEBAR_WIDTH_DEFAULT = 280;
+const SIDEBAR_WIDTH_MIN = 220;
+const SIDEBAR_WIDTH_MAX = 460;
+const PREVIEW_WIDTH_MIN = 320;
+const PREVIEW_WIDTH_MAX = 960;
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
@@ -108,6 +115,74 @@ export function removeLocalStorageValue(key: string, storage?: Pick<Storage, "re
   } catch {
     // Clearing an optional cache is also best effort.
   }
+}
+
+/**
+ * Keep resizable panes within both their hard bounds and the current
+ * viewport, so the chat column always keeps a usable minimum width.
+ */
+function clampPaneWidth(value: number, min: number, max: number): number {
+  const viewport = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const viewportMax = Math.max(min, Math.min(max, viewport - 480));
+  return Math.min(Math.max(value, min), viewportMax);
+}
+
+function readPaneWidth(key: string, fallback: number, min: number, max: number): number {
+  const raw = readLocalStorageValue(key);
+  const parsed = raw === null ? Number.NaN : Number(raw);
+  return clampPaneWidth(Number.isFinite(parsed) ? parsed : fallback, min, max);
+}
+
+function defaultPreviewWidth(): number {
+  const viewport = typeof window === "undefined" ? 1440 : window.innerWidth;
+  return Math.round(Math.min(720, Math.max(320, viewport * 0.34)));
+}
+
+type PaneResizeDirection = "grow-left" | "grow-right";
+
+/**
+ * Pointer-driven drag for pane resizers. The sidebar handle grows rightwards
+ * when dragged right, while the preview handle grows leftwards when dragged
+ * left; both keep the chat column at a usable minimum via clampPaneWidth.
+ */
+function beginPaneResize(
+  event: ReactPointerEvent<HTMLElement>,
+  startWidth: number,
+  min: number,
+  max: number,
+  direction: PaneResizeDirection,
+  onWidth: (width: number) => void,
+  onCommit: (width: number) => void,
+): void {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const startX = event.clientX;
+  let committed = startWidth;
+  const move = (moveEvent: globalThis.PointerEvent) => {
+    const raw = direction === "grow-right"
+      ? startWidth + (moveEvent.clientX - startX)
+      : startWidth + (startX - moveEvent.clientX);
+    const next = clampPaneWidth(raw, min, max);
+    if (next !== committed) {
+      committed = next;
+      onWidth(next);
+    }
+  };
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+    document.body.classList.remove("resizing-pane");
+    onCommit(committed);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+  document.body.classList.add("resizing-pane");
+}
+
+function commitPaneWidth(key: string, width: number): void {
+  writeLocalStorageValue(key, String(width));
 }
 
 function readCategoryDisplayState(key: string): Record<string, boolean> {
@@ -267,6 +342,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
+  const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
   const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
@@ -498,6 +575,16 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     }, 10_000);
     return () => window.clearInterval(timer);
   }, [refreshList]);
+  useEffect(() => {
+    // Re-clamp persisted widths when the viewport shrinks, so the chat
+    // column never collapses below its usable minimum.
+    const handleWindowResize = () => {
+      setSidebarWidth((current) => clampPaneWidth(current, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
+      setPreviewWidth((current) => clampPaneWidth(current, PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
+    };
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, []);
   useEffect(() => {
     removeLocalStorageValue("codex-web:model");
     removeLocalStorageValue("codex-web:reasoning");
@@ -1269,6 +1356,24 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     />;
   }
 
+  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview") {
+    const isSidebar = kind === "sidebar";
+    const min = isSidebar ? SIDEBAR_WIDTH_MIN : PREVIEW_WIDTH_MIN;
+    const max = isSidebar ? SIDEBAR_WIDTH_MAX : PREVIEW_WIDTH_MAX;
+    const current = isSidebar ? sidebarWidth : previewWidth;
+    const step = event.shiftKey ? 40 : 16;
+    let next: number | null = null;
+    if (event.key === "ArrowLeft") next = isSidebar ? current - step : current + step;
+    else if (event.key === "ArrowRight") next = isSidebar ? current + step : current - step;
+    else if (event.key === "Home") next = min;
+    else if (event.key === "End") next = max;
+    if (next === null) return;
+    event.preventDefault();
+    const clamped = clampPaneWidth(next, min, max);
+    if (isSidebar) setSidebarWidth(clamped); else setPreviewWidth(clamped);
+    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
+  }
+
   function renderCategoryView(category: TaskListCategoryView) {
     const expanded = categoryExpanded[category.key] !== false;
     const fullyExpanded = categoryFullyExpanded[category.key] === true;
@@ -1545,7 +1650,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
   return <div className="shell">
     {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
-    <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+    <aside className={`sidebar ${sidebarOpen ? "open" : ""}`} style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
       <div className="sidebar-top">
         <div className="wordmark"><span className="brand-mark small"><Zap size={15} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭"><X size={19} /></button>
@@ -1622,6 +1727,18 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
           <button className="icon-button" onClick={() => void logout()} title="退出登录"><LogOut size={17} /></button>
         </div>
       </div>
+      <div
+        className="sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整任务栏宽度"
+        aria-valuemin={SIDEBAR_WIDTH_MIN}
+        aria-valuemax={SIDEBAR_WIDTH_MAX}
+        aria-valuenow={Math.round(sidebarWidth)}
+        tabIndex={0}
+        onPointerDown={(event) => beginPaneResize(event, sidebarWidth, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX, "grow-right", setSidebarWidth, (width) => commitPaneWidth(SIDEBAR_WIDTH_KEY, width))}
+        onKeyDown={(event) => handlePaneResizerKey(event, "sidebar")}
+      />
     </aside>
 
     {taskMenu && taskMenuConversation && createPortal(<div
@@ -1826,7 +1943,14 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
-    {previewFile && <FilePreviewPane key={previewFile.id} file={previewFile} onClose={closeFilePreview} />}
+    {previewFile && <FilePreviewPane
+      key={previewFile.id}
+      file={previewFile}
+      width={previewWidth}
+      onResizeStart={(event) => beginPaneResize(event, previewWidth, PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX, "grow-left", setPreviewWidth, (width) => commitPaneWidth(PREVIEW_WIDTH_KEY, width))}
+      onResizeKeyDown={(event) => handlePaneResizerKey(event, "preview")}
+      onClose={closeFilePreview}
+    />}
   </div>;
 }
 
@@ -2153,7 +2277,13 @@ function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkF
   </div>;
 }
 
-function FilePreviewPane({ file, onClose }: { file: WorkFile; onClose: () => void }) {
+function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose }: {
+  file: WorkFile;
+  width: number;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeKeyDown: (event: KeyboardEvent) => void;
+  onClose: () => void;
+}) {
   const kind = filePreviewKind(file);
   const source = fileUrl(file);
   const [text, setText] = useState<string | null>(null);
@@ -2191,7 +2321,19 @@ function FilePreviewPane({ file, onClose }: { file: WorkFile; onClose: () => voi
   }, [onClose]);
 
   const subtitle = `${file.kind === "output" ? "结果文件" : "上传文件"} · ${formatSize(file.size)}`;
-  return <aside className="file-preview-pane" aria-label={`预览 ${file.original_name}`}>
+  return <aside className="file-preview-pane" style={{ width }} aria-label={`预览 ${file.original_name}`}>
+      <div
+        className="file-preview-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整预览栏宽度"
+        aria-valuemin={PREVIEW_WIDTH_MIN}
+        aria-valuemax={PREVIEW_WIDTH_MAX}
+        aria-valuenow={Math.round(width)}
+        tabIndex={0}
+        onPointerDown={onResizeStart}
+        onKeyDown={onResizeKeyDown}
+      />
       <header>
         {kind === "image" ? <FileImage size={19} /> : kind ? <FileText size={19} /> : <FileIcon size={19} />}
         <span className="file-preview-title"><strong>{file.original_name}</strong><small>{subtitle}</small></span>
