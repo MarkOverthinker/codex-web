@@ -1,4 +1,7 @@
 import type { TaskListCategorySettings } from "./task-categories.js";
+import type { MessageSourceReference } from "./message-source.js";
+
+export type { MessageSourceReference } from "./message-source.js";
 
 export const BASE_PATH = "/codex-web";
 
@@ -26,7 +29,7 @@ export type WorkFile = {
   id: string; original_name: string; relative_path: string; mime_type: string; size: number; kind: "upload" | "output";
 };
 export type Message = {
-  id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; created_at: string; files: WorkFile[];
+  id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; source_reference: MessageSourceReference | null; created_at: string; files: WorkFile[];
 };
 export type PendingPrompt = {
   id: string;
@@ -45,6 +48,7 @@ export type ComposerDraft = {
   conversation_id: string;
   content: string;
   quote_excerpt: string | null;
+  source_reference: MessageSourceReference | null;
   files: WorkFile[];
   created_at: string;
   updated_at: string;
@@ -185,6 +189,11 @@ export const api = {
     request<{ settings: TaskListCategorySettings }>("/task-categories/hidden", { method: "PUT", body: JSON.stringify({ keys }) }),
   createConversation: (workingDir?: string | null) =>
     request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST", body: JSON.stringify({ workingDir }) }),
+  createConversationFromSource: (sourceConversationId: string, sourceMessageId: string, excerpt: string) =>
+    request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft }>(
+      "/conversations/from-source",
+      { method: "POST", body: JSON.stringify({ sourceConversationId, sourceMessageId, excerpt }) },
+    ),
   updateConversationWorkingDir: (id: string, workingDir: string | null, confirm = false) =>
     request<{ conversation: Conversation }>(`/conversations/${id}/working-dir`, { method: "PUT", body: JSON.stringify({ workingDir, confirm }) }),
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
@@ -197,9 +206,9 @@ export const api = {
   archiveConversation: (id: string) => request<{ conversation: Conversation }>(`/conversations/${id}/archive`, { method: "POST" }),
   restoreConversation: (id: string) => request<{ conversation: Conversation }>(`/conversations/${id}/restore`, { method: "POST" }),
   cancelConversation: (id: string) => request<{ ok: true }>(`/conversations/${id}/cancel`, { method: "POST" }),
-  saveConversationDraft: (id: string, content: string, quoteExcerpt = "", keepalive = false) => request<{ composerDraft: ComposerDraft | null }>(
+  saveConversationDraft: (id: string, content: string, quoteExcerpt = "", sourceReference: MessageSourceReference | null = null, keepalive = false) => request<{ composerDraft: ComposerDraft | null }>(
     `/conversations/${id}/draft`,
-    { method: "PUT", body: JSON.stringify({ content, quoteExcerpt }), keepalive },
+    { method: "PUT", body: JSON.stringify({ content, quoteExcerpt, sourceReference }), keepalive },
   ),
   uploadConversationDraftFiles: (id: string, files: File[]) => {
     const body = new FormData();

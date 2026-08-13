@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
+import type { MessageSourceReference } from "../src/message-source.js";
 import { type TaskListCategorySettings, type TaskListCustomCategory } from "../src/task-categories.js";
 import { isDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName } from "./paths.js";
 
@@ -47,6 +48,7 @@ export type MessageRow = {
   role: "user" | "assistant" | "system";
   content: string;
   quote_excerpt?: string | null;
+  source_reference?: string | null;
   created_at: string;
 };
 
@@ -89,6 +91,7 @@ export type ComposerDraftRow = {
   conversation_id: string;
   content: string;
   quote_excerpt: string | null;
+  source_reference: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -222,6 +225,7 @@ export class AppDatabase {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         quote_excerpt TEXT,
+        source_reference TEXT,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS pending_prompts (
@@ -240,6 +244,7 @@ export class AppDatabase {
         conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
         content TEXT NOT NULL DEFAULT '',
         quote_excerpt TEXT,
+        source_reference TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -309,6 +314,9 @@ export class AppDatabase {
     if (!conversationColumns.has("title_source")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL DEFAULT 'legacy'");
     const messageColumns = this.columnNames("messages");
     if (!messageColumns.has("quote_excerpt")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN quote_excerpt TEXT");
+    if (!messageColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN source_reference TEXT");
+    const composerDraftColumns = this.columnNames("composer_drafts");
+    if (!composerDraftColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE composer_drafts ADD COLUMN source_reference TEXT");
     const pendingPromptColumns = this.columnNames("pending_prompts");
     if (!pendingPromptColumns.has("quote_excerpt")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN quote_excerpt TEXT");
     const sessionColumns = this.columnNames("sessions");
@@ -537,8 +545,8 @@ export class AppDatabase {
   }
 
   addMessage(message: MessageRow): void {
-    this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,?,?,?,?)").run(
-      message.id, message.conversation_id, message.role, message.content, message.quote_excerpt ?? null, message.created_at,
+    this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,created_at) VALUES(?,?,?,?,?,?,?)").run(
+      message.id, message.conversation_id, message.role, message.content, message.quote_excerpt ?? null, message.source_reference ?? null, message.created_at,
     );
     this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(message.created_at, message.conversation_id);
   }
@@ -621,24 +629,24 @@ export class AppDatabase {
   ensureComposerDraft(conversationId: string): ComposerDraftWithFiles {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO composer_drafts(conversation_id,content,quote_excerpt,created_at,updated_at)
-      VALUES(?,'',NULL,?,?) ON CONFLICT(conversation_id) DO NOTHING
+      INSERT INTO composer_drafts(conversation_id,content,quote_excerpt,source_reference,created_at,updated_at)
+      VALUES(?,'',NULL,NULL,?,?) ON CONFLICT(conversation_id) DO NOTHING
     `).run(conversationId, now, now);
     return this.getComposerDraft(conversationId)!;
   }
 
-  saveComposerDraft(conversationId: string, content: string, quoteExcerpt: string | null): ComposerDraftWithFiles | undefined {
+  saveComposerDraft(conversationId: string, content: string, quoteExcerpt: string | null, sourceReference: string | null = null): ComposerDraftWithFiles | undefined {
     const existing = this.getComposerDraft(conversationId);
-    if (!content && !quoteExcerpt && (!existing || existing.files.length === 0)) {
+    if (!content && !quoteExcerpt && !sourceReference && (!existing || existing.files.length === 0)) {
       if (existing) this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);
       return undefined;
     }
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO composer_drafts(conversation_id,content,quote_excerpt,created_at,updated_at)
-      VALUES(?,?,?,?,?)
-      ON CONFLICT(conversation_id) DO UPDATE SET content=excluded.content,quote_excerpt=excluded.quote_excerpt,updated_at=excluded.updated_at
-    `).run(conversationId, content, quoteExcerpt, now, now);
+      INSERT INTO composer_drafts(conversation_id,content,quote_excerpt,source_reference,created_at,updated_at)
+      VALUES(?,?,?,?,?,?)
+      ON CONFLICT(conversation_id) DO UPDATE SET content=excluded.content,quote_excerpt=excluded.quote_excerpt,source_reference=excluded.source_reference,updated_at=excluded.updated_at
+    `).run(conversationId, content, quoteExcerpt, sourceReference, now, now);
     return this.getComposerDraft(conversationId);
   }
 
@@ -660,7 +668,7 @@ export class AppDatabase {
   pruneEmptyComposerDraft(conversationId: string): void {
     this.sqlite.prepare(`
       DELETE FROM composer_drafts
-      WHERE conversation_id=? AND content='' AND quote_excerpt IS NULL
+      WHERE conversation_id=? AND content='' AND quote_excerpt IS NULL AND source_reference IS NULL
         AND NOT EXISTS (SELECT 1 FROM files WHERE composer_draft_id=?)
     `).run(conversationId, conversationId);
   }
@@ -699,12 +707,13 @@ export class AppDatabase {
     content: string,
     selection: StoredAgentSelection,
     quoteExcerpt: string | null,
+    sourceReference: string | null = null,
   ): JobRow {
     const now = new Date().toISOString();
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
-      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,'user',?,?,?)")
-        .run(messageId, conversationId, content, quoteExcerpt, now);
+      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,created_at) VALUES(?,?,'user',?,?,?,?)")
+        .run(messageId, conversationId, content, quoteExcerpt, sourceReference, now);
       this.sqlite.prepare("UPDATE files SET message_id=?,composer_draft_id=NULL WHERE conversation_id=? AND composer_draft_id=?")
         .run(messageId, conversationId, conversationId);
       this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);

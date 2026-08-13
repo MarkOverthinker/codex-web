@@ -10,7 +10,7 @@ import {
   Eye, EyeOff, CornerUpLeft, GripVertical, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -62,7 +62,7 @@ const ACTIVITY_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", { hour: "2-digi
 
 type DraftSaveState = "idle" | "unsaved" | "saving" | "saved" | "error";
 type DraftUpload = { id: string; name: string };
-type CachedComposerDraft = { content: string; quoteExcerpt: string; composerDraft: ComposerDraft | null };
+type CachedComposerDraft = { content: string; quoteExcerpt: string; sourceReference: MessageSourceReference | null; composerDraft: ComposerDraft | null };
 
 function conversationFieldsEqual(left: Conversation, right: Conversation): boolean {
   return left.id === right.id
@@ -86,8 +86,8 @@ function conversationListEqual(left: readonly Conversation[], right: readonly Co
   return true;
 }
 
-function composerDraftSignature(content: string, quoteExcerpt: string): string {
-  return `${content}\u0000${quoteExcerpt}`;
+function composerDraftSignature(content: string, quoteExcerpt: string, sourceReference: MessageSourceReference | null = null): string {
+  return `${content}\u0000${quoteExcerpt}\u0000${sourceReference ? JSON.stringify(sourceReference) : ""}`;
 }
 
 /**
@@ -344,6 +344,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
   const [askAgentQuote, setAskAgentQuote] = useState("");
+  const [sourceReference, setSourceReference] = useState<MessageSourceReference | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [composerDraft, setComposerDraft] = useState<ComposerDraft | null>(null);
   const [draftUploads, setDraftUploads] = useState<DraftUpload[]>([]);
@@ -393,6 +394,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
+  const pendingSourceFocusRef = useRef<{ conversationId: string; messageId: string } | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
   const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
   const [manualWorkingDir, setManualWorkingDir] = useState("");
@@ -428,6 +430,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const lastEventIdRef = useRef(0);
   const inputRef = useRef(input);
   const askAgentQuoteRef = useRef(askAgentQuote);
+  const sourceReferenceRef = useRef<MessageSourceReference | null>(sourceReference);
   const composerDraftRef = useRef<ComposerDraft | null>(composerDraft);
   const draftUploadsRef = useRef<DraftUpload[]>(draftUploads);
   const draftLoadedConversationRef = useRef<string | null>(null);
@@ -450,15 +453,19 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   editingPendingRef.current = editingPending;
   inputRef.current = input;
   askAgentQuoteRef.current = askAgentQuote;
+  sourceReferenceRef.current = sourceReference;
   composerDraftRef.current = composerDraft;
   draftUploadsRef.current = draftUploads;
 
-  const askAgentAbout = useCallback((selectedText: string) => {
+  const askAgentAbout = useCallback((selectedText: string, _messageId: string) => {
     const normalized = normalizeAskAgentSelection(selectedText);
     if (!normalized) return;
     setAskAgentQuote(normalized.slice(0, ASK_AGENT_SELECTION_MAX_CHARS + 1));
     setComposerFocusRequest((request) => request + 1);
   }, []);
+
+  const newConversationFromSourceRef = useRef<(sourceMessageId: string, excerpt: string) => void>(() => undefined);
+  newConversationFromSourceRef.current = newConversationFromSource;
 
   const openFilePreview = useCallback((file: WorkFile) => setPreviewFile(file), []);
   const closeFilePreview = useCallback(() => setPreviewFile(null), []);
@@ -484,11 +491,11 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     });
   }, []);
 
-  const persistComposerDraft = useCallback((conversationId: string, content: string, quoteExcerpt: string, keepalive = false) => {
-    const signature = composerDraftSignature(content, quoteExcerpt);
+  const persistComposerDraft = useCallback((conversationId: string, content: string, quoteExcerpt: string, sourceRef: MessageSourceReference | null, keepalive = false) => {
+    const signature = composerDraftSignature(content, quoteExcerpt, sourceRef);
     const operation = draftSaveQueueRef.current.catch(() => undefined).then(async () => {
       if (selectedIdRef.current === conversationId && !editingPendingRef.current) setDraftSaveState("saving");
-      const result = await api.saveConversationDraft(conversationId, content, quoteExcerpt, keepalive && new Blob([content, quoteExcerpt]).size < 60_000);
+      const result = await api.saveConversationDraft(conversationId, content, quoteExcerpt, sourceRef, keepalive && new Blob([content, quoteExcerpt, JSON.stringify(sourceRef ?? "")]).size < 60_000);
       draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
       draftSyncedSignaturesRef.current.set(conversationId, signature);
       const cached = draftCacheRef.current.get(conversationId);
@@ -496,7 +503,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       if (selectedIdRef.current === conversationId && !editingPendingRef.current) {
         composerDraftRef.current = result.composerDraft;
         setComposerDraft(result.composerDraft);
-        setDraftSaveState(composerDraftSignature(inputRef.current, askAgentQuoteRef.current) === signature ? "saved" : "unsaved");
+        setDraftSaveState(composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current) === signature ? "saved" : "unsaved");
       }
     }).catch((reason) => {
       if (selectedIdRef.current === conversationId && !editingPendingRef.current) setDraftSaveState("error");
@@ -572,6 +579,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         setFiles([]);
         setInput(result.editingPrompt.content);
         setAskAgentQuote(result.editingPrompt.quote_excerpt ?? "");
+        setSourceReference(null);
       }
     } else {
       const wasEditing = Boolean(editingPendingRef.current);
@@ -584,11 +592,12 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       const cached = draftCacheRef.current.get(id);
       const shouldRestore = wasEditing || draftLoadedConversationRef.current !== id;
       if (shouldRestore) {
-        const cachedSignature = cached ? composerDraftSignature(cached.content, cached.quoteExcerpt) : undefined;
+        const cachedSignature = cached ? composerDraftSignature(cached.content, cached.quoteExcerpt, cached.sourceReference) : undefined;
         const cachedIsDirty = Boolean(cached && cachedSignature !== draftSyncedSignaturesRef.current.get(id));
         const restored = cachedIsDirty ? cached! : {
           content: result.composerDraft?.content ?? "",
           quoteExcerpt: result.composerDraft?.quote_excerpt ?? "",
+          sourceReference: result.composerDraft?.source_reference ?? null,
           composerDraft: result.composerDraft,
         };
         draftLoadedConversationRef.current = id;
@@ -596,16 +605,18 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         setComposerDraft(restored.composerDraft);
         setInput(restored.content);
         setAskAgentQuote(restored.quoteExcerpt);
+        setSourceReference(restored.sourceReference);
         setFiles([]);
         draftCacheRef.current.set(id, restored);
-        if (!cachedIsDirty) draftSyncedSignaturesRef.current.set(id, composerDraftSignature(restored.content, restored.quoteExcerpt));
+        if (!cachedIsDirty) draftSyncedSignaturesRef.current.set(id, composerDraftSignature(restored.content, restored.quoteExcerpt, restored.sourceReference));
         setDraftSaveState(cachedIsDirty ? "unsaved" : restored.composerDraft ? "saved" : "idle");
       } else {
-        const localSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current);
+        const localSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
         const syncedSignature = draftSyncedSignaturesRef.current.get(id);
         const serverContent = result.composerDraft?.content ?? "";
         const serverQuote = result.composerDraft?.quote_excerpt ?? "";
-        const serverSignature = composerDraftSignature(serverContent, serverQuote);
+        const serverSource = result.composerDraft?.source_reference ?? null;
+        const serverSignature = composerDraftSignature(serverContent, serverQuote, serverSource);
         const responseIsStale = (draftMutationGenerationRef.current.get(id) ?? 0) !== draftGenerationAtRequest;
         const serverDraft = responseIsStale ? composerDraftRef.current : result.composerDraft;
         composerDraftRef.current = serverDraft;
@@ -613,8 +624,9 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         if (!responseIsStale && localSignature === syncedSignature && serverSignature !== syncedSignature) {
           setInput(serverContent);
           setAskAgentQuote(serverQuote);
+          setSourceReference(serverSource);
           draftSyncedSignaturesRef.current.set(id, serverSignature);
-          draftCacheRef.current.set(id, { content: serverContent, quoteExcerpt: serverQuote, composerDraft: serverDraft });
+          draftCacheRef.current.set(id, { content: serverContent, quoteExcerpt: serverQuote, sourceReference: serverSource, composerDraft: serverDraft });
           setDraftSaveState(serverDraft ? "saved" : "idle");
         } else {
           const current = draftCacheRef.current.get(id);
@@ -727,6 +739,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       clearActivitiesBuffer();
       setDetail(null); setJob(null); setSending(false); setActivities([]);
       setEditingPending(null); setRemovedEditingFileIds([]); setAskAgentQuote("");
+      setSourceReference(null);
       composerDraftRef.current = null; setComposerDraft(null); setDraftUploads([]); setDraftSaveState("idle");
       draftLoadedConversationRef.current = null;
       if (agentOptions) {
@@ -745,6 +758,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     setComposerDraft(cached?.composerDraft ?? null);
     setInput(cached?.content ?? "");
     setAskAgentQuote(cached?.quoteExcerpt ?? "");
+    setSourceReference(cached?.sourceReference ?? null);
     setDraftSaveState(cached ? "unsaved" : "idle");
     void reconcile(selectedId);
     setSidebarOpen(false);
@@ -752,8 +766,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   }, [selectedId]);
   useEffect(() => {
     if (!selectedId || editingPending || draftLoadedConversationRef.current !== selectedId) return;
-    const signature = composerDraftSignature(input, askAgentQuote);
-    draftCacheRef.current.set(selectedId, { content: input, quoteExcerpt: askAgentQuote, composerDraft: composerDraftRef.current });
+    const signature = composerDraftSignature(input, askAgentQuote, sourceReference);
+    draftCacheRef.current.set(selectedId, { content: input, quoteExcerpt: askAgentQuote, sourceReference, composerDraft: composerDraftRef.current });
     if (signature === draftSyncedSignaturesRef.current.get(selectedId)) {
       setDraftSaveState(composerDraftRef.current ? "saved" : "idle");
       return;
@@ -762,21 +776,22 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = window.setTimeout(() => {
       draftSaveTimerRef.current = null;
-      void persistComposerDraft(selectedId, input, askAgentQuote).catch(() => undefined);
+      void persistComposerDraft(selectedId, input, askAgentQuote, sourceReference).catch(() => undefined);
     }, COMPOSER_DRAFT_SAVE_DELAY_MS);
     return () => {
       if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = null;
     };
-  }, [askAgentQuote, editingPending, input, persistComposerDraft, selectedId]);
+  }, [askAgentQuote, editingPending, input, persistComposerDraft, selectedId, sourceReference]);
   useEffect(() => () => {
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     const conversationId = selectedId;
     if (!conversationId || editingPendingRef.current || draftLoadedConversationRef.current !== conversationId) return;
     const content = inputRef.current;
     const quoteExcerpt = askAgentQuoteRef.current;
-    if (composerDraftSignature(content, quoteExcerpt) !== draftSyncedSignaturesRef.current.get(conversationId)) {
-      void persistComposerDraft(conversationId, content, quoteExcerpt, true).catch(() => undefined);
+    const sourceRef = sourceReferenceRef.current;
+    if (composerDraftSignature(content, quoteExcerpt, sourceRef) !== draftSyncedSignaturesRef.current.get(conversationId)) {
+      void persistComposerDraft(conversationId, content, quoteExcerpt, sourceRef, true).catch(() => undefined);
     }
   }, [persistComposerDraft, selectedId]);
   useEffect(() => {
@@ -787,8 +802,9 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       if (!conversationId || editingPendingRef.current || draftLoadedConversationRef.current !== conversationId) return;
       const content = inputRef.current;
       const quoteExcerpt = askAgentQuoteRef.current;
-      if (composerDraftSignature(content, quoteExcerpt) !== draftSyncedSignaturesRef.current.get(conversationId)) {
-        void persistComposerDraft(conversationId, content, quoteExcerpt, true).catch(() => undefined);
+      const sourceRef = sourceReferenceRef.current;
+      if (composerDraftSignature(content, quoteExcerpt, sourceRef) !== draftSyncedSignaturesRef.current.get(conversationId)) {
+        void persistComposerDraft(conversationId, content, quoteExcerpt, sourceRef, true).catch(() => undefined);
       }
     };
     window.addEventListener("focus", resume);
@@ -823,6 +839,21 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     });
     return () => window.cancelAnimationFrame(frame);
   }, [detail?.messages.length, activities, sending]);
+
+  useEffect(() => {
+    const target = pendingSourceFocusRef.current;
+    if (!target || detail?.conversation.id !== target.conversationId) return;
+    const container = messagesRef.current;
+    const message = container?.querySelector<HTMLElement>(`[data-message-id="${target.messageId}"]`);
+    if (!container || !message) return;
+    pendingSourceFocusRef.current = null;
+    const containerTop = container.getBoundingClientRect().top;
+    const messageTop = message.getBoundingClientRect().top;
+    const top = messageTop - containerTop + container.scrollTop;
+    container.scrollTo({ top: Math.max(0, top - (container.clientHeight - message.clientHeight) / 2), behavior: "smooth" });
+    message.classList.add("message-highlight");
+    window.setTimeout(() => message.classList.remove("message-highlight"), 2200);
+  }, [detail?.conversation.id, detail?.messages.length]);
 
   const loadOlderMessages = useCallback(async () => {
     const current = detailRef.current;
@@ -925,6 +956,63 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     setSelectedModel(result.agentSelection.model); setReasoningEffort(result.agentSelection.reasoningEffort);
     await refreshList(); setSelectedId(result.conversation.id);
     setNewTaskDirPanelOpen(false);
+  }
+
+  async function newConversationFromSource(sourceMessageId: string, excerpt: string) {
+    if (!selectedId || submitting || selectionSaving) return;
+    setError(""); setSubmitting(true);
+    try {
+      const result = await api.createConversationFromSource(selectedId, sourceMessageId, excerpt);
+      setSelectedModel(result.agentSelection.model);
+      setReasoningEffort(result.agentSelection.reasoningEffort);
+      const cached: CachedComposerDraft = {
+        content: "",
+        quoteExcerpt: result.composerDraft.quote_excerpt ?? "",
+        sourceReference: result.composerDraft.source_reference,
+        composerDraft: result.composerDraft,
+      };
+      draftCacheRef.current.set(result.conversation.id, cached);
+      draftSyncedSignaturesRef.current.set(result.conversation.id, composerDraftSignature(cached.content, cached.quoteExcerpt, cached.sourceReference));
+      draftLoadedConversationRef.current = result.conversation.id;
+      await refreshList();
+      setSelectedId(result.conversation.id);
+      setComposerDraft(result.composerDraft);
+      setInput("");
+      setAskAgentQuote(result.composerDraft.quote_excerpt ?? "");
+      setSourceReference(result.composerDraft.source_reference);
+      setFiles([]);
+      setDraftSaveState("saved");
+      setComposerFocusRequest((request) => request + 1);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "引用并新建任务失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function scrollToSourceMessage(messageId: string) {
+    const container = messagesRef.current;
+    const message = container?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+    if (!container || !message) return;
+    const containerTop = container.getBoundingClientRect().top;
+    const messageTop = message.getBoundingClientRect().top;
+    const top = messageTop - containerTop + container.scrollTop;
+    container.scrollTo({ top: Math.max(0, top - (container.clientHeight - message.clientHeight) / 2), behavior: "smooth" });
+    message.classList.add("message-highlight");
+    window.setTimeout(() => message.classList.remove("message-highlight"), 2200);
+  }
+
+  function openSourceReference(reference: MessageSourceReference) {
+    if (reference.sourceConversationId === selectedIdRef.current) {
+      scrollToSourceMessage(reference.sourceMessageId);
+      return;
+    }
+    pendingSourceFocusRef.current = {
+      conversationId: reference.sourceConversationId,
+      messageId: reference.sourceMessageId,
+    };
+    setSidebarOpen(false);
+    setSelectedId(reference.sourceConversationId);
   }
 
   async function changeConversationWorkingDir(conversationId: string, workingDir: string | null) {
@@ -1043,9 +1131,10 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       else draftCacheRef.current.set(conversationId, {
         content: conversationId === selectedIdRef.current ? inputRef.current : result.composerDraft.content,
         quoteExcerpt: conversationId === selectedIdRef.current ? askAgentQuoteRef.current : result.composerDraft.quote_excerpt ?? "",
+        sourceReference: conversationId === selectedIdRef.current ? sourceReferenceRef.current : result.composerDraft.source_reference ?? null,
         composerDraft: result.composerDraft,
       });
-      const currentSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current);
+      const currentSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
       setDraftSaveState(currentSignature === draftSyncedSignaturesRef.current.get(conversationId) ? "saved" : "unsaved");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "草稿附件上传失败");
@@ -1067,7 +1156,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       setComposerDraft(result.composerDraft);
       const cached = draftCacheRef.current.get(conversationId);
       if (cached) draftCacheRef.current.set(conversationId, { ...cached, composerDraft: result.composerDraft });
-      const currentSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current);
+      const currentSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
       setDraftSaveState(currentSignature === draftSyncedSignaturesRef.current.get(conversationId)
         ? result.composerDraft ? "saved" : "idle"
         : "unsaved");
@@ -1084,9 +1173,9 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       await api.deleteConversationDraft(conversationId);
       draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
       draftCacheRef.current.delete(conversationId);
-      draftSyncedSignaturesRef.current.set(conversationId, composerDraftSignature("", ""));
+      draftSyncedSignaturesRef.current.set(conversationId, composerDraftSignature("", "", null));
       composerDraftRef.current = null;
-      setComposerDraft(null); setInput(""); setAskAgentQuote(""); setFiles([]); setDraftSaveState("idle");
+      setComposerDraft(null); setInput(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]); setDraftSaveState("idle");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "清空草稿失败"); }
   }
 
@@ -1119,18 +1208,18 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         if (useComposerDraft) {
           if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
           await draftSaveQueueRef.current;
-          await persistComposerDraft(id, message, askAgentQuote);
+          await persistComposerDraft(id, message, askAgentQuote, sourceReferenceRef.current);
         }
         const result = await api.sendMessage(id, message, useComposerDraft ? [] : files, askAgentQuote, useComposerDraft);
         if (result.needsInstruction) setNotice(result.guidance || "文件已上传，请输入具体操作后再发送。");
         if (useComposerDraft) {
           draftMutationGenerationRef.current.set(id, (draftMutationGenerationRef.current.get(id) ?? 0) + 1);
           draftCacheRef.current.delete(id);
-          draftSyncedSignaturesRef.current.set(id, composerDraftSignature("", ""));
+          draftSyncedSignaturesRef.current.set(id, composerDraftSignature("", "", null));
           composerDraftRef.current = null; setComposerDraft(null); setDraftSaveState("idle");
         }
       }
-      setInput(""); setAskAgentQuote(""); setFiles([]);
+      setInput(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]);
       await reconcile(id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "发送失败");
@@ -1144,11 +1233,11 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       if (draftLoadedConversationRef.current === selectedId) {
         if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
         await draftSaveQueueRef.current;
-        await persistComposerDraft(selectedId, inputRef.current, askAgentQuoteRef.current);
+        await persistComposerDraft(selectedId, inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
       }
       const result = await api.editPendingPrompt(selectedId, prompt.id);
       editingPendingRef.current = result.editingPrompt;
-      setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setInput(result.editingPrompt.content);
+      setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setSourceReference(null); setInput(result.editingPrompt.content);
       draftLoadedConversationRef.current = null;
       if (selectedModel !== prompt.agent_model || reasoningEffort !== prompt.reasoning_effort) {
         await persistAgentSelection({ model: prompt.agent_model, reasoningEffort: prompt.reasoning_effort });
@@ -1164,7 +1253,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     try {
       if (editingPending.content.trim() || editingPending.quote_excerpt) await api.restorePendingPrompt(selectedId, editingPending.id);
       else await api.deletePendingPrompt(selectedId, editingPending.id);
-      editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]); setInput(""); setAskAgentQuote(""); setFiles([]);
+      editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]); setInput(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]);
       draftLoadedConversationRef.current = null;
       setNotice("");
       await reconcile(selectedId);
@@ -1735,6 +1824,8 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
     key={selectedId ?? "new-conversation"}
     input={input} setInput={setInput}
     askAgentQuote={askAgentQuote} onClearAskAgentQuote={() => setAskAgentQuote("")}
+    sourceReference={sourceReference} onClearSourceReference={() => { setAskAgentQuote(""); setSourceReference(null); }}
+    onOpenSourceReference={(reference) => openSourceReference(reference)}
     focusRequest={composerFocusRequest}
     files={files} setFiles={setFiles}
     draftFiles={composerDraftFiles} draftUploads={draftUploads} draftSaveState={draftSaveState}
@@ -1754,7 +1845,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
     currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort,
-    removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, submitting,
+    removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
   return <div className="shell">
@@ -2065,7 +2156,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -2138,7 +2229,7 @@ const ConversationRow = memo(function ConversationRow({ conversation, selected, 
   </div>;
 }, conversationRowPropsEqual);
 
-type AskAgentSelection = { text: string; left: number; top: number; below: boolean };
+type AskAgentSelection = { text: string; messageId: string; left: number; top: number; below: boolean };
 
 type MessageCardProps = {
   message: Message;
@@ -2146,10 +2237,11 @@ type MessageCardProps = {
   chatFontSize: number;
   citationFiles: WorkFile[];
   onPreview: (file: WorkFile) => void;
+  onOpenSourceReference: (reference: MessageSourceReference) => void;
 };
 
-const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview }: MessageCardProps) {
-  return <article className={`message ${message.role}`}>
+const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSourceReference }: MessageCardProps) {
+  return <article className={`message ${message.role}`} data-message-id={message.id}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
       <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></div>
@@ -2164,7 +2256,17 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
           return <a href={resolved.href} target="_blank" rel="noreferrer">{children}</a>;
         } }}
       >{sanitizeAgentMarkdown(message.content, citationFiles)}</ReactMarkdown></div> : <>
-        {message.quote_excerpt && <div className="message-reference" title={message.quote_excerpt}><CornerUpLeft size={14} /><span><strong>引用</strong>{message.quote_excerpt}</span></div>}
+        {message.source_reference
+          ? <div className="message-source-reference">
+              <div className="message-source-reference-copy">
+                <CornerUpLeft size={14} />
+                <span className="message-source-reference-quote" title={message.source_reference.excerpt}>{message.source_reference.excerpt}</span>
+                <button type="button" className="message-source-link" onClick={() => onOpenSourceReference(message.source_reference!)}>来源：{message.source_reference.sourceConversationTitle}</button>
+              </div>
+            </div>
+          : message.quote_excerpt
+            ? <div className="message-reference" title={message.quote_excerpt}><CornerUpLeft size={14} /><span><strong>引用</strong>{message.quote_excerpt}</span></div>
+            : null}
         {message.content && <p data-agent-selectable="true">{message.content}</p>}
       </>}
       {message.files.length > 0 && <div className="file-grid">{message.files.map((file) => <FileCard key={file.id} file={file} onPreview={onPreview} />)}</div>}
@@ -2182,6 +2284,7 @@ type MessageListProps = {
   taskDurationSeconds: number | null;
   messagesRef: React.RefObject<HTMLDivElement | null>;
   onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void;
+  onOpenSourceReference: (reference: MessageSourceReference) => void;
   userInitials: string;
   chatFontSize: number;
   citationFiles: WorkFile[];
@@ -2195,7 +2298,7 @@ function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   return <ProcessPanel key={detail.conversation.id} activities={activities} startedAt={detail.activeJob?.startedAt ?? null} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
@@ -2203,7 +2306,7 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
       const reasoningAbove = !sending && index === reasoningMessageIndex && reasoningSteps.length > 0;
       return <Fragment key={message.id}>
         {reasoningAbove && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
-        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} />
+        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSourceReference={onOpenSourceReference} />
       </Fragment>;
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
@@ -2235,8 +2338,8 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string) => void; userInitials: string; chatFontSize: number;
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, onNewConversationFromSource, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void;
 }) {
   const citationFiles = useMemo(() => detail.messages.flatMap((message) => message.files), [detail.messages]);
@@ -2250,6 +2353,10 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       const element = node instanceof Element ? node : node?.parentElement;
       return element?.closest<HTMLElement>("[data-agent-selectable]") ?? null;
     };
+    const messageParent = (node: Node | null) => {
+      const element = node instanceof Element ? node : node?.parentElement;
+      return element?.closest<HTMLElement>("[data-message-id]") ?? null;
+    };
     const update = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
@@ -2261,12 +2368,17 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
         const start = selectableParent(range.startContainer);
         const end = selectableParent(range.endContainer);
         if (!start || start !== end || !chatRef.current?.contains(start)) return clear();
+        const message = messageParent(range.startContainer);
+        const messageEnd = messageParent(range.endContainer);
+        if (!message || message !== messageEnd) return clear();
+        const messageId = message.dataset.messageId;
+        if (!messageId) return clear();
         const rect = range.getBoundingClientRect();
         if (!rect.width && !rect.height) return clear();
         const horizontalInset = 72;
         const left = Math.min(window.innerWidth - horizontalInset, Math.max(horizontalInset, rect.left + rect.width / 2));
         const below = window.innerHeight - rect.bottom >= 64;
-        setAskSelection({ text, left, top: below ? rect.bottom + 10 : rect.top - 10, below });
+        setAskSelection({ text, messageId, left, top: below ? rect.bottom + 10 : rect.top - 10, below });
       });
     };
     document.addEventListener("selectionchange", update);
@@ -2283,7 +2395,14 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
 
   function useSelectedText() {
     if (!askSelection) return;
-    onAskAgent(askSelection.text);
+    onAskAgent(askSelection.text, askSelection.messageId);
+    setAskSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function useSelectedTextAsNewTask() {
+    if (!askSelection) return;
+    onNewConversationFromSource(askSelection.messageId, askSelection.text);
     setAskSelection(null);
     window.getSelection()?.removeAllRanges();
   }
@@ -2318,11 +2437,15 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       taskDurationSeconds={taskDurationSeconds}
       messagesRef={messagesRef}
       onMessagesScroll={onMessagesScroll}
+      onOpenSourceReference={onOpenSourceReference}
       userInitials={userInitials}
       chatFontSize={chatFontSize}
       citationFiles={citationFiles}
       onPreview={onPreview}
-    />{askSelection && <button type="button" className={`ask-agent-selection ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }} onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>}
+    />{askSelection && <div className={`ask-agent-selection selection-actions ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }}>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedTextAsNewTask(); }} onClick={(event) => { if (event.detail === 0) useSelectedTextAsNewTask(); }}><Plus size={14} /><span>引用并新建任务</span></button>
+    </div>}
   </section>;
 });
 
@@ -2540,12 +2663,15 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, onSend, onCancel }: {
+function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
   setInput: (value: string) => void;
   askAgentQuote: string;
   onClearAskAgentQuote: () => void;
+  sourceReference: MessageSourceReference | null;
+  onClearSourceReference: () => void;
+  onOpenSourceReference: (reference: MessageSourceReference) => void;
   focusRequest: number;
   files: File[];
   setFiles: Dispatch<SetStateAction<File[]>>;
@@ -2823,7 +2949,15 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
         );
       }}
     />
-    {askAgentQuote && <div className="ask-agent-reference" title={askAgentQuote}><CornerUpLeft size={15} /><span>{askAgentQuote}</span><button type="button" onClick={onClearAskAgentQuote} aria-label="移除引用" title="移除引用"><X size={14} /></button></div>}
+    {sourceReference && <div className="derived-task-reference">
+      <div className="derived-task-reference-copy">
+        <CornerUpLeft size={15} />
+        <span className="derived-task-reference-quote" title={sourceReference.excerpt}>{sourceReference.excerpt}</span>
+        <button type="button" className="derived-task-source-link" onClick={() => onOpenSourceReference(sourceReference)}>来源：{sourceReference.sourceConversationTitle}</button>
+      </div>
+      <button type="button" className="derived-task-reference-remove" onClick={onClearSourceReference} aria-label="移除引用" title="移除引用"><X size={14} /></button>
+    </div>}
+    {!sourceReference && askAgentQuote && <div className="ask-agent-reference" title={askAgentQuote}><CornerUpLeft size={15} /><span>{askAgentQuote}</span><button type="button" onClick={onClearAskAgentQuote} aria-label="移除引用" title="移除引用"><X size={14} /></button></div>}
     {editingPending && editingPending.files.length > 0 && <div className="editing-pending-files">{editingPending.files.map((file) => {
       const removed = removedEditingFileIds.includes(file.id);
       return <span key={file.id} className={removed ? "removed" : ""}><FileIcon size={14} />{file.original_name}<button type="button" onClick={() => removed ? onRestoreEditingFile(file.id) : onRemoveEditingFile(file.id)} title={removed ? "恢复附件" : "移除附件"}>{removed ? <Plus size={13} /> : <X size={13} />}</button></span>;
@@ -2833,7 +2967,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     {files.length > 0 && <div className="pending-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={14} />{file.name}<button onClick={() => setFiles(files.filter((_, i) => i !== index))}><X size={13} /></button></span>)}</div>}
     {pasteNotice && <div className="paste-notice" role="status" aria-live="polite"><Check size={14} />{pasteNotice}</div>}
     {voiceError && <div className="voice-error" role="alert"><span>{voiceError}</span><button type="button" onClick={() => setVoiceError("")}><X size={13} /></button></div>}
-    <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
+    <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
     {voiceState !== "idle" && <div className={`voice-panel ${voiceState}`}>
       {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
     </div>}
