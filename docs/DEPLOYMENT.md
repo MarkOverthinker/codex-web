@@ -258,6 +258,11 @@ cache when the unpack path differs from the build machine. It deliberately
 excludes `.env`, `data` (except `data/python`), `tenants`, workspaces and git
 metadata.
 
+The bundle is designed for rootless, single-user use: unpack it into a
+user-writable directory and run `./start.sh` as that user. Both the web
+service and Codex task processes then run as the same user; the chown/setpriv
+privilege paths are only exercised when the service itself runs as root.
+
 The web service itself starts fully offline, but Codex tasks still require a
 configured `~/.codex` for the `APP_USERNAME` system user and network reach to
 the model API (or an internal endpoint configured in `config.toml`). Optional

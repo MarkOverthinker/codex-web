@@ -143,9 +143,11 @@ chmod +x "$STAGING/bin/codex"
 
 cat > "$STAGING/start.sh" <<'EOF'
 #!/usr/bin/env bash
-# Start codex-web from the offline bundle in host mode.
-# First run generates .env, asks for the web login password and repairs the
-# shared Python runtime using only the wheels bundled inside the package.
+# Start codex-web from the offline bundle in user-level host mode.
+# No root is required: the web service and task processes both run as the
+# current user. First run generates .env, asks for the web login password and
+# repairs the shared Python runtime using only the wheels bundled inside the
+# package.
 set -Eeuo pipefail
 
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -222,8 +224,15 @@ cd codex-web
 ```
 
 浏览器打开 http://127.0.0.1:37821/codex-web/ 。首次运行会要求输入至少 12 位
-的登录密码；`.env` 中的 `APP_USERNAME` 默认是当前系统用户，可用 `sudo` 或
-直接编辑 `.env` 改为目标机器上的系统账号。
+的登录密码。
+
+## 无需 root，用户级运行
+
+把包解压到自己的用户目录即可直接运行，不需要 root，也不需要 systemd 或
+`sudo`。服务进程和 Codex 任务进程都使用启动 `start.sh` 的用户身份；代码在
+非 root 下会自动跳过 `chown`/`setpriv` 特权路径（这些只在 root 服务向其他
+系统用户降权时才使用）。`APP_USERNAME` 默认是当前系统用户，保持默认即可；
+如确实需要让任务以另一个系统账号运行，才需要额外配置。
 
 ## 目标机器前置条件
 
