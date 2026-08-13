@@ -255,7 +255,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .task-view-toggle button { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 1px solid rgba(255, 255, 255, .12); border-radius: 6px; color: #aeb2c4; background: rgba(255, 255, 255, .05); cursor: pointer; }
 .task-view-toggle button:hover { color: #fff; border-color: rgba(240, 170, 60, .42); background: rgba(240, 170, 60, .1); }
 .task-view-toggle button.active { color: #fff; border-color: rgba(240, 170, 60, .48); background: rgba(240, 170, 60, .14); }
-.task-category-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; padding-right: 2px; }
+.task-category-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; padding-right: 2px; }
 .task-category-card { margin: 0; padding: 2px 4px 4px; border: 1px solid rgba(255, 255, 255, .09); border-radius: 12px; background: rgba(255, 255, 255, .025); }
 .task-category-card .task-category-body { margin-left: 0; padding-left: 4px; padding-right: 4px; border-left: 0; }
 .task-category-card .task-category-more { margin-top: 4px; }
