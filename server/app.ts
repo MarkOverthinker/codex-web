@@ -581,7 +581,7 @@ export function createApp(overrides: AppOverrides = {}) {
       return res.status(403).json({ error: "工作目录收藏仅支持已映射系统账户的 host 模式。" });
     }
     const action = req.body?.action;
-    if (!["add", "remove", "rename"].includes(action)) return res.status(400).json({ error: "收藏操作无效。" });
+    if (!["add", "remove", "rename", "move"].includes(action)) return res.status(400).json({ error: "收藏操作无效。" });
     let target: string;
     try {
       target = action === "add"
@@ -613,6 +613,15 @@ export function createApp(overrides: AppOverrides = {}) {
         saveTaskListCategorySettings(session.user_id, settings);
       }
       return res.json({ settings: workingDirSettingsFor(session.user_id) });
+    } else if (action === "move") {
+      const direction = req.body?.direction;
+      if (direction !== "up" && direction !== "down") return res.status(400).json({ error: "排序方向无效。" });
+      const index = favorites.findIndex((favorite) => favorite.path === target);
+      if (index < 0) return res.status(404).json({ error: "收藏目录不存在。" });
+      const swapIndex = direction === "up" ? index - 1 : index + 1;
+      if (swapIndex < 0 || swapIndex >= favorites.length) return res.status(400).json({ error: "已处于列表最前/最后。" });
+      const [moved] = favorites.splice(index, 1);
+      favorites.splice(swapIndex, 0, moved);
     } else {
       const favorite = favorites.find((candidate) => candidate.path === target);
       if (!favorite) return res.status(404).json({ error: "收藏目录不存在。" });

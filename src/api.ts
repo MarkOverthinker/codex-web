@@ -166,7 +166,7 @@ export const api = {
   }),
   workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
   reloadStatus: () => request<ReloadStatus>("/reload-status"),
-  updateFavoriteWorkingDir: (payload: { action: "add" | "remove" | "rename"; path?: string; label?: string }) =>
+  updateFavoriteWorkingDir: (payload: { action: "add" | "remove" | "rename" | "move"; path?: string; label?: string; direction?: "up" | "down" }) =>
     request<{ settings: WorkingDirSettings }>("/working-dirs/favorites", { method: "PUT", body: JSON.stringify(payload) }),
   setDefaultWorkingDir: (path: string | null) =>
     request<{ settings: WorkingDirSettings }>("/working-dirs/default", { method: "PUT", body: JSON.stringify({ path }) }),
