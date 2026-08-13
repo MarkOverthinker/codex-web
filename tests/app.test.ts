@@ -785,6 +785,22 @@ test("production binding permits public bind only when explicitly containerized 
   assert.throws(() => assertProductionConfig({ ...base, host: "0.0.0.0", containerized: false, hostMode: false, allowHostPublicBind: true }), /explicitly allowed/);
 });
 
+test("plain HTTP responses do not force HTTPS upgrades or send HSTS", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-http-headers-test-"));
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Headers-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const res = await request(instance.app).get("/codex-web/api/health");
+  assert.equal(res.status, 200);
+  const csp = String(res.headers["content-security-policy"] ?? "");
+  assert.doesNotMatch(csp, /upgrade-insecure-requests/);
+  assert.equal(res.headers["strict-transport-security"], undefined);
+});
+
 test("agent options use the live catalog (image-capable and text-only) and default to Sol with extra-high reasoning", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-model-options-test-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
