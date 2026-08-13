@@ -234,11 +234,14 @@ persisted on the server while expanded/collapsed state stays in the browser.
 Hidden categories can be restored from the category manager. The sidebar offers
 both a vertical list and a grid view; in grid view each card is a category with
 its tasks, and “N more” expands the card to show all tasks. Cards are laid out
-in priority order from left to right and top to bottom; when one screen cannot
-hold every card, the grid automatically widens into additional columns and
-rows, bounded by the sidebar width, and falls back to vertical scrolling when
-the width is too narrow. The view choice is stored in the browser. This feature
-is deliberately unavailable in the isolated tenant deployment.
+in priority order from top-left to bottom-right: the first row fills left to
+right, then each card joins the column with the smallest current height (ties
+go to the leftmost column), so cards with different heights no longer leave
+uniform row gaps. When one screen cannot hold every card, the grid
+automatically widens into additional columns, bounded by the sidebar width,
+and falls back to vertical scrolling when the width is too narrow. The view
+choice is stored in the browser. This feature is deliberately unavailable in
+the isolated tenant deployment.
 
 ## Optional voice transcription
 
