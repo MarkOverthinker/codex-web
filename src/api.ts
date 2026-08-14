@@ -106,6 +106,7 @@ export type ProviderModel = {
 };
 export type ProviderState = { providers: Provider[]; models: ProviderModel[] };
 export type ReasoningStep = {
+  id?: string;
   title?: string;
   detail?: string;
   summary?: string;
@@ -124,6 +125,10 @@ export type JobEvent = {
   jobsAhead?: number;
   message?: string;
   steps?: ReasoningStep[];
+  reviewId?: string;
+  reviewStatus?: string;
+  riskLevel?: string;
+  userAuthorization?: string;
 };
 export type ConversationDetail = {
   conversation: Conversation;

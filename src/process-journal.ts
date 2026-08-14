@@ -1,7 +1,7 @@
 import type { JobEvent } from "./api";
 
 const NARRATIVE_KINDS = new Set(["reasoning", "update"]);
-const ACTION_KINDS = new Set(["command", "file", "search", "tool", "error"]);
+const ACTION_KINDS = new Set(["command", "file", "search", "tool", "approval", "error"]);
 
 export type ProcessJournalEvent = JobEvent & {
   actionCount?: number;
@@ -20,6 +20,10 @@ export function buildProcessJournal(activities: JobEvent[]): ProcessJournalEvent
       continue;
     }
     if (!ACTION_KINDS.has(kind) || !activity.label) continue;
+    if (kind === "approval" && activity.reviewId) {
+      const earlier = normalized.findLastIndex((item) => item.kind === "approval" && item.reviewId === activity.reviewId);
+      if (earlier >= 0) normalized.splice(earlier, 1);
+    }
     if (kind === "command" && activity.detail) {
       const earlier = normalized.findLastIndex((item) => item.kind === "command" && item.detail === activity.detail);
       if (earlier >= 0) normalized.splice(earlier, 1);
@@ -32,7 +36,7 @@ export function buildProcessJournal(activities: JobEvent[]): ProcessJournalEvent
   const journal: ProcessJournalEvent[] = [];
   let commandGroup: ProcessJournalEvent | undefined;
   for (const activity of normalized) {
-    if (activity.kind === "update") commandGroup = undefined;
+    if (activity.kind === "update" || activity.kind === "approval") commandGroup = undefined;
     if (activity.kind !== "command") {
       journal.push(activity);
       continue;
@@ -62,5 +66,5 @@ export function isNarrativeActivity(activity: JobEvent): boolean {
 
 function activitySignature(activity: JobEvent | undefined): string {
   if (!activity) return "";
-  return JSON.stringify([activity.kind, activity.label, activity.detail, activity.files]);
+  return JSON.stringify([activity.kind, activity.label, activity.detail, activity.files, activity.reviewId, activity.reviewStatus]);
 }
