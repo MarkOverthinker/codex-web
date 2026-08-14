@@ -139,8 +139,9 @@ tools like `htmlmounts`). When `setpriv` is unavailable, the service falls back
 to the legacy uid/gid-only spawn and task processes keep an empty supplementary
 group set.
 
-The root web process writes provider configuration into each host user's
-`~/.codex` (`config.toml` and `models_cache.json`) and then repairs the home
+Provider records and model catalogs are scoped by the Web user ID. The root web
+process writes only that user's provider configuration into the matching host
+user's `~/.codex` (`config.toml` and `models_cache.json`), then repairs the home
 directory and hands ownership of those files back to the host user. The
 directory is kept at 0700, `config.toml` at 0600, and `models_cache.json` at
 0644. This keeps the dropped-privilege Codex CLI readable and lets it refresh

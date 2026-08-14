@@ -74,9 +74,9 @@ function normalizeSlugPart(value: string): string {
   return normalized.slice(0, 40) || "provider";
 }
 
-export function nextProviderId(db: AppDatabase, name: string): string {
+export function nextProviderId(db: AppDatabase, userId: string, name: string): string {
   const base = normalizeSlugPart(name);
-  const existing = new Set(db.listProviders().map((provider) => provider.id));
+  const existing = new Set(db.listProviders(userId).map((provider) => provider.id));
   let candidate = base;
   let suffix = 2;
   while (existing.has(candidate)) {
@@ -92,13 +92,13 @@ function sanitizeModelSlug(modelId: string): string {
   return cleaned.length > 81 ? cleaned.slice(0, 81) : cleaned;
 }
 
-function orderedProviders(db: AppDatabase): ProviderRow[] {
-  return db.listProviders().sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+function orderedProviders(db: AppDatabase, userId: string): ProviderRow[] {
+  return db.listProviders(userId).sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
 }
 
-function orderedProviderModels(db: AppDatabase): Array<ProviderModelRow & { provider_created_at: string; provider_name: string }> {
-  const providers = new Map(orderedProviders(db).map((provider) => [provider.id, provider]));
-  return db.listProviderModels()
+function orderedProviderModels(db: AppDatabase, userId: string): Array<ProviderModelRow & { provider_created_at: string; provider_name: string }> {
+  const providers = new Map(orderedProviders(db, userId).map((provider) => [provider.id, provider]));
+  return db.listProviderModels(userId)
     .map((model) => {
       const provider = providers.get(model.provider_id);
       return {
@@ -120,10 +120,10 @@ function orderedProviderModels(db: AppDatabase): Array<ProviderModelRow & { prov
  * The web selection persists this alias, then resolves it back to model_id at
  * the execution boundary before calling the selected provider.
  */
-export function reassignProviderModelSlugs(db: AppDatabase): void {
+export function reassignProviderModelSlugs(db: AppDatabase, userId: string): void {
   const taken = new Set<string>();
   const updates: Array<{ id: string; slug: string }> = [];
-  for (const model of orderedProviderModels(db)) {
+  for (const model of orderedProviderModels(db, userId)) {
     const raw = sanitizeModelSlug(model.model_id);
     let slug = raw;
     if (taken.has(slug)) {
@@ -135,7 +135,7 @@ export function reassignProviderModelSlugs(db: AppDatabase): void {
     taken.add(slug);
     if (slug !== model.slug) updates.push({ id: model.id, slug });
   }
-  if (updates.length > 0) db.updateProviderModelSlugs(updates);
+  if (updates.length > 0) db.updateProviderModelSlugs(userId, updates);
 }
 
 function parseStringArray(value: string | undefined, fallback: string[]): string[] {
@@ -192,21 +192,21 @@ function publicModel(model: ProviderModelRow): ProviderModelPublic {
   };
 }
 
-export function listProvidersPublic(db: AppDatabase): ProviderPublic[] {
-  return db.listProviders().map(publicProvider);
+export function listProvidersPublic(db: AppDatabase, userId: string): ProviderPublic[] {
+  return db.listProviders(userId).map(publicProvider);
 }
 
-export function listProviderModelsPublic(db: AppDatabase, providerId?: string): ProviderModelPublic[] {
-  return db.listProviderModels(providerId).map(publicModel);
+export function listProviderModelsPublic(db: AppDatabase, userId: string, providerId?: string): ProviderModelPublic[] {
+  return db.listProviderModels(userId, providerId).map(publicModel);
 }
 
-export function providerManaged(db: AppDatabase): boolean {
-  return db.listProviders().length > 0;
+export function providerManaged(db: AppDatabase, userId: string): boolean {
+  return db.listProviders(userId).length > 0;
 }
 
-export function assertOfficialOAuthLimit(db: AppDatabase, next: { id?: string; requiresOpenaiAuth?: boolean; enabled?: boolean }): void {
+export function assertOfficialOAuthLimit(db: AppDatabase, userId: string, next: { id?: string; requiresOpenaiAuth?: boolean; enabled?: boolean }): void {
   if (!next.requiresOpenaiAuth && !next.enabled) return;
-  const enabledOfficial = db.listEnabledProviders().filter((provider) =>
+  const enabledOfficial = db.listEnabledProviders(userId).filter((provider) =>
     Boolean(provider.requires_openai_auth) && provider.id !== next.id);
   const wouldEnable = next.enabled !== false && next.requiresOpenaiAuth !== false;
   if (wouldEnable && enabledOfficial.length > 0) {
@@ -351,12 +351,12 @@ function assertCatalogEntries(models: Array<Record<string, unknown>>): void {
  * catalog is derived from this same ordering, so the web menu and Codex's
  * models_cache.json always agree.
  */
-export function listCatalogModelOptions(db: AppDatabase): AgentModelOption[] {
-  if (!providerManaged(db)) return [];
-  reassignProviderModelSlugs(db);
-  const providers = new Map(orderedProviders(db).map((provider) => [provider.id, provider]));
+export function listCatalogModelOptions(db: AppDatabase, userId: string): AgentModelOption[] {
+  if (!providerManaged(db, userId)) return [];
+  reassignProviderModelSlugs(db, userId);
+  const providers = new Map(orderedProviders(db, userId).map((provider) => [provider.id, provider]));
   const options: AgentModelOption[] = [];
-  for (const model of orderedProviderModels(db)) {
+  for (const model of orderedProviderModels(db, userId)) {
     const provider = providers.get(model.provider_id);
     if (!provider || !provider.enabled || !model.visible) continue;
     const reasoningEfforts = parseStringArray(model.reasoning_efforts, DEFAULT_REASONING_EFFORTS);
@@ -438,18 +438,18 @@ function applyCodexHomeOwnership(
   }
 }
 
-export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: { uid: number; gid: number }): void {
+export function writeProviderConfig(codexHome: string, db: AppDatabase, userId: string, owner?: { uid: number; gid: number }): void {
   repairCodexHomeOwnership(codexHome, owner);
-  reassignProviderModelSlugs(db);
+  reassignProviderModelSlugs(db, userId);
   const config = readConfigToml(codexHome);
   const rawProviders = config.model_providers;
   const managedProviders: Record<string, unknown> = rawProviders && typeof rawProviders === "object" && !Array.isArray(rawProviders)
     ? rawProviders as Record<string, unknown>
     : {};
-  for (const provider of db.listProviders()) delete managedProviders[provider.id];
-  const enabled = db.listEnabledProviders();
+  for (const provider of db.listProviders(userId)) delete managedProviders[provider.id];
+  const enabled = db.listEnabledProviders(userId);
   const configTomlPath = path.join(codexHome, "config.toml");
-  if (providerManaged(db)) {
+  if (providerManaged(db, userId)) {
     const catalogPath = path.join(codexHome, "models_cache.json");
     config.model_catalog_json = catalogPath;
   }
@@ -485,8 +485,8 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: 
     config.model_providers = managedProviders;
   }
   const models: Array<Record<string, unknown>> = [];
-  for (const model of orderedProviderModels(db)) {
-    const provider = db.getProvider(model.provider_id);
+  for (const model of orderedProviderModels(db, userId)) {
+    const provider = db.getProvider(userId, model.provider_id);
     if (!provider?.enabled || !model.visible) continue;
     const template = catalogTemplateForModel(model.model_id);
     models.push(buildCatalogEntry(model, template));
@@ -505,11 +505,11 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: 
   ], owner);
 }
 
-export function importProvidersFromConfig(codexHome: string, db: AppDatabase): ProviderPublic[] {
+export function importProvidersFromConfig(codexHome: string, db: AppDatabase, userId: string): ProviderPublic[] {
   const config = readConfigToml(codexHome);
   const rawProviders = config.model_providers;
-  if (!rawProviders || typeof rawProviders !== "object" || Array.isArray(rawProviders)) return listProvidersPublic(db);
-  const existingNames = new Set(db.listProviders().map((provider) => provider.name.toLowerCase()));
+  if (!rawProviders || typeof rawProviders !== "object" || Array.isArray(rawProviders)) return listProvidersPublic(db, userId);
+  const existingNames = new Set(db.listProviders(userId).map((provider) => provider.name.toLowerCase()));
   for (const [key, raw] of Object.entries(rawProviders)) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const record = raw as Record<string, unknown>;
@@ -522,7 +522,8 @@ export function importProvidersFromConfig(codexHome: string, db: AppDatabase): P
     const baseKeys = new Set(["name", "base_url", "experimental_bearer_token", "wire_api", "requires_openai_auth", "models_file"]);
     const extraConfig = Object.fromEntries(Object.entries(record).filter(([entryKey]) => !baseKeys.has(entryKey)));
     db.createProvider({
-      id: nextProviderId(db, name),
+      userId,
+      id: nextProviderId(db, userId, name),
       name,
       baseUrl,
       apiKey: token,
@@ -534,16 +535,16 @@ export function importProvidersFromConfig(codexHome: string, db: AppDatabase): P
     });
     existingNames.add(name.toLowerCase());
   }
-  return listProvidersPublic(db);
+  return listProvidersPublic(db, userId);
 }
 
-export function importCatalogModels(providerId: string, codexHome: string, db: AppDatabase): ProviderModelPublic[] {
-  const provider = db.getProvider(providerId);
+export function importCatalogModels(providerId: string, codexHome: string, db: AppDatabase, userId: string): ProviderModelPublic[] {
+  const provider = db.getProvider(userId, providerId);
   if (!provider) return [];
   if (provider.models_file && !fs.existsSync(path.join(codexHome, provider.models_file))) {
     throw new Error(`模型目录文件 ${provider.models_file} 不存在，请先为这个源生成模型目录。`);
   }
-  const existing = new Set(db.listProviderModels(providerId).map((model) => model.model_id.toLowerCase()));
+  const existing = new Set(db.listProviderModels(userId, providerId).map((model) => model.model_id.toLowerCase()));
   const templates = readCatalogFile(codexHome, provider.models_file ?? "");
   for (const template of templates) {
     if (typeof template.slug !== "string" || !template.slug.trim()) continue;
@@ -561,6 +562,7 @@ export function importCatalogModels(providerId: string, codexHome: string, db: A
         .filter((effort) => /^[a-z][a-z0-9_-]{0,31}$/i.test(effort))
       : [];
     db.createProviderModel({
+      userId,
       id: newId(),
       providerId,
       modelId,
@@ -574,15 +576,15 @@ export function importCatalogModels(providerId: string, codexHome: string, db: A
     });
     existing.add(modelId.toLowerCase());
   }
-  reassignProviderModelSlugs(db);
-  return listProviderModelsPublic(db, providerId);
+  reassignProviderModelSlugs(db, userId);
+  return listProviderModelsPublic(db, userId, providerId);
 }
 
-export function ensureProviderConfig(config: AppConfig, codexHome: string, db: AppDatabase, owner?: { uid: number; gid: number }): void {
+export function ensureProviderConfig(config: AppConfig, codexHome: string, db: AppDatabase, userId: string, owner?: { uid: number; gid: number }): void {
   repairCodexHomeOwnership(codexHome, owner);
-  if (!providerManaged(db)) return;
+  if (!providerManaged(db, userId)) return;
   try {
-    writeProviderConfig(codexHome, db, owner);
+    writeProviderConfig(codexHome, db, userId, owner);
   } catch (error) {
     // Configuration generation must never prevent the service from starting;
     // the management API surfaces the failure on the next write.

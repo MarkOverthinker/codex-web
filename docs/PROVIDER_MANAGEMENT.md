@@ -2,6 +2,7 @@
 
 Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在任务级别切换：
 
+- 每个 Web 用户拥有独立的 provider 与模型集合；不同用户可以使用相同 provider ID，但 `base_url`、API key、启用状态和模型目录互不影响。
 - 每个 provider 有独立的 `base_url`、`wire_api`、API key / 官方 OAuth 标记和可选的模型目录文件。
 - 每个模型有“是否可见”开关；聚合生成 `models_cache.json` 时**只写入已启用源中可见的模型**，隐藏模型不会进入任务模型菜单。
 - 模型菜单直接展示“源 · 模型”，不需要单独的 provider 选择器。
@@ -17,7 +18,9 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 - 按模型开关可见性、编辑模型 ID / 显示名 / 思考深度 / 输入模态 / 优先级；
 - 整体启用或禁用源。
 
-每次保存都会用 `smol-toml` 原子重写目标 Codex Home 的 `config.toml`，并全量重写 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token` 以及导入时保留的扩展字段。
+每次保存只读取当前登录用户的 provider 数据，用 `smol-toml` 原子重写该用户 Codex Home 的 `config.toml`，并全量重写该用户的 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token` 以及导入时保留的扩展字段。API 的查询、修改、删除和引用检查都带当前 Web 用户 ID，不能访问其他用户的源或模型。
+
+从旧版全局 provider 表升级时，数据库会把已有记录复制到升级时已存在的每个 Web 用户名下，再转为用户级复合主键。旧数据无法可靠判断最初由哪个用户创建，因此迁移优先保持各用户升级前可用的配置；迁移完成后，每份记录独立演进，新建用户不会继承这些源。
 
 生成 `models_cache.json` 时，codex-web 只使用仓库内置的完整模板库，不再把用户 `~/.codex/models_cache.json` 当作模板。模板库包含标准 fallback、当前 Codex 内置模型模板和 DeepSeek 模型模板；先按上游 `model_id` 精确匹配，再按最长前缀匹配，未知模型才使用标准 fallback。数据库字段只覆盖 slug、显示信息、优先级、输入模态和思考深度；每个 `supported_reasoning_levels` 子项也会补齐 `effort` 和 `description`。这样即使用户缓存来自旧版 Codex 或字段不全，生成目录也不会因 `shell_type` 等字段缺失而解析失败。host 模式下，写入宿主用户 `~/.codex` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
 
@@ -27,9 +30,9 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 - 只导入 `input_modalities` 含 `text` 的条目；
 - 克隆模板条目的扩展字段（如 `context_window`）到聚合目录；
-- 模型 slug 全局唯一：第一个使用上游模型名的保留原名，后续同名模型自动加源前缀别名（如 `proxy-gpt-5.6-sol`）。
+- 模型 slug 在当前用户的聚合目录内唯一：第一个使用上游模型名的保留原名，后续同名模型自动加源前缀别名（如 `proxy-gpt-5.6-sol`）。
 
-前端和数据库保存全局唯一的目录别名；真正启动任务时，服务端会按所选源把别名反解为原始 `model_id` 再传给上游。例如选择 `sssaicodeapi-gpt-5.4-mini` 时，上游收到的是 `gpt-5.4-mini`。
+前端和数据库保存当前用户目录内唯一的别名；真正启动任务时，服务端会按所选源把别名反解为原始 `model_id` 再传给上游。例如选择 `sssaicodeapi-gpt-5.4-mini` 时，上游收到的是 `gpt-5.4-mini`。
 
 ## 刷新内置模板库
 
@@ -47,7 +50,7 @@ sudo node scripts/init-provider-sources.mjs \
   --models-file sssaicodeapi=sssaicodeapi-models.json
 ```
 
-脚本会读取每个映射用户的 `~/.codex/config.toml`，导入 provider 定义（含 `models_file` 键），按参数或 `<providerId>-models.json` 约定导入模型，最后生成聚合配置，并把生成文件的属主归还给该宿主用户。脚本必须在构建后的 `dist-server` 上运行；代码更新后先运行 `npm run build`，再运行脚本和 `npm run reload`。
+脚本会逐个读取映射用户的 `~/.codex/config.toml`，把 provider 定义（含 `models_file` 键）导入该 Web 用户自己的数据库范围，按参数或 `<providerId>-models.json` 约定导入模型，最后生成各自的聚合配置，并把生成文件的属主归还给对应宿主用户。脚本必须在构建后的 `dist-server` 上运行；代码更新后先运行 `npm run build`，再运行脚本和 `npm run reload`。
 
 如果之前曾用 root 或 `chmod 777` 处理过权限，可直接以仓库属主的普通用户运行一键修复脚本。脚本会按需调用 `sudo` 修复精确的 Codex 文件、修复旧构建产物、构建服务端、导入两个默认模型文件并 reload 服务：
 
@@ -59,7 +62,7 @@ sudo node scripts/init-provider-sources.mjs \
 
 ## 限制与边界
 
-- 同一时间只允许一个启用中的官方 OAuth 源（`auth.json` 是全局单份）；其他官方账号可以改用 API key。
+- 每个用户同一时间只允许一个启用中的官方 OAuth 源（该用户 Codex Home 内的 `auth.json` 只有一份）；其他官方账号可以改用 API key。
 - `chat` / `anthropic` 协议已可录入，但尚未内置协议转换代理，任务会失败；当前只保证 `responses` 源端到端可用。
 - 删除仍被会话或任务引用的源会被拒绝，请先禁用。
 - 任务运行期间不会重写配置：运行中的进程使用启动时的快照，新任务读到最新聚合配置。

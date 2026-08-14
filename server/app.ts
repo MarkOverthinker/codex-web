@@ -55,13 +55,13 @@ export function createApp(overrides: AppOverrides = {}) {
   const db = new AppDatabase(config.dataRoot, { username: config.username, passwordHash: config.passwordHash, displayName: config.displayName });
   for (const user of db.listUsers()) {
     storageFor(user.id);
-    ensureProviderConfig(config, codexHomeFor(user.id), db, providerConfigOwner(user.id));
+    ensureProviderConfig(config, codexHomeFor(user.id), db, user.id, providerConfigOwner(user.id));
   }
   migrateExistingOutputFiles(config, db);
   const subscribers = new Map<string, Set<Response>>();
 
   function optionsForUser(userId: string): AgentOptions {
-    return loadAgentOptions(config, codexHomeFor(userId), db);
+    return loadAgentOptions(config, codexHomeFor(userId), db, userId);
   }
 
   function codexHomeFor(userId: string): string {
@@ -594,7 +594,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.get("/providers", (_req, res) => {
     const session = res.locals.session as SessionRow;
-    return res.json({ providers: listProvidersPublic(db), models: listProviderModelsPublic(db) });
+    return res.json({ providers: listProvidersPublic(db, session.user_id), models: listProviderModelsPublic(db, session.user_id) });
   });
 
   api.post("/providers", (req, res) => {
@@ -608,9 +608,10 @@ export function createApp(overrides: AppOverrides = {}) {
     const apiKey = typeof raw?.apiKey === "string" && raw.apiKey.trim() ? raw.apiKey.trim() : null;
     const modelsFile = typeof raw?.modelsFile === "string" && raw.modelsFile.trim() ? raw.modelsFile.trim().replace(/^[./\\]+/, "") : null;
     try {
-      assertOfficialOAuthLimit(db, { requiresOpenaiAuth, enabled: raw?.enabled !== false });
+      assertOfficialOAuthLimit(db, session.user_id, { requiresOpenaiAuth, enabled: raw?.enabled !== false });
       const provider = db.createProvider({
-        id: nextProviderId(db, name),
+        userId: session.user_id,
+        id: nextProviderId(db, session.user_id, name),
         name,
         baseUrl,
         apiKey,
@@ -619,8 +620,8 @@ export function createApp(overrides: AppOverrides = {}) {
         requiresOpenaiAuth,
         enabled: raw?.enabled !== false,
       });
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
-      return res.status(201).json({ provider: listProvidersPublic(db).find((item) => item.id === provider.id) });
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
+      return res.status(201).json({ provider: listProvidersPublic(db, session.user_id).find((item) => item.id === provider.id) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "添加源失败。" });
     }
@@ -629,10 +630,10 @@ export function createApp(overrides: AppOverrides = {}) {
   api.put("/providers/:id", (req, res) => {
     const session = res.locals.session as SessionRow;
     const id = String(req.params.id);
-    const provider = db.getProvider(id);
+    const provider = db.getProvider(session.user_id, id);
     if (!provider) return res.status(404).json({ error: "源不存在。" });
     const raw = req.body as Record<string, unknown> | undefined;
-    const fields: Parameters<typeof db.updateProvider>[1] = {};
+    const fields: Parameters<typeof db.updateProvider>[2] = {};
     if (typeof raw?.name === "string") {
       const name = raw.name.trim().slice(0, 100);
       if (!name) return res.status(400).json({ error: "源名称不能为空。" });
@@ -656,11 +657,11 @@ export function createApp(overrides: AppOverrides = {}) {
     if (typeof raw?.requiresOpenaiAuth === "boolean") fields.requiresOpenaiAuth = raw.requiresOpenaiAuth;
     if (typeof raw?.enabled === "boolean") fields.enabled = raw.enabled;
     try {
-      assertOfficialOAuthLimit(db, { id, ...fields });
-      const updated = db.updateProvider(id, fields);
+      assertOfficialOAuthLimit(db, session.user_id, { id, ...fields });
+      const updated = db.updateProvider(session.user_id, id, fields);
       if (!updated) return res.status(404).json({ error: "源不存在。" });
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
-      return res.json({ provider: listProvidersPublic(db).find((item) => item.id === id) });
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
+      return res.json({ provider: listProvidersPublic(db, session.user_id).find((item) => item.id === id) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "更新源失败。" });
     }
@@ -669,13 +670,13 @@ export function createApp(overrides: AppOverrides = {}) {
   api.delete("/providers/:id", (req, res) => {
     const session = res.locals.session as SessionRow;
     const id = String(req.params.id);
-    if (!db.getProvider(id)) return res.status(404).json({ error: "源不存在。" });
-    if (db.isProviderReferenced(id)) {
+    if (!db.getProvider(session.user_id, id)) return res.status(404).json({ error: "源不存在。" });
+    if (db.isProviderReferenced(session.user_id, id)) {
       return res.status(409).json({ error: "该源仍被会话或任务使用，请先在页面中禁用该源，再删除。", code: "provider-in-use" });
     }
     try {
-      db.deleteProvider(id);
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
+      db.deleteProvider(session.user_id, id);
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
       return res.status(204).end();
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "删除源失败。" });
@@ -685,9 +686,9 @@ export function createApp(overrides: AppOverrides = {}) {
   api.post("/providers/import-config", (req, res) => {
     const session = res.locals.session as SessionRow;
     try {
-      const providers = importProvidersFromConfig(codexHomeFor(session.user_id), db);
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
-      return res.json({ providers, models: listProviderModelsPublic(db) });
+      const providers = importProvidersFromConfig(codexHomeFor(session.user_id), db, session.user_id);
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
+      return res.json({ providers, models: listProviderModelsPublic(db, session.user_id) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "导入配置失败。" });
     }
@@ -696,10 +697,10 @@ export function createApp(overrides: AppOverrides = {}) {
   api.post("/providers/:id/import-models", (req, res) => {
     const session = res.locals.session as SessionRow;
     const id = String(req.params.id);
-    if (!db.getProvider(id)) return res.status(404).json({ error: "源不存在。" });
+    if (!db.getProvider(session.user_id, id)) return res.status(404).json({ error: "源不存在。" });
     try {
-      const models = importCatalogModels(id, codexHomeFor(session.user_id), db);
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
+      const models = importCatalogModels(id, codexHomeFor(session.user_id), db, session.user_id);
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
       return res.json({ models });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "导入模型失败。" });
@@ -709,12 +710,13 @@ export function createApp(overrides: AppOverrides = {}) {
   api.post("/providers/:id/models", (req, res) => {
     const session = res.locals.session as SessionRow;
     const providerId = String(req.params.id);
-    if (!db.getProvider(providerId)) return res.status(404).json({ error: "源不存在。" });
+    if (!db.getProvider(session.user_id, providerId)) return res.status(404).json({ error: "源不存在。" });
     const raw = req.body as Record<string, unknown> | undefined;
     const modelId = typeof raw?.modelId === "string" ? raw.modelId.trim().slice(0, 120) : "";
     if (!modelId) return res.status(400).json({ error: "请填写模型 ID。" });
     try {
       db.createProviderModel({
+        userId: session.user_id,
         id: newId(),
         providerId,
         modelId,
@@ -726,8 +728,8 @@ export function createApp(overrides: AppOverrides = {}) {
         priority: typeof raw?.priority === "number" ? raw.priority : undefined,
         visible: raw?.visible !== false,
       });
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
-      return res.status(201).json({ models: listProviderModelsPublic(db, providerId) });
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
+      return res.status(201).json({ models: listProviderModelsPublic(db, session.user_id, providerId) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "添加模型失败。" });
     }
@@ -737,10 +739,10 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const providerId = String(req.params.id);
     const id = String(req.params.modelId);
-    const model = db.getProviderModel(id);
+    const model = db.getProviderModel(session.user_id, id);
     if (!model || model.provider_id !== providerId) return res.status(404).json({ error: "模型不存在。" });
     const raw = req.body as Record<string, unknown> | undefined;
-    const fields: Parameters<typeof db.updateProviderModel>[1] = {};
+    const fields: Parameters<typeof db.updateProviderModel>[2] = {};
     if (typeof raw?.modelId === "string" && raw.modelId.trim()) fields.modelId = raw.modelId.trim().slice(0, 120);
     if (typeof raw?.displayName === "string") fields.displayName = raw.displayName;
     if (typeof raw?.description === "string") fields.description = raw.description;
@@ -753,9 +755,9 @@ export function createApp(overrides: AppOverrides = {}) {
     if (typeof raw?.priority === "number") fields.priority = raw.priority;
     if (typeof raw?.visible === "boolean") fields.visible = raw.visible;
     try {
-      db.updateProviderModel(id, fields);
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
-      return res.json({ models: listProviderModelsPublic(db, providerId) });
+      db.updateProviderModel(session.user_id, id, fields);
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
+      return res.json({ models: listProviderModelsPublic(db, session.user_id, providerId) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "更新模型失败。" });
     }
@@ -765,11 +767,11 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const providerId = String(req.params.id);
     const id = String(req.params.modelId);
-    const model = db.getProviderModel(id);
+    const model = db.getProviderModel(session.user_id, id);
     if (!model || model.provider_id !== providerId) return res.status(404).json({ error: "模型不存在。" });
     try {
-      db.deleteProviderModel(id);
-      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
+      db.deleteProviderModel(session.user_id, id);
+      writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
       return res.status(204).end();
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "删除模型失败。" });
