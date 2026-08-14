@@ -57,16 +57,54 @@ export type Job = { id: string; status: string; conversation_id: string; queuePo
 // The online Codex catalog is authoritative. Keep this open so a newer CLI can
 // expose a new reasoning level without requiring a front-end release first.
 export type ReasoningEffort = string;
-export type AgentModelOption = { id: string; label: string; description: string; reasoningEfforts: ReasoningEffort[] };
+export type AgentModelOption = {
+  id: string;
+  label: string;
+  description: string;
+  reasoningEfforts: ReasoningEffort[];
+  provider?: string;
+  providerName?: string;
+  upstreamModel?: string;
+  displayName?: string;
+};
 export type AgentOptions = {
   models: AgentModelOption[];
   reasoningEfforts: Array<{ id: ReasoningEffort; label: string }>;
-  defaults: { model: string; reasoningEffort: ReasoningEffort };
+  defaults: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null };
   selection: AgentSelection;
   codexConfigured?: boolean;
   codexConfigHint?: string;
 };
-export type AgentSelection = { model: string; reasoningEffort: ReasoningEffort };
+export type AgentSelection = { model: string; reasoningEffort: ReasoningEffort; provider?: string | null };
+export type Provider = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  modelsFile: string | null;
+  wireApi: "responses" | "chat" | "anthropic";
+  requiresOpenaiAuth: boolean;
+  enabled: boolean;
+  hasApiKey: boolean;
+  apiKeyHint: string;
+  extraConfig: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ProviderModel = {
+  id: string;
+  providerId: string;
+  modelId: string;
+  slug: string;
+  displayName: string;
+  description: string;
+  reasoningEfforts: string[];
+  inputModalities: string[];
+  priority: number;
+  visible: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ProviderState = { providers: Provider[]; models: ProviderModel[] };
 export type ReasoningStep = {
   title?: string;
   detail?: string;
@@ -161,6 +199,23 @@ export const api = {
   updateAgentSelection: (selection: AgentSelection, conversationId?: string) => request<{ selection: AgentSelection }>(
     conversationId ? `/conversations/${conversationId}/agent-selection` : "/agent-selection",
     { method: "PUT", body: JSON.stringify(selection) },
+  ),
+  providers: () => request<ProviderState>("/providers"),
+  createProvider: (payload: { name: string; baseUrl: string; apiKey?: string; modelsFile?: string; wireApi?: Provider["wireApi"]; requiresOpenaiAuth?: boolean; enabled?: boolean }) =>
+    request<{ provider: Provider }>("/providers", { method: "POST", body: JSON.stringify(payload) }),
+  updateProvider: (id: string, payload: Partial<Omit<Provider, "id" | "createdAt" | "updatedAt" | "hasApiKey" | "apiKeyHint" | "extraConfig">> & { apiKey?: string | null }) =>
+    request<{ provider: Provider }>(`/providers/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteProvider: (id: string) => request<void>(`/providers/${id}`, { method: "DELETE" }),
+  importProviderConfig: () => request<ProviderState>("/providers/import-config", { method: "POST" }),
+  importProviderModels: (providerId: string) => request<{ models: ProviderModel[] }>(
+    `/providers/${providerId}/import-models`, { method: "POST" },
+  ),
+  createProviderModel: (providerId: string, payload: { modelId: string; displayName?: string; description?: string; reasoningEfforts?: string[]; inputModalities?: string[]; priority?: number; visible?: boolean }) =>
+    request<{ models: ProviderModel[] }>(`/providers/${providerId}/models`, { method: "POST", body: JSON.stringify(payload) }),
+  updateProviderModel: (providerId: string, modelId: string, payload: Partial<Omit<ProviderModel, "id" | "providerId" | "slug" | "createdAt" | "updatedAt">>) =>
+    request<{ models: ProviderModel[] }>(`/providers/${providerId}/models/${modelId}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteProviderModel: (providerId: string, modelId: string) => request<void>(
+    `/providers/${providerId}/models/${modelId}`, { method: "DELETE" },
   ),
   updateChatFontSize: (chatFontSize: number) => request<{ chatFontSize: number }>("/user-settings/chat-font-size", {
     method: "PUT", body: JSON.stringify({ chatFontSize }),
