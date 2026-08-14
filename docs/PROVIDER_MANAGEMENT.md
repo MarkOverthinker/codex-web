@@ -19,6 +19,8 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 每次保存都会用 `smol-toml` 原子重写目标 Codex Home 的 `config.toml`，并全量重写 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token` 以及导入时保留的扩展字段。
 
+生成 `models_cache.json` 时每个条目都会补齐 Codex 目录必需的 `slug`、`display_name`、`description` 等字段，避免 CLI 解析缓存时报 “missing field” 错误。host 模式下，写入宿主用户 `~/.codex` 的两个文件会自动改回该用户属主（`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写。
+
 ## 模型文件
 
 每个源可以指定一个 codex-home 内的 JSON 文件作为模型目录（如 `models.json`、`sssaicodeapi-models.json`）。该文件必须是 `{ "models": [...] }` 结构，条目字段与 Codex 目录一致。导入时：

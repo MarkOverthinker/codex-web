@@ -126,9 +126,59 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
 
   const catalog = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models: Array<Record<string, unknown>> };
   assert.deepEqual(catalog.models.map((model) => model.slug), ["deepseek-v4-flash"]);
+  assert.equal(typeof catalog.models[0].display_name, "string");
+  assert.ok(catalog.models[0].display_name);
+  assert.equal(typeof catalog.models[0].description, "string");
+  assert.ok(catalog.models[0].description);
   assert.equal(catalog.models[0].visibility, "list");
   assert.deepEqual(catalog.models[0].supported_reasoning_levels, [{ effort: "low" }, { effort: "high" }]);
   assert.equal(catalog.models[0].context_window, 1000, "template fields are cloned");
+  db.close();
+});
+
+test("aggregated catalog carries Codex-required fields even when templates omit description", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "models.json"), JSON.stringify({
+    models: [
+      {
+        slug: "bare-model",
+        display_name: "Bare Model",
+        visibility: "list",
+        input_modalities: ["text"],
+        supported_reasoning_levels: [{ effort: "high" }],
+      },
+    ],
+  }, null, 2), "utf8");
+  const db = testDb(root);
+  db.createProvider({ id: "bare", name: "Bare", baseUrl: "https://bare.example.com/v1", modelsFile: "models.json" });
+  importCatalogModels("bare", codexHome, db);
+  writeProviderConfig(codexHome, db);
+  const catalog = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models: Array<Record<string, unknown>> };
+  assert.equal(catalog.models.length, 1);
+  for (const field of ["slug", "display_name", "description"]) {
+    assert.equal(typeof catalog.models[0][field], "string", `${field} must be a string`);
+    assert.ok(catalog.models[0][field], `${field} must not be empty`);
+  }
+  db.close();
+});
+
+test("writeProviderConfig accepts a host owner without failing when not root", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  sampleConfig(codexHome);
+  const db = testDb(root);
+  db.createProvider({ id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com/" });
+  db.createProviderModel({ id: "m1", providerId: "deepseek", modelId: "deepseek-v4-flash", slug: "deepseek-v4-flash", displayName: "Flash", priority: 1 });
+  assert.doesNotThrow(() => writeProviderConfig(codexHome, db, { uid: 12345, gid: 12345 }));
+  if (process.getuid?.() === 0) {
+    const configStat = fs.statSync(path.join(codexHome, "config.toml"));
+    const catalogStat = fs.statSync(path.join(codexHome, "models_cache.json"));
+    assert.equal(configStat.uid, 12345);
+    assert.equal(catalogStat.uid, 12345);
+  }
   db.close();
 });
 

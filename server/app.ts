@@ -55,7 +55,7 @@ export function createApp(overrides: AppOverrides = {}) {
   const db = new AppDatabase(config.dataRoot, { username: config.username, passwordHash: config.passwordHash, displayName: config.displayName });
   for (const user of db.listUsers()) {
     storageFor(user.id);
-    ensureProviderConfig(config, codexHomeFor(user.id), db);
+    ensureProviderConfig(config, codexHomeFor(user.id), db, providerConfigOwner(user.id));
   }
   migrateExistingOutputFiles(config, db);
   const subscribers = new Map<string, Set<Response>>();
@@ -67,6 +67,12 @@ export function createApp(overrides: AppOverrides = {}) {
   function codexHomeFor(userId: string): string {
     if (config.hostMode) return hostTenantFor(config, db, userId)?.codexHome ?? config.codexHome;
     return storageFor(userId).codexHome;
+  }
+
+  function providerConfigOwner(userId: string): { uid: number; gid: number } | undefined {
+    if (!config.hostMode) return undefined;
+    const host = hostTenantFor(config, db, userId);
+    return host ? { uid: host.uid, gid: host.gid } : undefined;
   }
 
   function storageFor(userId: string): TenantPaths {
@@ -611,7 +617,7 @@ export function createApp(overrides: AppOverrides = {}) {
         requiresOpenaiAuth,
         enabled: raw?.enabled !== false,
       });
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.status(201).json({ provider: listProvidersPublic(db).find((item) => item.id === provider.id) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "添加源失败。" });
@@ -651,7 +657,7 @@ export function createApp(overrides: AppOverrides = {}) {
       assertOfficialOAuthLimit(db, { id, ...fields });
       const updated = db.updateProvider(id, fields);
       if (!updated) return res.status(404).json({ error: "源不存在。" });
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.json({ provider: listProvidersPublic(db).find((item) => item.id === id) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "更新源失败。" });
@@ -667,7 +673,7 @@ export function createApp(overrides: AppOverrides = {}) {
     }
     try {
       db.deleteProvider(id);
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.status(204).end();
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "删除源失败。" });
@@ -678,7 +684,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     try {
       const providers = importProvidersFromConfig(codexHomeFor(session.user_id), db);
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.json({ providers, models: listProviderModelsPublic(db) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "导入配置失败。" });
@@ -691,7 +697,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!db.getProvider(id)) return res.status(404).json({ error: "源不存在。" });
     try {
       const models = importCatalogModels(id, codexHomeFor(session.user_id), db);
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.json({ models });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "导入模型失败。" });
@@ -718,7 +724,7 @@ export function createApp(overrides: AppOverrides = {}) {
         priority: typeof raw?.priority === "number" ? raw.priority : undefined,
         visible: raw?.visible !== false,
       });
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.status(201).json({ models: listProviderModelsPublic(db, providerId) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "添加模型失败。" });
@@ -746,7 +752,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (typeof raw?.visible === "boolean") fields.visible = raw.visible;
     try {
       db.updateProviderModel(id, fields);
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.json({ models: listProviderModelsPublic(db, providerId) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "更新模型失败。" });
@@ -761,7 +767,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!model || model.provider_id !== providerId) return res.status(404).json({ error: "模型不存在。" });
     try {
       db.deleteProviderModel(id);
-      writeProviderConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db, providerConfigOwner(session.user_id));
       return res.status(204).end();
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "删除模型失败。" });
