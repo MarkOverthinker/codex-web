@@ -72,6 +72,9 @@ test("account settings expose username and password changes with password confir
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   assert.match(apiSource, /updateAccount: \(payload: \{ currentPassword: string; newUsername\?: string; newPassword\?: string \}\)/);
   assert.match(appSource, /账户与密码/);
+  assert.match(appSource, /修改账户与密码/);
+  assert.match(appSource, /account-security-trigger/);
+  assert.match(appSource, /account-security-dialog/);
   assert.match(appSource, /登录用户名/);
   assert.match(appSource, /autoComplete="current-password"/);
   assert.match(appSource, /autoComplete="new-password"/);
@@ -440,8 +443,8 @@ test("provider management stays vertically scrollable on mobile web", () => {
   const providerMobileBlock = styles.slice(styles.lastIndexOf("@media (max-width: 720px)"));
   assert.match(styles, /\.provider-manager-list \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*touch-action: pan-y;[^}]*-webkit-overflow-scrolling: touch;/);
   assert.match(styles, /\.provider-form-fields \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*touch-action: pan-y;[^}]*-webkit-overflow-scrolling: touch;/);
-  assert.match(providerMobileBlock, /\.provider-manager-backdrop,[\s\S]*?\.provider-form-backdrop \{[^}]*align-items: stretch;[^}]*padding: 0;/);
-  assert.match(providerMobileBlock, /\.provider-manager,[\s\S]*?\.provider-form \{[^}]*height: 100dvh;[^}]*max-height: none;/);
+  assert.match(providerMobileBlock, /\.provider-manager-backdrop,[\s\S]*?\.provider-form-backdrop[^{]*\{[^}]*align-items: stretch;[^}]*padding: 0;/);
+  assert.match(providerMobileBlock, /\.provider-manager,[\s\S]*?\.provider-form[^{]*\{[^}]*height: 100dvh;[^}]*max-height: none;/);
   assert.match(providerMobileBlock, /\.provider-manager-list,[\s\S]*?\.provider-form-fields \{ overflow-y: scroll; \}/);
 });
 
