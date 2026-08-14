@@ -1,6 +1,9 @@
 # Security
 
 - Keep `.env` private and use a unique password plus a random session secret.
+- Changing a password from the account settings requires the current password
+  and immediately revokes the user's other sessions. Usernames can only be
+  changed outside host mode, where they are not bound to a system account.
 - Bind the application to loopback and expose it only through an HTTPS reverse proxy.
 - Codex can execute code and modify files inside its selected workspace and tenant library. Only upload files you trust and review generated changes.
 - Codex Web runs tasks with `workspace-write`, `approval_policy = "on-request"`, and automatic approval review. The reviewer only evaluates actions that already require approval; sandbox-contained actions run directly. Requests that still reach the web client for manual approval are denied rather than accepted or left pending.

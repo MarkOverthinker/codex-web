@@ -65,6 +65,11 @@ model provider credentials and Codex login. Only grant accounts to people you
 trust; the container is not a complete security boundary for hostile
 workloads.
 
+Users can change their own username and password from the sidebar account
+settings. Username changes are stored in SQLite and survive container
+restarts; password changes immediately revoke the user's other active
+sessions.
+
 ## Host mode: machine users as tenants
 
 For a personal or small-team deployment on one machine, Codex Web can run
@@ -95,6 +100,9 @@ owner tenant. Keep `CONTAINERIZED` and `TENANT_WORKER_ISOLATION` unset (host
 mode forces direct execution). `HOST`, `PORT`, `BASE_PATH`, `DATA_ROOT` and
 `TENANT_ROOT` behave as in the container deployment; web data still lives
 under `DATA_ROOT`/`TENANT_ROOT`, while `~/.codex` stays in each user's home.
+Because each web username must match a system account, the account settings do
+not allow renaming the username in host mode; users can rotate their web login
+password there, while system account passwords remain managed with `passwd`.
 
 ### Binding beyond loopback (host mode)
 
