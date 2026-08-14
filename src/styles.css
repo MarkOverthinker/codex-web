@@ -769,12 +769,12 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .setting-value { min-width: 0; overflow: hidden; color: #30364e; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; letter-spacing: 0; }
 .setting-select > svg { flex: 0 0 auto; color: #9296a5; transition: transform .16s ease; pointer-events: none; }
 .setting-select[aria-expanded="true"] > svg { transform: rotate(180deg); color: var(--indigo); }
-.setting-menu.model { width: 166px; }
+.setting-menu.model { width: 220px; }
 .setting-menu.effort { width: 92px; }
 .setting-select { width: 100%; }
 .setting-menu-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30; min-width: 100%; max-width: min(290px, calc(100vw - 28px)); padding: 6px; border: 1px solid rgba(57, 70, 137, .14); border-radius: 12px; background: rgba(255, 255, 255, .98); box-shadow: 0 16px 38px rgba(15, 17, 32, .16), 0 3px 10px rgba(15, 17, 32, .06); backdrop-filter: blur(12px); }
 .setting-menu-panel.open-down { top: calc(100% + 8px); bottom: auto; }
-.setting-menu.model .setting-menu-panel { width: 236px; }
+.setting-menu.model .setting-menu-panel { width: 260px; }
 .setting-menu-panel button { width: 100%; min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 8px; border: 0; border-radius: 8px; color: #34384b; background: transparent; cursor: pointer; text-align: left; }
 .setting-menu-panel button.active, .setting-menu-panel button:hover { background: #f1f3fa; }
 .setting-menu-panel button.selected { color: #263373; background: var(--indigo-pale); }
@@ -859,9 +859,9 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .composer-primary-actions { gap: 5px; }
   .setting-select { padding-inline: 7px 5px; }
   .setting-select > span { display: none; }
-  .setting-menu.model { width: 132px; }
+  .setting-menu.model { width: 186px; }
   .setting-menu.effort { width: 76px; }
-  .setting-menu.model .setting-menu-panel { width: min(236px, calc(100vw - 28px)); }
+  .setting-menu.model .setting-menu-panel { width: min(260px, calc(100vw - 28px)); }
   .composer-note { display: none; }
   .welcome { padding: 30px 18px 180px; }
   .welcome > p { text-align: center; }
