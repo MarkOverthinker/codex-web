@@ -92,6 +92,10 @@ flowchart TB
 
 The important boundary is the executor, not the browser account alone. A restricted account cannot turn a web request into host access: its job is validated, handed to a fixed Unix identity, and confined to that tenant's paths. Administrator project mode is a separate, explicit trust decision and is therefore kept out of the public default deployment.
 
+### Changing your username and password
+
+Open the account settings at the bottom-left of the sidebar to change your login username and password. Both changes require your current password. New passwords must be at least 12 characters, and changing your password immediately revokes sessions on other devices. In the default container/tenant deployment, usernames can be changed from the UI and persist across restarts instead of being reset by the `.env` seed. In host mode every web username maps to a real system account, so the username cannot be changed from the web; users can still rotate their web login password there, while the system account password is managed with `passwd`.
+
 ### Remote computer execution
 
 A Remote Worker does not expose an inbound shell, RDP endpoint, or generic tunnel. It initiates an application-level WSS connection to the server, advertises its runtime capabilities, and executes only requests addressed to a registered project. Codex runs under the interactive user on that computer, with the real project directory as `cwd` and that user's normal Codex Home, so web-started and desktop-started threads share the same local Codex history.
