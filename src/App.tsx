@@ -7,7 +7,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
-  Eye, EyeOff, CornerUpLeft, GripVertical, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
+  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
@@ -306,7 +306,7 @@ export default function App() {
     </section></main>;
   }
   if (!session?.authenticated) return <Login onLogin={(value) => { setCsrf(value.csrfToken); setSession(value); }} />;
-  return <Workspace session={session} onLogout={() => { setCsrf(); setSession({ authenticated: false }); }} themePreference={themePreference} onThemePreferenceChange={setThemePreference} />;
+  return <Workspace session={session} onLogout={() => { setCsrf(); setSession({ authenticated: false }); }} onSessionChange={(value) => { setCsrf(value.csrfToken); setSession(value); }} themePreference={themePreference} onThemePreferenceChange={setThemePreference} />;
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
@@ -337,7 +337,7 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   </main>;
 }
 
-function Workspace({ session, onLogout, themePreference, onThemePreferenceChange }: { session: Session; onLogout: () => void; themePreference: ThemePreference; onThemePreferenceChange: (preference: ThemePreference) => void }) {
+function Workspace({ session, onLogout, onSessionChange, themePreference, onThemePreferenceChange }: { session: Session; onLogout: () => void; onSessionChange: (session: Session) => void; themePreference: ThemePreference; onThemePreferenceChange: (preference: ThemePreference) => void }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(() => readLocalStorageValue(SELECTED_CONVERSATION_KEY));
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
@@ -364,6 +364,13 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
+  const [accountUsername, setAccountUsername] = useState(session.username ?? "");
+  const [accountCurrentPassword, setAccountCurrentPassword] = useState("");
+  const [accountNewPassword, setAccountNewPassword] = useState("");
+  const [accountConfirmPassword, setAccountConfirmPassword] = useState("");
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountError, setAccountError] = useState("");
+  const [accountNotice, setAccountNotice] = useState("");
   const [taskMenu, setTaskMenu] = useState<{ conversationId: string; top: number; left: number } | null>(null);
   const [archivedDialogOpen, setArchivedDialogOpen] = useState(false);
   const [archivedConversations, setArchivedConversations] = useState<Conversation[]>([]);
@@ -1467,6 +1474,49 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
   async function logout() { try { await api.logout(); } finally { onLogout(); } }
 
+  async function saveAccount(event: FormEvent) {
+    event.preventDefault();
+    setAccountError("");
+    setAccountNotice("");
+    const nextUsername = accountUsername.trim();
+    const changedUsername = nextUsername !== session.username;
+    const newPassword = accountNewPassword;
+    if (newPassword !== accountConfirmPassword) {
+      setAccountError("两次输入的新密码不一致。");
+      return;
+    }
+    if (newPassword && newPassword.length < 12) {
+      setAccountError("新密码至少需要 12 个字符。");
+      return;
+    }
+    if (!changedUsername && !newPassword) {
+      setAccountError("没有需要保存的变更。");
+      return;
+    }
+    if (!accountCurrentPassword) {
+      setAccountError("请输入当前密码以确认身份。");
+      return;
+    }
+    setAccountSaving(true);
+    try {
+      const updated = await api.updateAccount({
+        currentPassword: accountCurrentPassword,
+        ...(changedUsername ? { newUsername: nextUsername } : {}),
+        ...(newPassword ? { newPassword } : {}),
+      });
+      onSessionChange(updated);
+      setAccountUsername(updated.username ?? nextUsername);
+      setAccountCurrentPassword("");
+      setAccountNewPassword("");
+      setAccountConfirmPassword("");
+      setAccountNotice("账户信息已保存。");
+    } catch (reason) {
+      setAccountError(reason instanceof Error ? reason.message : "保存失败");
+    } finally {
+      setAccountSaving(false);
+    }
+  }
+
   async function persistAgentSelection(selection: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null }) {
     const targetId = selectedIdRef.current;
     const previous = { model: selectedModel, reasoningEffort };
@@ -1910,6 +1960,32 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       <div className="account-area">
         {accountSettingsOpen && <section className="account-settings" aria-label="个人设置">
           <div className="account-settings-heading"><Settings2 size={15} /><strong>个人设置</strong></div>
+          <div className="account-security-heading"><KeyRound size={15} /><strong>账户与密码</strong></div>
+          <form className="account-security-form" onSubmit={saveAccount}>
+            <label className="account-security-field">
+              <span>登录用户名</span>
+              <input value={accountUsername} disabled={session.canChangeUsername === false} autoComplete="username" onChange={(event) => setAccountUsername(event.target.value)} />
+              {session.canChangeUsername === false && <small>宿主模式下用户名由系统账户决定，不能在这里修改。</small>}
+            </label>
+            <label className="account-security-field">
+              <span>当前密码</span>
+              <input type="password" value={accountCurrentPassword} autoComplete="current-password" onChange={(event) => setAccountCurrentPassword(event.target.value)} />
+            </label>
+            <label className="account-security-field">
+              <span>新密码（至少 12 位）</span>
+              <input type="password" value={accountNewPassword} autoComplete="new-password" onChange={(event) => setAccountNewPassword(event.target.value)} />
+            </label>
+            <label className="account-security-field">
+              <span>确认新密码</span>
+              <input type="password" value={accountConfirmPassword} autoComplete="new-password" onChange={(event) => setAccountConfirmPassword(event.target.value)} />
+            </label>
+            {accountError && <div className="form-error" role="alert">{accountError}</div>}
+            {accountNotice && <div className="account-settings-notice" role="status">{accountNotice}</div>}
+            <button className="primary-button account-settings-save" disabled={accountSaving} type="submit">
+              {accountSaving ? <LoaderCircle className="spin" size={17} /> : <Check size={16} />}
+              <span>保存账户与密码</span>
+            </button>
+          </form>
           <div className="font-size-setting">
             <div><strong>聊天正文字号</strong><small>正文、行距与内容间距同步调整</small></div>
             <div className="font-size-stepper">
