@@ -1,6 +1,6 @@
 # Codex Web
 
-An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, adjustable reading size and chat column width, light/dark/system appearance modes, and optional voice transcription.
+An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, and optional voice transcription.
 
 > Codex Web is an independent community project. It is not affiliated with, endorsed by, or supported by OpenAI.
 
