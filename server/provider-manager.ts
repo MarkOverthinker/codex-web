@@ -8,6 +8,14 @@ import type { AgentModelOption, ModelReasoningEffort } from "./model-options.js"
 
 const MODEL_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{1,80}$/i;
 const DEFAULT_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
+const DEFAULT_REASONING_DESCRIPTIONS: Record<string, string> = {
+  low: "Fast responses with lighter reasoning",
+  medium: "Balanced reasoning depth for everyday tasks",
+  high: "Deeper reasoning for complex tasks",
+  xhigh: "Extra-high reasoning depth for difficult tasks",
+  max: "Maximum reasoning depth for the hardest tasks",
+  ultra: "Ultra reasoning depth for exceptional tasks",
+};
 
 type TemplateCatalogEntry = Record<string, unknown> & {
   slug?: unknown;
@@ -97,8 +105,8 @@ function orderedProviderModels(db: AppDatabase): Array<ProviderModelRow & { prov
 /**
  * Keep the aggregated catalog slug globally unique. The first model that can
  * use its upstream id keeps it; a later collision gets a source-prefixed alias.
- * Aliased entries pass the alias to the upstream on native Responses endpoints,
- * so the management UI marks them for attention.
+ * The web selection persists this alias, then resolves it back to model_id at
+ * the execution boundary before calling the selected provider.
  */
 export function reassignProviderModelSlugs(db: AppDatabase): void {
   const taken = new Set<string>();
@@ -195,7 +203,7 @@ export function assertOfficialOAuthLimit(db: AppDatabase, next: { id?: string; r
 }
 
 function readCatalogFile(codexHome: string, fileName: string): TemplateCatalogEntry[] {
-  if (fileName && (fileName.includes("/") || fileName.includes("\\") || fileName.startsWith("."))) return [];
+  if (fileName && !safeCatalogFileName(fileName)) return [];
   const candidates = fileName ? [fileName] : ["models_cache.json", "models.json"];
   for (const name of candidates) {
     try {
@@ -209,6 +217,10 @@ function readCatalogFile(codexHome: string, fileName: string): TemplateCatalogEn
     }
   }
   return [];
+}
+
+function safeCatalogFileName(value: string): boolean {
+  return Boolean(value.trim()) && !value.includes("/") && !value.includes("\\") && !value.startsWith(".");
 }
 
 function readTemplateCatalog(codexHome: string, fileName?: string | null): TemplateCatalogEntry[] {
@@ -231,7 +243,17 @@ function reasoningLevels(model: ProviderModelRow, template: TemplateCatalogEntry
     const effort = typeof record.effort === "string" ? record.effort : "";
     if (effort) templateByEffort.set(effort, record);
   }
-  return efforts.map((effort) => templateByEffort.get(effort) ?? { effort });
+  return efforts.map((effort) => {
+    const templateLevel = templateByEffort.get(effort);
+    const templateDescription = typeof templateLevel?.description === "string"
+      ? templateLevel.description.trim()
+      : "";
+    return {
+      ...templateLevel,
+      effort,
+      description: templateDescription || DEFAULT_REASONING_DESCRIPTIONS[effort] || `${effort} reasoning effort`,
+    };
+  });
 }
 
 function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEntry | undefined): Record<string, unknown> {
@@ -256,8 +278,22 @@ function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEnt
 function assertCatalogEntries(models: Array<Record<string, unknown>>): void {
   for (const entry of models) {
     for (const field of ["slug", "display_name", "description"] as const) {
-      if (typeof entry[field] !== "string" || !entry[field]) {
+      if (typeof entry[field] !== "string" || !entry[field].trim()) {
         throw new Error(`Generated model catalog entry is missing required field "${field}"`);
+      }
+    }
+    if (!Array.isArray(entry.supported_reasoning_levels)) {
+      throw new Error("Generated model catalog entry is missing required field \"supported_reasoning_levels\"");
+    }
+    for (const [index, level] of entry.supported_reasoning_levels.entries()) {
+      if (!level || typeof level !== "object" || Array.isArray(level)) {
+        throw new Error(`Generated model catalog reasoning level ${index} is invalid`);
+      }
+      const record = level as Record<string, unknown>;
+      for (const field of ["effort", "description"] as const) {
+        if (typeof record[field] !== "string" || !record[field].trim()) {
+          throw new Error(`Generated model catalog reasoning level ${index} is missing required field "${field}"`);
+        }
       }
     }
   }
@@ -281,7 +317,7 @@ export function listCatalogModelOptions(db: AppDatabase): AgentModelOption[] {
     options.push({
       id: model.slug,
       label: model.display_name || model.model_id,
-      description: model.description || `${provider.name} 提供的模型${model.slug !== model.model_id ? `（目录别名 ${model.slug}，原生透传源可能不识别）` : ""}`,
+      description: model.description || `${provider.name} 提供的模型`,
       reasoningEfforts: reasoningEfforts as ModelReasoningEffort[],
       provider: provider.id,
       providerName: provider.name,
@@ -311,23 +347,52 @@ function atomicWrite(file: string, content: string, mode: number): void {
 }
 
 /**
- * In host mode the service runs as root while Codex itself runs as the host
- * user, so files written into the host user's ~/.codex must be owned by that
- * user (otherwise the dropped-privilege CLI gets EACCES on config.toml and
- * cannot refresh models_cache.json).
+ * Keep the host user's Codex home traversable after the root web service has
+ * written managed files. The CLI is started after dropping to the tenant UID,
+ * so fixing only the files is insufficient when an earlier run made the
+ * directory root-owned or removed its execute bit.
  */
-function applyCodexHomeOwnership(files: string[], owner: { uid: number; gid: number } | undefined): void {
+export function repairCodexHomeOwnership(
+  codexHome: string,
+  owner: { uid: number; gid: number } | undefined,
+): void {
+  if (!owner) return;
+  // Only the root host-mode service can repair another identity's Codex home.
+  // A rootless process must not turn a read-only or user-managed home into a
+  // startup warning; its normal file modes are already sufficient.
+  if (process.getuid?.() !== 0) return;
+  try {
+    fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+    // A Codex home contains credentials; do not leave it world-readable or
+    // writable as a side effect of a previous `chmod 777` workaround.
+    fs.chmodSync(codexHome, 0o700);
+  } catch (error) {
+    console.warn(`Failed to prepare Codex home ${codexHome}:`, error);
+  }
+  try {
+    fs.chownSync(codexHome, owner.uid, owner.gid);
+  } catch (error) {
+    console.warn(`Failed to set ownership on ${codexHome}:`, error);
+  }
+}
+
+function applyCodexHomeOwnership(
+  files: Array<{ file: string; mode: number }>,
+  owner: { uid: number; gid: number } | undefined,
+): void {
   if (!owner || process.getuid?.() !== 0) return;
-  for (const file of files) {
+  for (const { file, mode } of files) {
     try {
+      fs.chmodSync(file, mode);
       fs.chownSync(file, owner.uid, owner.gid);
     } catch (error) {
-      console.warn(`Failed to set ownership on ${file}:`, error);
+      console.warn(`Failed to set ownership or permissions on ${file}:`, error);
     }
   }
 }
 
 export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: { uid: number; gid: number }): void {
+  repairCodexHomeOwnership(codexHome, owner);
   reassignProviderModelSlugs(db);
   const config = readConfigToml(codexHome);
   const rawProviders = config.model_providers;
@@ -349,6 +414,7 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: 
         wire_api: provider.wire_api,
         requires_openai_auth: Boolean(provider.requires_openai_auth),
       };
+      if (provider.models_file && safeCatalogFileName(provider.models_file)) definition.models_file = provider.models_file;
       if (provider.api_key) definition.experimental_bearer_token = provider.api_key;
       let extraConfig: Record<string, unknown> = {};
       try {
@@ -371,8 +437,6 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: 
   } else {
     config.model_providers = managedProviders;
   }
-  atomicWrite(configTomlPath, `${stringifyToml(config)}\n`, 0o600);
-
   const templates = readTemplateCatalog(codexHome);
   const models: Array<Record<string, unknown>> = [];
   for (const model of orderedProviderModels(db)) {
@@ -383,8 +447,16 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: 
   }
   assertCatalogEntries(models);
   const catalogPath = path.join(codexHome, "models_cache.json");
+
+  // Validate the complete catalog before replacing either file. A failed
+  // generation must not leave config.toml pointing at an older, malformed
+  // cache after the provider settings have already been updated.
+  atomicWrite(configTomlPath, `${stringifyToml(config)}\n`, 0o600);
   atomicWrite(catalogPath, `${JSON.stringify({ models }, null, 2)}\n`, 0o644);
-  applyCodexHomeOwnership([configTomlPath, catalogPath], owner);
+  applyCodexHomeOwnership([
+    { file: configTomlPath, mode: 0o600 },
+    { file: catalogPath, mode: 0o644 },
+  ], owner);
 }
 
 export function importProvidersFromConfig(codexHome: string, db: AppDatabase): ProviderPublic[] {
@@ -461,6 +533,7 @@ export function importCatalogModels(providerId: string, codexHome: string, db: A
 }
 
 export function ensureProviderConfig(config: AppConfig, codexHome: string, db: AppDatabase, owner?: { uid: number; gid: number }): void {
+  repairCodexHomeOwnership(codexHome, owner);
   if (!providerManaged(db)) return;
   try {
     writeProviderConfig(codexHome, db, owner);

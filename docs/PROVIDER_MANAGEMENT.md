@@ -19,7 +19,7 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 每次保存都会用 `smol-toml` 原子重写目标 Codex Home 的 `config.toml`，并全量重写 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token` 以及导入时保留的扩展字段。
 
-生成 `models_cache.json` 时每个条目都会补齐 Codex 目录必需的 `slug`、`display_name`、`description` 等字段，避免 CLI 解析缓存时报 “missing field” 错误。host 模式下，写入宿主用户 `~/.codex` 的两个文件会自动改回该用户属主（`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写。
+生成 `models_cache.json` 时，每个模型条目都会补齐 Codex 目录必需的 `slug`、`display_name`、`description`，每个 `supported_reasoning_levels` 子项也会补齐 `effort` 和 `description`，避免 CLI 解析缓存时报 “missing field” 错误。host 模式下，写入宿主用户 `~/.codex` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
 
 ## 模型文件
 
@@ -29,7 +29,7 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 - 克隆模板条目的扩展字段（如 `context_window`）到聚合目录；
 - 模型 slug 全局唯一：第一个使用上游模型名的保留原名，后续同名模型自动加源前缀别名（如 `proxy-gpt-5.6-sol`）。
 
-别名条目在原生 Responses 源上会把别名原样发给上游，这类模型需要在页面上人工确认源是否接受别名，否则建议只保留一个同名模型。
+前端和数据库保存全局唯一的目录别名；真正启动任务时，服务端会按所选源把别名反解为原始 `model_id` 再传给上游。例如选择 `sssaicodeapi-gpt-5.4-mini` 时，上游收到的是 `gpt-5.4-mini`。
 
 ## 初始化
 
@@ -43,7 +43,15 @@ sudo node scripts/init-provider-sources.mjs \
   --models-file sssaicodeapi=sssaicodeapi-models.json
 ```
 
-脚本会读取每个映射用户的 `~/.codex/config.toml`，导入 provider 定义（含 `models_file` 键），按参数或 `<providerId>-models.json` 约定导入模型，最后生成聚合配置。
+脚本会读取每个映射用户的 `~/.codex/config.toml`，导入 provider 定义（含 `models_file` 键），按参数或 `<providerId>-models.json` 约定导入模型，最后生成聚合配置，并把生成文件的属主归还给该宿主用户。脚本必须在构建后的 `dist-server` 上运行；代码更新后先运行 `npm run build`，再运行脚本和 `npm run reload`。
+
+如果之前曾用 root 或 `chmod 777` 处理过权限，可直接以仓库属主的普通用户运行一键修复脚本。脚本会按需调用 `sudo` 修复精确的 Codex 文件、修复旧构建产物、构建服务端、导入两个默认模型文件并 reload 服务：
+
+```bash
+./scripts/repair-host-provider-sources.sh
+```
+
+脚本不递归修改整个主目录，也不应使用 `sudo` 直接启动；如模型文件名不同，可把 `--models-file providerId=fileName` 参数传给脚本。
 
 ## 限制与边界
 

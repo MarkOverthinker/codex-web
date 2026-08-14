@@ -16,7 +16,7 @@ import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-
 import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
 import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt } from "../src/message-source.js";
 import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow, type WorkingDirectoryFavorite } from "./db.js";
-import { loadAgentOptions, repairAgentSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
+import { loadAgentOptions, repairAgentSelection, resolveAgentExecutionSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
 import {
   assertOfficialOAuthLimit,
   ensureProviderConfig,
@@ -326,8 +326,10 @@ export function createApp(overrides: AppOverrides = {}) {
         publish(job.id, "failed", { status: "failed", message: "排队任务的数据不完整" });
         return;
       }
-      const selection = repairAgentSelection(optionsForUser(conversation.user_id), job.agent_model, job.reasoning_effort);
-      await runner.run(job.id, conversation.id, agentPrompt(message.content, message.quote_excerpt, message.source_reference), db.listFilesForMessage(message.id), selection);
+      const options = optionsForUser(conversation.user_id);
+      const selection = repairAgentSelection(options, job.agent_model, job.reasoning_effort);
+      const executionSelection = resolveAgentExecutionSelection(options, selection);
+      await runner.run(job.id, conversation.id, agentPrompt(message.content, message.quote_excerpt, message.source_reference), db.listFilesForMessage(message.id), executionSelection);
     } finally {
       publishQueuePositions();
       await pumpQueue();
@@ -571,7 +573,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const options = optionsForUser(session.user_id);
     const hostTenant = config.hostMode ? hostTenantFor(config, db, session.user_id) : null;
-    const configured = !config.hostMode || Boolean(hostTenant && isCodexConfigured(hostTenant.codexHome));
+    const configured = !config.hostMode || Boolean(hostTenant && isCodexConfigured(hostTenant.codexHome, { uid: hostTenant.uid, gid: hostTenant.gid }));
     return res.json({
       ...options,
       selection: userAgentSelection(session.user_id, options),
@@ -1427,7 +1429,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!conversation) { removeUnregisteredUploads(uploaded); return res.status(404).json({ error: "会话不存在。" }); }
     if (config.hostMode) {
       const hostTenant = hostTenantFor(config, db, session.user_id);
-      if (!hostTenant || !isCodexConfigured(hostTenant.codexHome)) {
+      if (!hostTenant || !isCodexConfigured(hostTenant.codexHome, { uid: hostTenant.uid, gid: hostTenant.gid })) {
         removeUnregisteredUploads(uploaded);
         return res.status(409).json({
           error: hostTenant ? CODEX_CONFIG_HINT : "该用户没有对应的系统账户，无法运行 Codex 任务。请先由管理员添加系统用户。",

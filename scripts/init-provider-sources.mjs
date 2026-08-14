@@ -21,6 +21,7 @@ import { hostTenantFor } from "../dist-server/server/host-mode.js";
 import {
   importCatalogModels,
   importProvidersFromConfig,
+  repairCodexHomeOwnership,
   writeProviderConfig,
 } from "../dist-server/server/provider-manager.js";
 
@@ -79,6 +80,7 @@ function main() {
       const hostTenant = hostTenantFor(config, db, user.id);
       if (!hostTenant) continue;
       const codexHome = hostTenant.codexHome;
+      repairCodexHomeOwnership(codexHome, { uid: hostTenant.uid, gid: hostTenant.gid });
       if (!fs.existsSync(path.join(codexHome, "config.toml"))) continue;
       const providers = importProvidersFromConfig(codexHome, db);
       let providerChanged = false;
@@ -96,7 +98,7 @@ function main() {
         }
       }
       if (providerChanged || providers.length > 0) {
-        writeProviderConfig(codexHome, db);
+        writeProviderConfig(codexHome, db, { uid: hostTenant.uid, gid: hostTenant.gid });
         changed = true;
         console.log(`Initialized providers for ${hostTenant.label} (${codexHome}).`);
       }

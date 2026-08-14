@@ -69,7 +69,7 @@ try {
     ensureTenant(config.tenantRoot, userId, { skipCodexHome: true });
     execFileSync(toolPath("chown"), ["-R", `${hostUser.uid}:${hostUser.gid}`, path.join(config.tenantRoot, userId)]);
     const codexHome = path.join(hostUser.home, ".codex");
-    const configured = isCodexConfigured(codexHome);
+    const configured = isCodexConfigured(codexHome, { uid: hostUser.uid, gid: hostUser.gid });
     console.log(`User created: ${username} (${userId}) as machine user ${username} (uid ${hostUser.uid}).`);
     console.log(configured
       ? `Codex config: configured at ${codexHome}.`
