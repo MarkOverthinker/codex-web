@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import modelCatalogTemplateLibraryJson from "./model-catalog-templates.json" with { type: "json" };
 import type { AppConfig } from "./config.js";
 import type { AppDatabase, ProviderModelRow, ProviderRow } from "./db.js";
 import { newId } from "./paths.js";
@@ -16,6 +17,8 @@ const DEFAULT_REASONING_DESCRIPTIONS: Record<string, string> = {
   max: "Maximum reasoning depth for the hardest tasks",
   ultra: "Ultra reasoning depth for exceptional tasks",
 };
+const CODEX_SHELL_TYPES = new Set(["default", "local", "unified_exec", "disabled", "shell_command"]);
+const CODEX_TRUNCATION_MODES = new Set(["bytes", "tokens"]);
 
 type TemplateCatalogEntry = Record<string, unknown> & {
   slug?: unknown;
@@ -26,6 +29,15 @@ type TemplateCatalogEntry = Record<string, unknown> & {
   input_modalities?: unknown;
   supported_reasoning_levels?: unknown;
 };
+
+type ModelCatalogTemplateLibrary = {
+  schema_version: number;
+  codex_version: string;
+  fallback: TemplateCatalogEntry;
+  models: TemplateCatalogEntry[];
+};
+
+const MODEL_CATALOG_TEMPLATE_LIBRARY = modelCatalogTemplateLibraryJson as unknown as ModelCatalogTemplateLibrary;
 
 export type ProviderPublic = {
   id: string;
@@ -204,33 +216,42 @@ export function assertOfficialOAuthLimit(db: AppDatabase, next: { id?: string; r
 
 function readCatalogFile(codexHome: string, fileName: string): TemplateCatalogEntry[] {
   if (fileName && !safeCatalogFileName(fileName)) return [];
-  const candidates = fileName ? [fileName] : ["models_cache.json", "models.json"];
-  for (const name of candidates) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(codexHome, name), "utf8")) as { models?: unknown };
-      if (!Array.isArray(parsed.models)) continue;
-      const entries = parsed.models.filter((entry): entry is TemplateCatalogEntry =>
-        entry && typeof entry === "object" && !Array.isArray(entry));
-      if (entries.length > 0) return entries;
-    } catch {
-      // Try the next catalog candidate.
-    }
+  if (!fileName) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(codexHome, fileName), "utf8")) as { models?: unknown };
+    if (!Array.isArray(parsed.models)) return [];
+    return parsed.models.filter((entry): entry is TemplateCatalogEntry =>
+      entry && typeof entry === "object" && !Array.isArray(entry));
+  } catch {
+    return [];
   }
-  return [];
 }
 
 function safeCatalogFileName(value: string): boolean {
   return Boolean(value.trim()) && !value.includes("/") && !value.includes("\\") && !value.startsWith(".");
 }
 
-function readTemplateCatalog(codexHome: string, fileName?: string | null): TemplateCatalogEntry[] {
-  return readCatalogFile(codexHome, fileName ?? "");
-}
-
 function cloneTemplateFields(template: TemplateCatalogEntry | undefined): Record<string, unknown> {
   if (!template) return {};
   const { slug: _slug, display_name: _displayName, description: _description, priority: _priority, visibility: _visibility, input_modalities: _modalities, supported_reasoning_levels: _levels, ...extra } = template;
   return extra;
+}
+
+function catalogTemplateForModel(modelId: string): TemplateCatalogEntry {
+  const normalized = modelId.trim().toLowerCase();
+  const suffix = normalized.includes("/") ? normalized.slice(normalized.indexOf("/") + 1) : normalized;
+  let matched: TemplateCatalogEntry | undefined;
+  let matchedLength = -1;
+  for (const template of MODEL_CATALOG_TEMPLATE_LIBRARY.models) {
+    const slug = typeof template.slug === "string" ? template.slug.trim().toLowerCase() : "";
+    if (!slug) continue;
+    if (normalized !== slug && !normalized.startsWith(slug) && suffix !== slug && !suffix.startsWith(slug)) continue;
+    if (slug.length > matchedLength) {
+      matched = template;
+      matchedLength = slug.length;
+    }
+  }
+  return matched ?? MODEL_CATALOG_TEMPLATE_LIBRARY.fallback;
 }
 
 function reasoningLevels(model: ProviderModelRow, template: TemplateCatalogEntry | undefined): unknown[] {
@@ -260,6 +281,7 @@ function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEnt
   const displayName = String(model.display_name || model.model_id);
   const description = String(model.description || `${model.provider_id} 提供的模型`);
   return {
+    ...cloneTemplateFields(template),
     slug: model.slug,
     display_name: displayName,
     description,
@@ -267,7 +289,6 @@ function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEnt
     priority: model.priority,
     input_modalities: parseStringArray(model.input_modalities, ["text", "image"]),
     supported_reasoning_levels: reasoningLevels(model, template),
-    ...cloneTemplateFields(template),
   };
 }
 
@@ -284,6 +305,32 @@ function assertCatalogEntries(models: Array<Record<string, unknown>>): void {
     }
     if (!Array.isArray(entry.supported_reasoning_levels)) {
       throw new Error("Generated model catalog entry is missing required field \"supported_reasoning_levels\"");
+    }
+    if (typeof entry.shell_type !== "string" || !CODEX_SHELL_TYPES.has(entry.shell_type)) {
+      throw new Error("Generated model catalog entry has invalid required field \"shell_type\"");
+    }
+    for (const field of ["supported_in_api", "support_verbosity", "supports_parallel_tool_calls"] as const) {
+      if (typeof entry[field] !== "boolean") {
+        throw new Error(`Generated model catalog entry is missing required field "${field}"`);
+      }
+    }
+    if (typeof entry.base_instructions !== "string") {
+      throw new Error("Generated model catalog entry is missing required field \"base_instructions\"");
+    }
+    if (!Array.isArray(entry.experimental_supported_tools)
+      || entry.experimental_supported_tools.some((tool) => typeof tool !== "string")) {
+      throw new Error("Generated model catalog entry has invalid required field \"experimental_supported_tools\"");
+    }
+    const truncationPolicy = entry.truncation_policy;
+    if (!truncationPolicy || typeof truncationPolicy !== "object" || Array.isArray(truncationPolicy)) {
+      throw new Error("Generated model catalog entry is missing required field \"truncation_policy\"");
+    }
+    const truncationRecord = truncationPolicy as Record<string, unknown>;
+    if (typeof truncationRecord.mode !== "string"
+      || !CODEX_TRUNCATION_MODES.has(truncationRecord.mode)
+      || !Number.isSafeInteger(truncationRecord.limit)
+      || Number(truncationRecord.limit) <= 0) {
+      throw new Error("Generated model catalog entry has invalid required field \"truncation_policy\"");
     }
     for (const [index, level] of entry.supported_reasoning_levels.entries()) {
       if (!level || typeof level !== "object" || Array.isArray(level)) {
@@ -437,12 +484,11 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: 
   } else {
     config.model_providers = managedProviders;
   }
-  const templates = readTemplateCatalog(codexHome);
   const models: Array<Record<string, unknown>> = [];
   for (const model of orderedProviderModels(db)) {
     const provider = db.getProvider(model.provider_id);
     if (!provider?.enabled || !model.visible) continue;
-    const template = templates.find((entry) => entry.slug === model.model_id) ?? templates[0];
+    const template = catalogTemplateForModel(model.model_id);
     models.push(buildCatalogEntry(model, template));
   }
   assertCatalogEntries(models);
@@ -498,7 +544,7 @@ export function importCatalogModels(providerId: string, codexHome: string, db: A
     throw new Error(`模型目录文件 ${provider.models_file} 不存在，请先为这个源生成模型目录。`);
   }
   const existing = new Set(db.listProviderModels(providerId).map((model) => model.model_id.toLowerCase()));
-  const templates = readTemplateCatalog(codexHome, provider.models_file);
+  const templates = readCatalogFile(codexHome, provider.models_file ?? "");
   for (const template of templates) {
     if (typeof template.slug !== "string" || !template.slug.trim()) continue;
     const modelId = template.slug;
