@@ -110,6 +110,9 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
   fs.mkdirSync(codexHome, { recursive: true });
   sampleConfig(codexHome);
   sampleCatalog(codexHome);
+  fs.writeFileSync(path.join(codexHome, "models_cache.json"), JSON.stringify({
+    models: [{ slug: "deepseek-v4-flash", display_name: "Broken cache entry" }],
+  }), "utf8");
   const db = testDb(root);
   db.createProvider({
     id: "deepseek",
@@ -141,10 +144,12 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
   assert.ok(catalog.models[0].description);
   assert.equal(catalog.models[0].visibility, "list");
   assert.deepEqual(catalog.models[0].supported_reasoning_levels, [
-    { effort: "low", description: "Template low" },
-    { effort: "high", description: "Deeper reasoning for complex tasks" },
+    { effort: "low", description: "Fast responses with lighter reasoning" },
+    { effort: "high", description: "Extra high reasoning depth for complex problems" },
   ]);
-  assert.equal(catalog.models[0].context_window, 1000, "template fields are cloned");
+  assert.equal(catalog.models[0].shell_type, "shell_command");
+  assert.equal(catalog.models[0].context_window, 1_048_576, "bundled DeepSeek template is used");
+  assert.ok(String(catalog.models[0].base_instructions).length > 1_000, "complete bundled instructions are preserved");
   db.close();
 });
 
@@ -173,8 +178,45 @@ test("aggregated catalog carries Codex-required fields even when templates omit 
     assert.equal(typeof catalog.models[0][field], "string", `${field} must be a string`);
     assert.ok(catalog.models[0][field], `${field} must not be empty`);
   }
+  assert.equal(catalog.models[0].shell_type, "default");
+  assert.equal(catalog.models[0].supported_in_api, true);
+  assert.ok(String(catalog.models[0].base_instructions).length > 1_000);
+  assert.equal(catalog.models[0].support_verbosity, false);
+  assert.equal(catalog.models[0].default_verbosity, null);
+  assert.equal(catalog.models[0].apply_patch_tool_type, null);
+  assert.deepEqual(catalog.models[0].truncation_policy, { mode: "bytes", limit: 10_000 });
+  assert.equal(catalog.models[0].supports_parallel_tool_calls, false);
+  assert.deepEqual(catalog.models[0].experimental_supported_tools, []);
+  assert.equal(catalog.models[0].context_window, 272_000);
   const reasoningLevels = catalog.models[0].supported_reasoning_levels as Array<Record<string, unknown>>;
   assert.deepEqual(reasoningLevels, [{ effort: "high", description: "Deeper reasoning for complex tasks" }]);
+  db.close();
+});
+
+test("aggregated catalog matches bundled model templates by longest upstream prefix", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const db = testDb(root);
+  db.createProvider({ id: "proxy", name: "Proxy", baseUrl: "https://proxy.example.com/v1" });
+  db.createProviderModel({
+    id: "m1",
+    providerId: "proxy",
+    modelId: "gpt-5.6-sol-custom",
+    slug: "gpt-5.6-sol-custom",
+    displayName: "Custom Sol",
+    reasoningEfforts: ["low", "high"],
+  });
+  writeProviderConfig(codexHome, db);
+  const catalog = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models: Array<Record<string, unknown>> };
+  assert.equal(catalog.models[0].shell_type, "shell_command");
+  assert.equal(catalog.models[0].supported_in_api, true);
+  assert.ok(String(catalog.models[0].base_instructions).length > 1_000);
+  assert.equal(catalog.models[0].support_verbosity, true);
+  assert.deepEqual(catalog.models[0].truncation_policy, { mode: "tokens", limit: 10_000 });
+  assert.equal(catalog.models[0].supports_parallel_tool_calls, true);
+  assert.equal(catalog.models[0].context_window, 272_000);
+  assert.equal(catalog.models[0].tool_mode, "code_mode_only");
   db.close();
 });
 

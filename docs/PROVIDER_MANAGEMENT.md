@@ -19,7 +19,7 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 每次保存都会用 `smol-toml` 原子重写目标 Codex Home 的 `config.toml`，并全量重写 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token` 以及导入时保留的扩展字段。
 
-生成 `models_cache.json` 时，每个模型条目都会补齐 Codex 目录必需的 `slug`、`display_name`、`description`，每个 `supported_reasoning_levels` 子项也会补齐 `effort` 和 `description`，避免 CLI 解析缓存时报 “missing field” 错误。host 模式下，写入宿主用户 `~/.codex` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
+生成 `models_cache.json` 时，codex-web 只使用仓库内置的完整模板库，不再把用户 `~/.codex/models_cache.json` 当作模板。模板库包含标准 fallback、当前 Codex 内置模型模板和 DeepSeek 模型模板；先按上游 `model_id` 精确匹配，再按最长前缀匹配，未知模型才使用标准 fallback。数据库字段只覆盖 slug、显示信息、优先级、输入模态和思考深度；每个 `supported_reasoning_levels` 子项也会补齐 `effort` 和 `description`。这样即使用户缓存来自旧版 Codex 或字段不全，生成目录也不会因 `shell_type` 等字段缺失而解析失败。host 模式下，写入宿主用户 `~/.codex` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
 
 ## 模型文件
 
@@ -30,6 +30,10 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 - 模型 slug 全局唯一：第一个使用上游模型名的保留原名，后续同名模型自动加源前缀别名（如 `proxy-gpt-5.6-sol`）。
 
 前端和数据库保存全局唯一的目录别名；真正启动任务时，服务端会按所选源把别名反解为原始 `model_id` 再传给上游。例如选择 `sssaicodeapi-gpt-5.4-mini` 时，上游收到的是 `gpt-5.4-mini`。
+
+## 刷新内置模板库
+
+升级 Codex CLI 后，如其模型 schema 或内置模型发生变化，应使用 `scripts/update-model-catalog-templates.mjs` 重新生成 `server/model-catalog-templates.json`。脚本读取一个 TOML 配置文件，配置 `codex_version`、Codex 源码中的 `models.json` / `prompt.md`、一个或多个 DeepSeek 模型目录以及输出路径；生成后必须运行 `npm test`，确认新模板可被当前 CLI 解析。
 
 ## 初始化
 
