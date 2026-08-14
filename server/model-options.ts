@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import type { AppConfig } from "./config.js";
-import type { AppDatabase } from "./db.js";
+import { LEGACY_USER_ID, type AppDatabase } from "./db.js";
 import { listCatalogModelOptions, providerManaged } from "./provider-manager.js";
 
 export type { ModelReasoningEffort } from "@openai/codex-sdk";
@@ -130,9 +130,9 @@ function strongestModel(models: AgentModelOption[]): string {
   return preferred.find((id) => models.some((model) => model.id === id)) ?? models[0].id;
 }
 
-export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome, db?: AppDatabase): AgentOptions {
-  const models = db && providerManaged(db)
-    ? listCatalogModelOptions(db)
+export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome, db?: AppDatabase, userId = LEGACY_USER_ID): AgentOptions {
+  const models = db && providerManaged(db, userId)
+    ? listCatalogModelOptions(db, userId)
     : catalogModels(config, codexHome);
   const available = models.length > 0 ? models : FALLBACK_MODELS;
   const defaultModel = strongestModel(available);

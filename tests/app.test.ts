@@ -1991,6 +1991,40 @@ test("web users have isolated conversations, files, jobs, settings, and tenant d
   const ownerConversation = await owner.post("/codex-web/api/conversations").set("X-CSRF-Token", ownerLogin.body.csrfToken).expect(201);
   const memberConversation = await member.post("/codex-web/api/conversations").set("X-CSRF-Token", memberLogin.body.csrfToken).expect(201);
 
+  const ownerProvider = await owner.post("/codex-web/api/providers")
+    .set("X-CSRF-Token", ownerLogin.body.csrfToken)
+    .send({ name: "Shared API", baseUrl: "https://owner.example.com/v1", apiKey: "sk-owner" })
+    .expect(201);
+  assert.equal(ownerProvider.body.provider.id, "shared-api");
+  assert.deepEqual((await member.get("/codex-web/api/providers").expect(200)).body.providers, []);
+
+  const memberProvider = await member.post("/codex-web/api/providers")
+    .set("X-CSRF-Token", memberLogin.body.csrfToken)
+    .send({ name: "Shared API", baseUrl: "https://member.example.com/v1", apiKey: "sk-member" })
+    .expect(201);
+  assert.equal(memberProvider.body.provider.id, "shared-api", "provider ids only need to be unique per user");
+  assert.equal((await owner.get("/codex-web/api/providers").expect(200)).body.providers[0].baseUrl, "https://owner.example.com/v1");
+  assert.equal((await member.get("/codex-web/api/providers").expect(200)).body.providers[0].baseUrl, "https://member.example.com/v1");
+
+  const ownerModels = await owner.post("/codex-web/api/providers/shared-api/models")
+    .set("X-CSRF-Token", ownerLogin.body.csrfToken)
+    .send({ modelId: "owner-model", displayName: "Owner Model", reasoningEfforts: ["high"] })
+    .expect(201);
+  const ownerModelId = ownerModels.body.models[0].id as string;
+  assert.deepEqual((await owner.get("/codex-web/api/agent-options").expect(200)).body.models.map((model: { id: string }) => model.id), ["owner-model"]);
+  assert.ok(!(await member.get("/codex-web/api/agent-options").expect(200)).body.models.some((model: { id: string }) => model.id === "owner-model"));
+  assert.deepEqual((await member.get("/codex-web/api/providers").expect(200)).body.models, []);
+  await member.delete(`/codex-web/api/providers/shared-api/models/${ownerModelId}`)
+    .set("X-CSRF-Token", memberLogin.body.csrfToken).expect(404);
+
+  instance.db.updateConversation(ownerConversation.body.conversation.id, {
+    agentSelection: { model: "owner-model", reasoningEffort: "high", provider: "shared-api" },
+  });
+  await member.delete("/codex-web/api/providers/shared-api")
+    .set("X-CSRF-Token", memberLogin.body.csrfToken).expect(204);
+  assert.equal((await owner.get("/codex-web/api/providers").expect(200)).body.providers.length, 1);
+  assert.deepEqual((await member.get("/codex-web/api/providers").expect(200)).body.providers, []);
+
   const ownerList = await owner.get("/codex-web/api/conversations").expect(200);
   const memberList = await member.get("/codex-web/api/conversations").expect(200);
   assert.deepEqual(ownerList.body.conversations.map((row: { id: string }) => row.id), [ownerConversation.body.conversation.id]);

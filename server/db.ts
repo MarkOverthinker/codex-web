@@ -140,6 +140,7 @@ export type StoredAgentSelection = {
 };
 
 export type ProviderRow = {
+  user_id: string;
   id: string;
   name: string;
   base_url: string;
@@ -154,6 +155,7 @@ export type ProviderRow = {
 };
 
 export type ProviderModelRow = {
+  user_id: string;
   id: string;
   provider_id: string;
   model_id: string;
@@ -334,7 +336,8 @@ export class AppDatabase {
         PRIMARY KEY(user_id, key)
       );
       CREATE TABLE IF NOT EXISTS providers (
-        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        id TEXT NOT NULL,
         name TEXT NOT NULL,
         base_url TEXT NOT NULL,
         api_key TEXT,
@@ -344,11 +347,13 @@ export class AppDatabase {
         requires_openai_auth INTEGER NOT NULL DEFAULT 0,
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, id)
       );
       CREATE TABLE IF NOT EXISTS provider_models (
-        id TEXT PRIMARY KEY,
-        provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
         model_id TEXT NOT NULL,
         slug TEXT NOT NULL,
         display_name TEXT NOT NULL,
@@ -359,7 +364,9 @@ export class AppDatabase {
         visible INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(provider_id, model_id)
+        PRIMARY KEY(user_id, id),
+        FOREIGN KEY(user_id, provider_id) REFERENCES providers(user_id, id) ON DELETE CASCADE,
+        UNIQUE(user_id, provider_id, model_id)
       );
     `);
 
@@ -410,6 +417,8 @@ export class AppDatabase {
         role='owner', status='active', updated_at=excluded.updated_at
     `).run(LEGACY_USER_ID, legacyUser.username, legacyUser.displayName ?? legacyUser.username, legacyUser.passwordHash, "owner", now, now);
 
+    this.migrateProvidersToUsers();
+
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
       this.sqlite.prepare("UPDATE conversations SET user_id=? WHERE user_id IS NULL").run(LEGACY_USER_ID);
@@ -438,8 +447,8 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS jobs_conversation_idx ON jobs(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, queue_seq);
       CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
-      CREATE INDEX IF NOT EXISTS providers_enabled_idx ON providers(enabled, created_at);
-      CREATE INDEX IF NOT EXISTS provider_models_provider_idx ON provider_models(provider_id, priority, created_at);
+      CREATE INDEX IF NOT EXISTS providers_enabled_idx ON providers(user_id, enabled, created_at);
+      CREATE INDEX IF NOT EXISTS provider_models_provider_idx ON provider_models(user_id, provider_id, priority, created_at);
     `);
 
     const uploadedFiles = this.sqlite.prepare("SELECT id,original_name FROM files WHERE kind='upload'").all() as Array<{ id: string; original_name: string }>;
@@ -453,6 +462,73 @@ export class AppDatabase {
 
   private columnNames(table: string): Set<string> {
     return new Set((this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+  }
+
+  private migrateProvidersToUsers(): void {
+    const providerColumns = this.columnNames("providers");
+    const modelColumns = this.columnNames("provider_models");
+    if (providerColumns.has("user_id") && modelColumns.has("user_id")) return;
+    if (providerColumns.has("user_id") || modelColumns.has("user_id")) {
+      throw new Error("Provider tables have inconsistent user scoping");
+    }
+
+    this.sqlite.exec("PRAGMA foreign_keys=OFF");
+    try {
+      this.sqlite.exec("BEGIN IMMEDIATE");
+      this.sqlite.exec(`
+        ALTER TABLE provider_models RENAME TO provider_models_legacy_global;
+        ALTER TABLE providers RENAME TO providers_legacy_global;
+        CREATE TABLE providers (
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          base_url TEXT NOT NULL,
+          api_key TEXT,
+          models_file TEXT,
+          extra_config TEXT,
+          wire_api TEXT NOT NULL DEFAULT 'responses',
+          requires_openai_auth INTEGER NOT NULL DEFAULT 0,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(user_id, id)
+        );
+        CREATE TABLE provider_models (
+          user_id TEXT NOT NULL,
+          id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          slug TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          reasoning_efforts TEXT NOT NULL DEFAULT '[]',
+          input_modalities TEXT NOT NULL DEFAULT '["text","image"]',
+          priority INTEGER NOT NULL DEFAULT 0,
+          visible INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(user_id, id),
+          FOREIGN KEY(user_id, provider_id) REFERENCES providers(user_id, id) ON DELETE CASCADE,
+          UNIQUE(user_id, provider_id, model_id)
+        );
+        INSERT INTO providers(user_id,id,name,base_url,api_key,models_file,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
+        SELECT account.id,provider.id,provider.name,provider.base_url,provider.api_key,provider.models_file,provider.extra_config,
+          provider.wire_api,provider.requires_openai_auth,provider.enabled,provider.created_at,provider.updated_at
+        FROM users account CROSS JOIN providers_legacy_global provider;
+        INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
+        SELECT account.id,model.id,model.provider_id,model.model_id,model.slug,model.display_name,model.description,
+          model.reasoning_efforts,model.input_modalities,model.priority,model.visible,model.created_at,model.updated_at
+        FROM users account CROSS JOIN provider_models_legacy_global model;
+        DROP TABLE provider_models_legacy_global;
+        DROP TABLE providers_legacy_global;
+      `);
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys=ON");
+    }
   }
 
   listUsers(): UserRow[] {
@@ -1004,19 +1080,20 @@ export class AppDatabase {
     return columnWidth;
   }
 
-  listProviders(): ProviderRow[] {
-    return this.sqlite.prepare("SELECT * FROM providers ORDER BY created_at,id").all() as unknown as ProviderRow[];
+  listProviders(userId: string): ProviderRow[] {
+    return this.sqlite.prepare("SELECT * FROM providers WHERE user_id=? ORDER BY created_at,id").all(userId) as unknown as ProviderRow[];
   }
 
-  listEnabledProviders(): ProviderRow[] {
-    return this.sqlite.prepare("SELECT * FROM providers WHERE enabled=1 ORDER BY created_at,id").all() as unknown as ProviderRow[];
+  listEnabledProviders(userId: string): ProviderRow[] {
+    return this.sqlite.prepare("SELECT * FROM providers WHERE user_id=? AND enabled=1 ORDER BY created_at,id").all(userId) as unknown as ProviderRow[];
   }
 
-  getProvider(id: string): ProviderRow | undefined {
-    return this.sqlite.prepare("SELECT * FROM providers WHERE id=?").get(id) as ProviderRow | undefined;
+  getProvider(userId: string, id: string): ProviderRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM providers WHERE user_id=? AND id=?").get(userId, id) as ProviderRow | undefined;
   }
 
   createProvider(input: {
+    userId: string;
     id: string;
     name: string;
     baseUrl: string;
@@ -1029,18 +1106,19 @@ export class AppDatabase {
   }): ProviderRow {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO providers(id,name,base_url,api_key,models_file,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO providers(user_id,id,name,base_url,api_key,models_file,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      input.id, input.name.trim(), input.baseUrl.trim(), input.apiKey?.trim() || null,
+      input.userId, input.id, input.name.trim(), input.baseUrl.trim(), input.apiKey?.trim() || null,
       input.modelsFile?.trim() || null,
       input.extraConfig ? JSON.stringify(input.extraConfig) : null,
       input.wireApi ?? "responses", input.requiresOpenaiAuth ? 1 : 0, input.enabled === false ? 0 : 1, now, now,
     );
-    return this.getProvider(input.id)!;
+    return this.getProvider(input.userId, input.id)!;
   }
 
   updateProvider(
+    userId: string,
     id: string,
     fields: {
       name?: string;
@@ -1053,7 +1131,7 @@ export class AppDatabase {
       enabled?: boolean;
     },
   ): ProviderRow | undefined {
-    const existing = this.getProvider(id);
+    const existing = this.getProvider(userId, id);
     if (!existing) return undefined;
     const next = {
       name: fields.name?.trim() || existing.name,
@@ -1067,44 +1145,47 @@ export class AppDatabase {
     };
     this.sqlite.prepare(`
       UPDATE providers SET name=?,base_url=?,api_key=?,models_file=?,extra_config=?,wire_api=?,requires_openai_auth=?,enabled=?,updated_at=?
-      WHERE id=?
-    `).run(next.name, next.baseUrl, next.apiKey, next.modelsFile, next.extraConfig, next.wireApi, next.requiresOpenaiAuth ? 1 : 0, next.enabled ? 1 : 0, new Date().toISOString(), id);
-    return this.getProvider(id);
+      WHERE user_id=? AND id=?
+    `).run(next.name, next.baseUrl, next.apiKey, next.modelsFile, next.extraConfig, next.wireApi, next.requiresOpenaiAuth ? 1 : 0, next.enabled ? 1 : 0, new Date().toISOString(), userId, id);
+    return this.getProvider(userId, id);
   }
 
-  deleteProvider(id: string): boolean {
-    return this.sqlite.prepare("DELETE FROM providers WHERE id=?").run(id).changes > 0;
+  deleteProvider(userId: string, id: string): boolean {
+    return this.sqlite.prepare("DELETE FROM providers WHERE user_id=? AND id=?").run(userId, id).changes > 0;
   }
 
-  isProviderReferenced(id: string): boolean {
+  isProviderReferenced(userId: string, id: string): boolean {
     const conversation = this.sqlite.prepare(
-      "SELECT 1 AS found FROM conversations WHERE agent_provider=? AND deleted_at IS NULL LIMIT 1",
-    ).get(id) as { found: number } | undefined;
+      "SELECT 1 AS found FROM conversations WHERE user_id=? AND agent_provider=? AND deleted_at IS NULL LIMIT 1",
+    ).get(userId, id) as { found: number } | undefined;
     if (conversation) return true;
     const pending = this.sqlite.prepare(`
       SELECT 1 AS found FROM pending_prompts prompt
       JOIN conversations conversation ON conversation.id=prompt.conversation_id
-      WHERE prompt.agent_provider=? AND conversation.deleted_at IS NULL LIMIT 1
-    `).get(id) as { found: number } | undefined;
+      WHERE conversation.user_id=? AND prompt.agent_provider=? AND conversation.deleted_at IS NULL LIMIT 1
+    `).get(userId, id) as { found: number } | undefined;
     if (pending) return true;
-    const activeJob = this.sqlite.prepare(
-      "SELECT 1 AS found FROM jobs WHERE agent_provider=? AND status IN ('queued','running') LIMIT 1",
-    ).get(id) as { found: number } | undefined;
+    const activeJob = this.sqlite.prepare(`
+      SELECT 1 AS found FROM jobs job
+      JOIN conversations conversation ON conversation.id=job.conversation_id
+      WHERE conversation.user_id=? AND job.agent_provider=? AND job.status IN ('queued','running') LIMIT 1
+    `).get(userId, id) as { found: number } | undefined;
     return Boolean(activeJob);
   }
 
-  listProviderModels(providerId?: string): ProviderModelRow[] {
+  listProviderModels(userId: string, providerId?: string): ProviderModelRow[] {
     if (providerId) {
-      return this.sqlite.prepare("SELECT * FROM provider_models WHERE provider_id=? ORDER BY priority,created_at,id").all(providerId) as unknown as ProviderModelRow[];
+      return this.sqlite.prepare("SELECT * FROM provider_models WHERE user_id=? AND provider_id=? ORDER BY priority,created_at,id").all(userId, providerId) as unknown as ProviderModelRow[];
     }
-    return this.sqlite.prepare("SELECT * FROM provider_models ORDER BY provider_id,priority,created_at,id").all() as unknown as ProviderModelRow[];
+    return this.sqlite.prepare("SELECT * FROM provider_models WHERE user_id=? ORDER BY provider_id,priority,created_at,id").all(userId) as unknown as ProviderModelRow[];
   }
 
-  getProviderModel(id: string): ProviderModelRow | undefined {
-    return this.sqlite.prepare("SELECT * FROM provider_models WHERE id=?").get(id) as ProviderModelRow | undefined;
+  getProviderModel(userId: string, id: string): ProviderModelRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM provider_models WHERE user_id=? AND id=?").get(userId, id) as ProviderModelRow | undefined;
   }
 
   createProviderModel(input: {
+    userId: string;
     id: string;
     providerId: string;
     modelId: string;
@@ -1118,10 +1199,10 @@ export class AppDatabase {
   }): ProviderModelRow {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO provider_models(id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      input.id, input.providerId, input.modelId.trim(), input.slug,
+      input.userId, input.id, input.providerId, input.modelId.trim(), input.slug,
       input.displayName.trim() || input.modelId.trim(),
       input.description?.trim() ?? "",
       JSON.stringify(input.reasoningEfforts ?? ["low", "medium", "high", "xhigh"]),
@@ -1130,10 +1211,11 @@ export class AppDatabase {
       input.visible === false ? 0 : 1,
       now, now,
     );
-    return this.getProviderModel(input.id)!;
+    return this.getProviderModel(input.userId, input.id)!;
   }
 
   updateProviderModel(
+    userId: string,
     id: string,
     fields: {
       modelId?: string;
@@ -1146,7 +1228,7 @@ export class AppDatabase {
       visible?: boolean;
     },
   ): ProviderModelRow | undefined {
-    const existing = this.getProviderModel(id);
+    const existing = this.getProviderModel(userId, id);
     if (!existing) return undefined;
     const next = {
       modelId: fields.modelId?.trim() || existing.model_id,
@@ -1160,22 +1242,22 @@ export class AppDatabase {
     };
     this.sqlite.prepare(`
       UPDATE provider_models SET model_id=?,slug=?,display_name=?,description=?,reasoning_efforts=?,input_modalities=?,priority=?,visible=?,updated_at=?
-      WHERE id=?
+      WHERE user_id=? AND id=?
     `).run(
       next.modelId, next.slug, next.displayName, next.description, next.reasoningEfforts, next.inputModalities,
-      next.priority, next.visible ? 1 : 0, new Date().toISOString(), id,
+      next.priority, next.visible ? 1 : 0, new Date().toISOString(), userId, id,
     );
-    return this.getProviderModel(id);
+    return this.getProviderModel(userId, id);
   }
 
-  updateProviderModelSlugs(entries: Array<{ id: string; slug: string }>): void {
-    const update = this.sqlite.prepare("UPDATE provider_models SET slug=?,updated_at=? WHERE id=?");
+  updateProviderModelSlugs(userId: string, entries: Array<{ id: string; slug: string }>): void {
+    const update = this.sqlite.prepare("UPDATE provider_models SET slug=?,updated_at=? WHERE user_id=? AND id=?");
     const now = new Date().toISOString();
-    for (const entry of entries) update.run(entry.slug, now, entry.id);
+    for (const entry of entries) update.run(entry.slug, now, userId, entry.id);
   }
 
-  deleteProviderModel(id: string): boolean {
-    return this.sqlite.prepare("DELETE FROM provider_models WHERE id=?").run(id).changes > 0;
+  deleteProviderModel(userId: string, id: string): boolean {
+    return this.sqlite.prepare("DELETE FROM provider_models WHERE user_id=? AND id=?").run(userId, id).changes > 0;
   }
 
   getFavoriteWorkingDirectories(userId = LEGACY_USER_ID): WorkingDirectoryFavorite[] {

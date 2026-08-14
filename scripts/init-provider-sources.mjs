@@ -82,23 +82,23 @@ function main() {
       const codexHome = hostTenant.codexHome;
       repairCodexHomeOwnership(codexHome, { uid: hostTenant.uid, gid: hostTenant.gid });
       if (!fs.existsSync(path.join(codexHome, "config.toml"))) continue;
-      const providers = importProvidersFromConfig(codexHome, db);
+      const providers = importProvidersFromConfig(codexHome, db, user.id);
       let providerChanged = false;
       for (const provider of providers) {
         const modelsFile = requestedModelFiles.get(provider.id)
           ?? (fs.existsSync(path.join(codexHome, `${provider.id}-models.json`)) ? `${provider.id}-models.json` : null);
         if (modelsFile) {
-          db.updateProvider(provider.id, { modelsFile });
+          db.updateProvider(user.id, provider.id, { modelsFile });
         }
-        const current = db.getProvider(provider.id);
+        const current = db.getProvider(user.id, provider.id);
         if (current?.models_file && fs.existsSync(path.join(codexHome, current.models_file))) {
-          const before = db.listProviderModels(provider.id).length;
-          importCatalogModels(provider.id, codexHome, db);
-          if (db.listProviderModels(provider.id).length !== before) providerChanged = true;
+          const before = db.listProviderModels(user.id, provider.id).length;
+          importCatalogModels(provider.id, codexHome, db, user.id);
+          if (db.listProviderModels(user.id, provider.id).length !== before) providerChanged = true;
         }
       }
       if (providerChanged || providers.length > 0) {
-        writeProviderConfig(codexHome, db, { uid: hostTenant.uid, gid: hostTenant.gid });
+        writeProviderConfig(codexHome, db, user.id, { uid: hostTenant.uid, gid: hostTenant.gid });
         changed = true;
         console.log(`Initialized providers for ${hostTenant.label} (${codexHome}).`);
       }
