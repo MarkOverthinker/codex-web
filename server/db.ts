@@ -412,7 +412,7 @@ export class AppDatabase {
     this.sqlite.prepare(`
       INSERT INTO users(id,username,display_name,password_hash,role,status,created_at,updated_at)
       VALUES(?,?,?,?,?,'active',?,?)
-      ON CONFLICT(id) DO UPDATE SET username=excluded.username, display_name=excluded.display_name,
+      ON CONFLICT(id) DO UPDATE SET
         password_hash=CASE WHEN excluded.password_hash<>'' THEN excluded.password_hash ELSE users.password_hash END,
         role='owner', status='active', updated_at=excluded.updated_at
     `).run(LEGACY_USER_ID, legacyUser.username, legacyUser.displayName ?? legacyUser.username, legacyUser.passwordHash, "owner", now, now);
@@ -553,9 +553,17 @@ export class AppDatabase {
     this.sqlite.prepare("UPDATE users SET password_hash=?,updated_at=? WHERE id=?").run(passwordHash, new Date().toISOString(), userId);
   }
 
+  setUserUsername(userId: string, username: string): void {
+    this.sqlite.prepare("UPDATE users SET username=?,updated_at=? WHERE id=?").run(username, new Date().toISOString(), userId);
+  }
+
   setUserStatus(userId: string, status: UserRow["status"]): void {
     this.sqlite.prepare("UPDATE users SET status=?,updated_at=? WHERE id=?").run(status, new Date().toISOString(), userId);
     if (status === "disabled") this.sqlite.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
+  }
+
+  deleteOtherUserSessions(userId: string, currentTokenHash: string): void {
+    this.sqlite.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").run(userId, currentTokenHash);
   }
 
   listConversations(userId?: string): ConversationRow[] {

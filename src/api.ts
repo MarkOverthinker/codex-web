@@ -5,7 +5,7 @@ export type { MessageSourceReference } from "./message-source.js";
 
 export const BASE_PATH = "/codex-web";
 
-export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean };
+export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean; canChangeUsername?: boolean };
 export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
   working_dir: string | null;
@@ -193,6 +193,8 @@ export const api = {
   session: () => request<Session>("/auth/session"),
   login: (username: string, password: string) => request<Session>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
+  updateAccount: (payload: { currentPassword: string; newUsername?: string; newPassword?: string }) =>
+    request<Session>("/auth/account", { method: "PUT", body: JSON.stringify(payload) }),
   conversations: () => request<{ conversations: Conversation[] }>("/conversations"),
   archivedConversations: (query = "") => request<{ conversations: Conversation[] }>(`/conversations/archived${query ? `?query=${encodeURIComponent(query)}` : ""}`),
   importableSessions: () => request<{ sessions: ImportableSession[] }>("/conversations/importable-sessions"),

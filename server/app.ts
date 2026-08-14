@@ -43,6 +43,8 @@ import {
 const COOKIE_NAME = "cww_session";
 const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
 const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例如“把图片背景改为白色”或“汇总这些表格”。收到明确指令后才会开始处理。";
+const USERNAME_PATTERN = /^[a-z_][a-z0-9._-]{0,31}$/i;
+const MIN_PASSWORD_LENGTH = 12;
 type AuthenticatedRequest = Request & { appSession?: SessionRow };
 
 export type AppOverrides = Partial<AppConfig> & { logger?: Logger };
@@ -199,6 +201,19 @@ export function createApp(overrides: AppOverrides = {}) {
   const deletingConversations = new Set<string>();
   let queuePumpBusy = false;
   let shuttingDown = false;
+
+  function sessionResponse(session: Pick<SessionRow, "user_id" | "csrf_token" | "username" | "display_name">): Record<string, unknown> {
+    return {
+      authenticated: true,
+      username: session.username,
+      displayName: session.display_name,
+      csrfToken: session.csrf_token,
+      chatFontSize: db.getChatFontSize(session.user_id),
+      chatColumnWidth: db.getChatColumnWidth(session.user_id),
+      voiceEnabled,
+      canChangeUsername: !config.hostMode,
+    };
+  }
 
   function removePendingPromptFiles(prompt: PendingPromptWithFiles, userId: string): void {
     const workspace = workspaceFor(userId, prompt.conversation_id);
@@ -438,29 +453,13 @@ export function createApp(overrides: AppOverrides = {}) {
       path: config.basePath || "/",
       expires: expiresAt,
     });
-    return res.json({
-      authenticated: true,
-      username: user.username,
-      displayName: user.display_name,
-      csrfToken,
-      chatFontSize: db.getChatFontSize(user.id),
-      chatColumnWidth: db.getChatColumnWidth(user.id),
-      voiceEnabled,
-    });
+    return res.json(sessionResponse({ user_id: user.id, csrf_token: csrfToken, username: user.username, display_name: user.display_name }));
   });
 
   api.get("/auth/session", (req, res) => {
     const session = readSession(req, db, config);
     if (!session) return res.json({ authenticated: false });
-    return res.json({
-      authenticated: true,
-      username: session.username,
-      displayName: session.display_name,
-      csrfToken: session.csrf_token,
-      chatFontSize: db.getChatFontSize(session.user_id),
-      chatColumnWidth: db.getChatColumnWidth(session.user_id),
-      voiceEnabled,
-    });
+    return res.json(sessionResponse(session));
   });
 
   api.use((req, res, next) => {
@@ -492,6 +491,54 @@ export function createApp(overrides: AppOverrides = {}) {
     if (token) db.deleteSession(hashToken(token, config.sessionSecret));
     res.clearCookie(COOKIE_NAME, { path: config.basePath || "/" });
     res.json({ ok: true });
+  });
+
+  api.put("/auth/account", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const user = db.getUser(session.user_id);
+    const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+    const newUsernameRaw = req.body?.newUsername;
+    const newUsername = typeof newUsernameRaw === "string" ? newUsernameRaw.trim() : undefined;
+    const newPassword = typeof req.body?.newPassword === "string" && req.body.newPassword ? req.body.newPassword : undefined;
+    const wantsUsername = Boolean(user && newUsername !== undefined && newUsername !== user.username);
+    const wantsPassword = newPassword !== undefined;
+    if (!wantsUsername && !wantsPassword) return res.status(400).json({ error: "没有需要保存的变更。" });
+    if (!user || !user.password_hash || !await bcrypt.compare(currentPassword, user.password_hash)) {
+      return res.status(403).json({ error: "当前密码不正确。" });
+    }
+
+    if (wantsUsername) {
+      if (config.hostMode) {
+        return res.status(400).json({ error: "宿主模式下用户名对应系统账户，不能在网页修改。请使用系统工具或联系管理员。" });
+      }
+      if (!USERNAME_PATTERN.test(newUsername as string)) {
+        return res.status(400).json({ error: "用户名只能包含字母、数字、点、横线、下划线，且不能以数字开头。" });
+      }
+      const duplicate = db.getUserByUsername(newUsername as string);
+      if (duplicate && duplicate.id !== user.id) {
+        return res.status(400).json({ error: "该用户名已被使用。" });
+      }
+      try {
+        db.setUserUsername(user.id, newUsername as string);
+      } catch {
+        return res.status(400).json({ error: "该用户名已被使用。" });
+      }
+    }
+
+    if (wantsPassword) {
+      if (newPassword!.length < MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({ error: "新密码至少需要 12 个字符。" });
+      }
+      db.setUserPassword(user.id, bcrypt.hashSync(newPassword as string, 12));
+      const token = req.cookies?.[COOKIE_NAME];
+      if (typeof token === "string" && token) {
+        db.deleteOtherUserSessions(user.id, hashToken(token, config.sessionSecret));
+      }
+    }
+
+    const updated = db.getUser(user.id);
+    if (!updated) return res.status(500).json({ error: "账户更新失败，请刷新后重试。" });
+    return res.json(sessionResponse({ ...session, username: updated.username, display_name: updated.display_name }));
   });
 
   const clientErrorLimiter = rateLimit({
