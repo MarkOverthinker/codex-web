@@ -720,6 +720,8 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
   const executionSource = fs.readFileSync(path.join(process.cwd(), "server", "tenant-worker-execution.ts"), "utf8");
   const composeSource = fs.readFileSync(path.join(process.cwd(), "compose.yaml"), "utf8");
   assert.match(executionSource, /executablePath: process\.env\.CODEX_RUNTIME_PATH/);
+  assert.match(executionSource, /runtimeWorkspaceRoots: hostMode \? \[request\.workingDir \?\? request\.workspace, request\.workspace, request\.library\] : undefined/);
+  assert.doesNotMatch(executionSource, /danger-full-access|dangerFullAccess/);
   const appServerSource = fs.readFileSync(path.join(process.cwd(), "server", "app-server-turn.ts"), "utf8");
   assert.match(appServerSource, /"turn\/steer"/);
   assert.match(appServerSource, /expectedTurnId: this\.activeTurnId/);

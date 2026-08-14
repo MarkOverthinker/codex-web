@@ -71,9 +71,12 @@ For a personal or small-team deployment on one machine, Codex Web can run
 directly on the host without Docker. Every machine user is then a Codex Web
 tenant: tasks run under that user's Unix identity, `CODEX_HOME` points at the
 user's real `~/.codex` (global skills, `config.toml`, credentials and model
-catalogs included), and the agent sandbox is `danger-full-access` so it can use
-host tools such as Caddy/frp publishing. The server process runs as root and
-drops privileges into the tenant user for every task.
+catalogs included), and the agent uses `workspace-write` with
+`approval_policy = "on-request"` and `approvals_reviewer = "auto_review"`.
+The selected working directory, conversation workspace, and tenant library are
+writable directly; host tool calls or other escalations are reviewed automatically, without a browser
+approval prompt, and unresolved manual approval requests are denied. The server
+process runs as root and drops privileges into the tenant user for every task.
 
 Start the service:
 

@@ -44,7 +44,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     networkAccessEnabled: request.networkAccessEnabled,
     webSearchMode: request.webSearchMode,
     optionalCapabilities: request.optionalCapabilities,
-    sandbox: hostMode ? "danger-full-access" : undefined,
+    runtimeWorkspaceRoots: hostMode ? [request.workingDir ?? request.workspace, request.workspace, request.library] : undefined,
     uid: hostMode ? request.uid : undefined,
     gid: hostMode ? request.gid : undefined,
   }, callbacks);

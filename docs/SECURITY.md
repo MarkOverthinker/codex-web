@@ -2,7 +2,8 @@
 
 - Keep `.env` private and use a unique password plus a random session secret.
 - Bind the application to loopback and expose it only through an HTTPS reverse proxy.
-- Codex can execute code and modify files inside its tenant workspace. Only upload files you trust and review generated changes.
+- Codex can execute code and modify files inside its selected workspace and tenant library. Only upload files you trust and review generated changes.
+- Codex Web runs tasks with `workspace-write`, `approval_policy = "on-request"`, and automatic approval review. The reviewer only evaluates actions that already require approval; sandbox-contained actions run directly. Requests that still reach the web client for manual approval are denied rather than accepted or left pending.
 - Custom host working directories are accepted only in host mode and never
   point at Codex Web's own data, tenant, or workspace roots; the worker
   revalidates the absolute path and the tenant system user's access before

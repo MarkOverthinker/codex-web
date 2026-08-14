@@ -3,6 +3,7 @@ import type { Conversation, Job, JobEvent } from "./api";
 export const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 export const PROCESS_EVENT_WINDOW = 50;
 export const RETAINED_STAGE_FEEDBACK_LIMIT = 5;
+export const RETAINED_APPROVAL_LIMIT = 20;
 
 export function isTerminalJob(job: Job | null | undefined): boolean {
   return Boolean(job && TERMINAL_JOB_STATUSES.has(job.status));
@@ -22,6 +23,12 @@ export function mergeJobEvents(current: JobEvent[], incoming: JobEvent[]): JobEv
     .slice(0, rollingStart)
     .filter((event) => event.kind === "update")
     .slice(-RETAINED_STAGE_FEEDBACK_LIMIT);
+  const retainedApprovalByReview = new Map<string, JobEvent>();
+  for (const event of ordered.slice(0, rollingStart)) {
+    if (event.kind !== "approval") continue;
+    retainedApprovalByReview.set(event.reviewId ?? `seq:${event.seq ?? retainedApprovalByReview.size}`, event);
+  }
+  const retainedApprovals = [...retainedApprovalByReview.values()].slice(-RETAINED_APPROVAL_LIMIT);
   // Long tasks overflow the rolling window, which would otherwise drop the
   // first "running" event and make the completed "总用时" start from a status
   // update near the end (showing ~1 second). Keep the execution boundaries so
@@ -33,7 +40,7 @@ export function mergeJobEvents(current: JobEvent[], incoming: JobEvent[]): JobEv
   for (const event of [firstRunning, lastTerminal]) {
     if (event && event.seq !== undefined) retainedBoundaries.push(event);
   }
-  const combined = [...retainedBoundaries, ...retainedStageFeedback, ...ordered.slice(rollingStart)];
+  const combined = [...retainedBoundaries, ...retainedStageFeedback, ...retainedApprovals, ...ordered.slice(rollingStart)];
   const deduped = new Map<number, JobEvent>();
   for (const event of combined) deduped.set(event.seq ?? -(deduped.size + 1), event);
   return [...deduped.values()].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));

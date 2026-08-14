@@ -16,15 +16,28 @@ export function firstReasoningLine(text: string): string {
 export function collectReasoningSteps(activities: JobEvent[]): ReasoningStep[] {
   const steps: ReasoningStep[] = [];
   const seen = new Set<string>();
+  const byId = new Map<string, number>();
   const byTitle = new Map<string, number>();
   for (const activity of activities) {
-    if (activity.kind !== "reasoning") continue;
+    if (activity.kind !== "reasoning" && activity.kind !== "approval") continue;
     const candidates = Array.isArray(activity.steps) && activity.steps.length > 0
       ? activity.steps
       : splitLegacyReasoning(activity.detail ?? "");
     for (const candidate of candidates) {
       const detail = (candidate.detail ?? candidate.summary ?? "").trim();
       const title = (candidate.title ?? firstReasoningLine(detail)).trim() || "思考步骤";
+      const id = candidate.id?.trim();
+      if (id) {
+        const existingIndex = byId.get(id);
+        const step = { id, title, detail };
+        if (existingIndex === undefined) {
+          steps.push(step);
+          byId.set(id, steps.length - 1);
+        } else {
+          steps[existingIndex] = step;
+        }
+        continue;
+      }
       const signature = `${title}\u0000${detail}`;
       if (seen.has(signature)) continue;
       const existingIndex = byTitle.get(title);

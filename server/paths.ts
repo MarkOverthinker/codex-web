@@ -24,9 +24,9 @@ ${MANAGED_INSTRUCTIONS_END}
 const HOST_WORKSPACE_AGENTS = `# Conversation workspace (host mode)
 
 ${MANAGED_INSTRUCTIONS_START}
-- You act as this machine user's local Codex agent with danger-full-access, equivalent to a normal Codex session on this host.
+- You act as this machine user's local Codex agent with workspace-write access to the selected working directory, conversation workspace, and tenant library.
 - User uploads are in uploads/. Save finished deliverables in outputs/ unless the task asks otherwise.
-- You may read and write anywhere this host user can, including the host home directory and ~/.codex, when the task requires it (for example global skills, Caddy/frp publishing, or host services).
+- You may read host paths that this user can access. Writes outside the writable roots, blocked network access, and other escalations require automatic approval review; do not ask the web user to approve them manually.
 - Keep throwaway files, caches, and temporary environments in .runtime/; the service deletes it after every turn.
 - Never reveal credentials, authentication files, browser profiles, or unrelated users' data.
 - In replies, mention only final filenames the user needs. Never expose absolute paths or list process files.
@@ -211,9 +211,9 @@ export function normalizeStoredRelativePath(relativePath: string): string {
 
 /**
  * Resolve a user-supplied host directory to its canonical absolute path.
- * Host mode grants the tenant machine user danger-full-access, so the only
- * paths that must be rejected are the application's own managed storage roots
- * and non-directories. The caller is responsible for enforcing host mode.
+ * Host mode makes the selected directory the workspace-write root for the
+ * tenant machine user. Reject the application's own managed storage roots and
+ * non-directories before starting the sandboxed task.
  */
 export function resolveHostWorkingDir(input: string, options: { dataRoot: string; tenantRoot: string; workspaceRoot?: string }): string {
   if (typeof input !== "string" || !input.trim()) throw new Error("请输入有效的工作目录绝对路径。");

@@ -8,7 +8,7 @@ import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   Eye, EyeOff, CornerUpLeft, GripVertical, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
-  RotateCcw, Trash2, TriangleAlert, X, Zap,
+  RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
@@ -2340,8 +2340,8 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
         <summary><span className="reasoning-panel-title"><Brain size={14} />思考过程</span><span className="reasoning-panel-meta">{steps.length} 个步骤</span><ChevronDown size={14} /></summary>
         <ol className="reasoning-steps">
           {steps.map((step, index) => (
-            <li key={`${step.title ?? index}-${index}`}>
-              <details className="reasoning-step">
+            <li key={step.id ?? `${step.title ?? index}-${index}`}>
+              <details className={`reasoning-step${step.id?.startsWith("approval:") ? " approval-reasoning-step" : ""}`}>
                 <summary><span className="reasoning-step-index">{index + 1}</span><span className="reasoning-step-title">{step.title || "思考步骤"}</span><ChevronDown size={13} /></summary>
                 <div className="markdown reasoning-step-detail"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{step.detail || step.title}</ReactMarkdown></div>
               </details>
@@ -2502,11 +2502,14 @@ function ProcessPanel({ activities, startedAt: jobStartedAt }: { activities: Job
     <div className="process-journal">{journal.length ? journal.map((activity, index) => isNarrativeActivity(activity)
       ? <ProcessJournalNote activity={activity} key={activity.seq ?? `${activity.kind}-${index}`} />
       : <div className="activity-line" key={activity.seq ?? `${activity.label}-${index}`}>
-          {activity.label?.startsWith("正在") ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
+          {activity.kind === "approval"
+            ? activity.reviewStatus === "inProgress" ? <LoaderCircle className="spin" size={14} /> : activity.reviewStatus === "approved" ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />
+            : activity.label?.startsWith("正在") ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
           <div><span>{activity.label}</span>{activity.created_at && <time dateTime={activity.created_at}>{formatActivityTime(activity.created_at)}</time>}
             {activity.kind === "file" && activity.files?.length ? <small>{activity.files.map((file) => file.split(/[\\/]/).at(-1)).join("、")}</small> : null}
             {["search", "tool"].includes(activity.kind ?? "") && activity.detail ? <small>{activity.detail}</small> : null}
             {activity.kind === "command" && activity.detail ? <details className="technical-detail"><summary>{activity.actionCount && activity.actionCount > 1 ? `查看 ${activity.actionCount} 个技术步骤` : "查看技术细节"}</summary><code>{activity.groupedDetails?.join("\n\n") || activity.detail}</code></details> : null}
+            {activity.kind === "approval" && activity.detail ? <details className={`approval-detail ${activity.reviewStatus ?? ""}`}><summary>查看审核内容</summary><div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{activity.detail}</ReactMarkdown></div></details> : null}
           </div>
         </div>) : <p className="process-journal-empty">正在建立执行方向…</p>}</div>
     {startedAt && !queued && <div className="process-timer-row"><Timer size={13} />已用时 {formatElapsed(elapsedSeconds)}</div>}

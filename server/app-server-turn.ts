@@ -28,7 +28,6 @@ export type AppServerTurnOptions = {
   shellEnvironment: Record<string, string>;
   networkAccessEnabled: boolean;
   webSearchMode: "cached" | "live";
-  sandbox?: "workspace-write" | "danger-full-access";
   runtimeWorkspaceRoots?: string[];
   optionalCapabilities: OptionalAgentCapabilities;
   uid?: number;
@@ -46,8 +45,15 @@ type PendingRequest = {
   reject(error: Error): void;
 };
 
+type RpcId = string | number;
 type RpcResponse = { id: number; result?: unknown; error?: { message?: string; data?: unknown } };
+type RpcServerRequest = { id: RpcId; method: string; params?: JsonObject };
 type RpcNotification = { method: string; params?: JsonObject };
+
+const APPROVAL_POLICY = "on-request";
+const APPROVALS_REVIEWER = "auto_review";
+const SANDBOX_MODE = "workspace-write";
+const APPROVAL_REJECTION = "自动审核未接管此请求，Codex Web 已按安全默认值拒绝。";
 
 let setprivProbeResult: boolean | undefined;
 
@@ -91,7 +97,13 @@ class AppServerTurnClient {
     });
     const dropPrivileges = options.uid !== undefined && options.gid !== undefined && process.getuid?.() === 0;
     const executablePath = options.executablePath || process.env.CODEX_RUNTIME_PATH || "codex";
-    const appServerArgs = ["app-server", "--listen", "stdio://"];
+    const appServerArgs = [
+      "app-server",
+      "--listen", "stdio://",
+      "-c", `approval_policy="${APPROVAL_POLICY}"`,
+      "-c", `approvals_reviewer="${APPROVALS_REVIEWER}"`,
+      "-c", `sandbox_mode="${SANDBOX_MODE}"`,
+    ];
     const spawnOptions: SpawnOptionsWithoutStdio = {
       cwd: options.cwd,
       env: options.env,
@@ -167,16 +179,18 @@ class AppServerTurnClient {
         capabilities: { experimentalApi: true, requestAttestation: false },
       });
       this.notify("initialized");
+      const runtimeWorkspaceRoots = [...new Set(this.options.runtimeWorkspaceRoots ?? [this.options.cwd, this.options.library])];
       const common = {
         model: this.options.model,
         ...(this.options.modelProvider ? { modelProvider: this.options.modelProvider } : {}),
         cwd: this.options.cwd,
-        runtimeWorkspaceRoots: this.options.runtimeWorkspaceRoots ?? [this.options.cwd, this.options.library],
-        approvalPolicy: "never",
-        sandbox: this.options.sandbox ?? "workspace-write",
+        runtimeWorkspaceRoots,
+        approvalPolicy: APPROVAL_POLICY,
+        approvalsReviewer: APPROVALS_REVIEWER,
+        sandbox: SANDBOX_MODE,
         config: {
           sandbox_workspace_write: {
-            writable_roots: [this.options.library],
+            writable_roots: runtimeWorkspaceRoots,
             network_access: this.options.networkAccessEnabled,
           },
           shell_environment_policy: { inherit: "core", set: this.options.shellEnvironment },
@@ -199,9 +213,8 @@ class AppServerTurnClient {
         input: makeUserInput(this.options.prompt, this.options.imagePaths),
         model: this.options.model,
         effort: this.options.reasoningEffort,
-        ...(this.options.sandbox === "danger-full-access"
-          ? { cwd: this.options.cwd, approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" } }
-          : {}),
+        approvalPolicy: APPROVAL_POLICY,
+        approvalsReviewer: APPROVALS_REVIEWER,
         ...(this.options.outputSchema ? { outputSchema: this.options.outputSchema } : {}),
       }) as { turn?: { id?: string } };
       if (!turnResult?.turn?.id) throw new Error("Codex app server did not return a turn id");
@@ -229,9 +242,13 @@ class AppServerTurnClient {
   }
 
   private handleLine(line: string): void {
-    let message: RpcResponse | RpcNotification;
-    try { message = JSON.parse(line) as RpcResponse | RpcNotification; }
+    let message: RpcResponse | RpcServerRequest | RpcNotification;
+    try { message = JSON.parse(line) as RpcResponse | RpcServerRequest | RpcNotification; }
     catch { return; }
+    if ("method" in message && "id" in message) {
+      this.handleServerRequest(message);
+      return;
+    }
     if ("id" in message) {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -241,6 +258,33 @@ class AppServerTurnClient {
       return;
     }
     this.handleNotification(message);
+  }
+
+  private handleServerRequest(message: RpcServerRequest): void {
+    const params = message.params ?? {};
+    const progress = summarizeUnhandledApprovalRequest(message.method, message.id, params);
+    if (progress) this.callbacks.onProgress(progress);
+    if (message.method === "item/commandExecution/requestApproval" || message.method === "item/fileChange/requestApproval") {
+      this.respond(message.id, { decision: "decline" });
+      return;
+    }
+    if (message.method === "item/permissions/requestApproval") {
+      this.respond(message.id, { permissions: {}, scope: "turn" });
+      return;
+    }
+    if (message.method === "execCommandApproval" || message.method === "applyPatchApproval") {
+      this.respond(message.id, { decision: { denied: { rejection: APPROVAL_REJECTION } } });
+      return;
+    }
+    this.respondError(message.id, -32601, `Unsupported app-server request: ${message.method}`);
+  }
+
+  private respond(id: RpcId, result: unknown): void {
+    if (this.child.stdin.writable) this.child.stdin.write(`${JSON.stringify({ id, result })}\n`);
+  }
+
+  private respondError(id: RpcId, code: number, message: string): void {
+    if (this.child.stdin.writable) this.child.stdin.write(`${JSON.stringify({ id, error: { code, message } })}\n`);
   }
 
   private handleNotification(message: RpcNotification): void {
@@ -272,6 +316,16 @@ class AppServerTurnClient {
         return;
       }
       this.callbacks.onProgress({ kind: "error", label: describeUpstreamError(redactBrand(detail)) });
+      return;
+    }
+    if (message.method === "item/autoApprovalReview/started" || message.method === "item/autoApprovalReview/completed") {
+      const progress = summarizeAutoApprovalReview(params, message.method.endsWith("/completed"));
+      if (progress) this.callbacks.onProgress(progress);
+      return;
+    }
+    if (message.method === "guardianWarning") {
+      const detail = redactBrand(String(params.message ?? "自动审核发生异常"));
+      this.callbacks.onProgress({ kind: "approval", label: "自动审核警告", detail, reviewStatus: "warning" });
       return;
     }
     if (message.method === "item/started" || message.method === "item/completed") {
@@ -360,6 +414,134 @@ function summarizeItem(item: JsonObject, completed: boolean): unknown | null {
     return detail ? { kind: "update", label: "阶段反馈", detail } : null;
   }
   return null;
+}
+
+function summarizeAutoApprovalReview(params: JsonObject, completed: boolean): unknown | null {
+  const reviewId = typeof params.reviewId === "string" ? params.reviewId : "";
+  const review = asObject(params.review);
+  const action = asObject(params.action);
+  if (!reviewId || !review || !action) return null;
+  const reviewStatus = typeof review.status === "string" ? review.status : completed ? "aborted" : "inProgress";
+  const actionLabel = approvalActionLabel(action);
+  const actionDetail = approvalActionDetail(action);
+  const detailParts = [
+    `**审核对象**：${actionDetail}`,
+    `**审核结果**：${approvalStatusLabel(reviewStatus)}`,
+  ];
+  if (typeof review.riskLevel === "string") detailParts.push(`**风险等级**：${approvalRiskLabel(review.riskLevel)}`);
+  if (typeof review.userAuthorization === "string") detailParts.push(`**用户授权**：${approvalAuthorizationLabel(review.userAuthorization)}`);
+  if (typeof review.rationale === "string" && review.rationale.trim()) {
+    detailParts.push(`**审核依据**：${redactBrand(sanitizeAgentMarkdown(review.rationale)).trim()}`);
+  }
+  const detail = detailParts.join("\n\n");
+  return {
+    kind: "approval",
+    label: approvalProgressLabel(reviewStatus),
+    detail,
+    reviewId,
+    reviewStatus,
+    riskLevel: typeof review.riskLevel === "string" ? review.riskLevel : undefined,
+    userAuthorization: typeof review.userAuthorization === "string" ? review.userAuthorization : undefined,
+    steps: [{ id: `approval:${reviewId}`, title: `请求审核：${actionLabel}`, detail }],
+  };
+}
+
+function summarizeUnhandledApprovalRequest(method: string, id: RpcId, params: JsonObject): unknown | null {
+  const approvalMethods = [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "execCommandApproval",
+    "applyPatchApproval",
+  ];
+  if (!approvalMethods.includes(method)) return null;
+  const action = fallbackApprovalAction(method, params);
+  const detail = `**审核对象**：${action.detail}\n\n**审核结果**：未进入自动审核，已拒绝\n\n**原因**：${APPROVAL_REJECTION}`;
+  return {
+    kind: "approval",
+    label: "请求未进入自动审核，已拒绝",
+    detail,
+    reviewId: `fallback:${String(id)}`,
+    reviewStatus: "denied",
+    steps: [{ id: `approval:fallback:${String(id)}`, title: `请求审核：${action.label}`, detail }],
+  };
+}
+
+function fallbackApprovalAction(method: string, params: JsonObject): { label: string; detail: string } {
+  if (method === "item/commandExecution/requestApproval") {
+    const command = typeof params.command === "string" ? params.command : "未提供命令内容";
+    return { label: "执行命令", detail: redactBrand(command) };
+  }
+  if (method === "execCommandApproval") {
+    const command = Array.isArray(params.command) ? params.command.map(String).join(" ") : "未提供命令内容";
+    return { label: "执行命令", detail: redactBrand(command) };
+  }
+  if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
+    const root = typeof params.grantRoot === "string" ? params.grantRoot : "工作区外文件写入";
+    return { label: "修改文件", detail: redactBrand(root) };
+  }
+  const reason = typeof params.reason === "string" ? params.reason : "请求额外权限";
+  return { label: "扩展权限", detail: redactBrand(reason) };
+}
+
+function approvalActionLabel(action: JsonObject): string {
+  if (action.type === "command" || action.type === "execve") return "执行命令";
+  if (action.type === "applyPatch") return "修改文件";
+  if (action.type === "networkAccess") return "访问网络";
+  if (action.type === "mcpToolCall") return "调用工具";
+  if (action.type === "requestPermissions") return "扩展权限";
+  return "敏感操作";
+}
+
+function approvalActionDetail(action: JsonObject): string {
+  if (action.type === "command") return redactBrand(String(action.command ?? "未提供命令内容"));
+  if (action.type === "execve") {
+    const argv = Array.isArray(action.argv) ? action.argv.map(String) : [];
+    return redactBrand([String(action.program ?? ""), ...argv].filter(Boolean).join(" ") || "未提供命令内容");
+  }
+  if (action.type === "applyPatch") {
+    const files = Array.isArray(action.files) ? action.files.map(String).filter(Boolean) : [];
+    return files.length > 0 ? files.map(redactBrand).join("、") : "工作区外文件写入";
+  }
+  if (action.type === "networkAccess") {
+    const protocol = String(action.protocol ?? "network");
+    const host = String(action.host ?? action.target ?? "未知地址");
+    const port = typeof action.port === "number" ? `:${action.port}` : "";
+    return redactBrand(`${protocol}://${host}${port}`);
+  }
+  if (action.type === "mcpToolCall") {
+    return redactBrand(`${String(action.server ?? "工具")}.${String(action.toolName ?? "调用")}`);
+  }
+  if (action.type === "requestPermissions") return redactBrand(String(action.reason ?? "请求额外权限"));
+  return "未提供操作详情";
+}
+
+function approvalProgressLabel(status: string): string {
+  if (status === "inProgress") return "正在自动审核请求";
+  if (status === "approved") return "自动审核已批准请求";
+  if (status === "denied") return "自动审核已拒绝请求";
+  if (status === "timedOut") return "自动审核超时，未执行请求";
+  return "自动审核已中止，未执行请求";
+}
+
+function approvalStatusLabel(status: string): string {
+  if (status === "inProgress") return "审核中";
+  if (status === "approved") return "已批准";
+  if (status === "denied") return "已拒绝";
+  if (status === "timedOut") return "已超时，未执行";
+  return "已中止，未执行";
+}
+
+function approvalRiskLabel(risk: string): string {
+  return ({ low: "低", medium: "中", high: "高", critical: "严重" } as Record<string, string>)[risk] ?? risk;
+}
+
+function approvalAuthorizationLabel(authorization: string): string {
+  return ({ unknown: "未知", low: "低", medium: "中", high: "高" } as Record<string, string>)[authorization] ?? authorization;
+}
+
+function asObject(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
 }
 
 function asStringArray(value: unknown): string[] {
