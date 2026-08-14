@@ -139,6 +139,12 @@ tools like `htmlmounts`). When `setpriv` is unavailable, the service falls back
 to the legacy uid/gid-only spawn and task processes keep an empty supplementary
 group set.
 
+The root web process writes provider configuration into each host user's
+`~/.codex` (`config.toml` and `models_cache.json`) and then hands ownership of
+those files back to the host user. This keeps `config.toml` readable by the
+dropped-privilege Codex CLI and lets the CLI refresh `models_cache.json`;
+never work around access errors by chmodding `~/.codex` to 777.
+
 Security trade-off: this mode runs the web service as root and gives each
 tenant full host access under its own Unix identity. Only add users you trust;
 this is not a boundary for hostile workloads.

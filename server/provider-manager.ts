@@ -235,17 +235,32 @@ function reasoningLevels(model: ProviderModelRow, template: TemplateCatalogEntry
 }
 
 function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEntry | undefined): Record<string, unknown> {
-  const displayName = model.display_name || model.model_id;
+  const displayName = String(model.display_name || model.model_id);
+  const description = String(model.description || `${model.provider_id} 提供的模型`);
   return {
     slug: model.slug,
     display_name: displayName,
-    description: model.description || `${model.provider_id} 提供的模型`,
+    description,
     visibility: "list",
     priority: model.priority,
     input_modalities: parseStringArray(model.input_modalities, ["text", "image"]),
     supported_reasoning_levels: reasoningLevels(model, template),
     ...cloneTemplateFields(template),
   };
+}
+
+/**
+ * Codex's model catalog parser requires every entry to carry these fields.
+ * Fail loudly here instead of writing a cache file the CLI cannot load.
+ */
+function assertCatalogEntries(models: Array<Record<string, unknown>>): void {
+  for (const entry of models) {
+    for (const field of ["slug", "display_name", "description"] as const) {
+      if (typeof entry[field] !== "string" || !entry[field]) {
+        throw new Error(`Generated model catalog entry is missing required field "${field}"`);
+      }
+    }
+  }
 }
 
 /**
@@ -295,7 +310,24 @@ function atomicWrite(file: string, content: string, mode: number): void {
   fs.renameSync(temporary, file);
 }
 
-export function writeProviderConfig(codexHome: string, db: AppDatabase): void {
+/**
+ * In host mode the service runs as root while Codex itself runs as the host
+ * user, so files written into the host user's ~/.codex must be owned by that
+ * user (otherwise the dropped-privilege CLI gets EACCES on config.toml and
+ * cannot refresh models_cache.json).
+ */
+function applyCodexHomeOwnership(files: string[], owner: { uid: number; gid: number } | undefined): void {
+  if (!owner || process.getuid?.() !== 0) return;
+  for (const file of files) {
+    try {
+      fs.chownSync(file, owner.uid, owner.gid);
+    } catch (error) {
+      console.warn(`Failed to set ownership on ${file}:`, error);
+    }
+  }
+}
+
+export function writeProviderConfig(codexHome: string, db: AppDatabase, owner?: { uid: number; gid: number }): void {
   reassignProviderModelSlugs(db);
   const config = readConfigToml(codexHome);
   const rawProviders = config.model_providers;
@@ -304,6 +336,7 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase): void {
     : {};
   for (const provider of db.listProviders()) delete managedProviders[provider.id];
   const enabled = db.listEnabledProviders();
+  const configTomlPath = path.join(codexHome, "config.toml");
   if (providerManaged(db)) {
     const catalogPath = path.join(codexHome, "models_cache.json");
     config.model_catalog_json = catalogPath;
@@ -338,7 +371,7 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase): void {
   } else {
     config.model_providers = managedProviders;
   }
-  atomicWrite(path.join(codexHome, "config.toml"), `${stringifyToml(config)}\n`, 0o600);
+  atomicWrite(configTomlPath, `${stringifyToml(config)}\n`, 0o600);
 
   const templates = readTemplateCatalog(codexHome);
   const models: Array<Record<string, unknown>> = [];
@@ -348,7 +381,10 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase): void {
     const template = templates.find((entry) => entry.slug === model.model_id) ?? templates[0];
     models.push(buildCatalogEntry(model, template));
   }
-  atomicWrite(path.join(codexHome, "models_cache.json"), `${JSON.stringify({ models }, null, 2)}\n`, 0o644);
+  assertCatalogEntries(models);
+  const catalogPath = path.join(codexHome, "models_cache.json");
+  atomicWrite(catalogPath, `${JSON.stringify({ models }, null, 2)}\n`, 0o644);
+  applyCodexHomeOwnership([configTomlPath, catalogPath], owner);
 }
 
 export function importProvidersFromConfig(codexHome: string, db: AppDatabase): ProviderPublic[] {
@@ -424,10 +460,10 @@ export function importCatalogModels(providerId: string, codexHome: string, db: A
   return listProviderModelsPublic(db, providerId);
 }
 
-export function ensureProviderConfig(config: AppConfig, codexHome: string, db: AppDatabase): void {
+export function ensureProviderConfig(config: AppConfig, codexHome: string, db: AppDatabase, owner?: { uid: number; gid: number }): void {
   if (!providerManaged(db)) return;
   try {
-    writeProviderConfig(codexHome, db);
+    writeProviderConfig(codexHome, db, owner);
   } catch (error) {
     // Configuration generation must never prevent the service from starting;
     // the management API surfaces the failure on the next write.
