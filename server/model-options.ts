@@ -185,3 +185,15 @@ export function repairAgentSelection(options: AgentOptions, rawModel: unknown, r
   if (model.provider) selection.provider = model.provider;
   return selection;
 }
+
+export function resolveAgentExecutionSelection(options: AgentOptions, selection: AgentSelection): AgentSelection {
+  const model = options.models.find((candidate) => candidate.id === selection.model);
+  if (!model) throw new Error("所选模型当前不可用，请刷新页面后重试。");
+  if (model.provider && selection.provider !== model.provider) {
+    throw new Error("所选模型与源不匹配，请刷新页面后重试。");
+  }
+  return {
+    ...selection,
+    model: model.upstreamModel || model.id,
+  };
+}

@@ -64,14 +64,41 @@ function parsePasswdLine(line: string, expectedUsername: string): SystemUser | u
 
 /**
  * A tenant is usable when its real ~/.codex has config.toml plus either a
- * credential file or an inline bearer token. Anything else means the web UI
- * should show the "not configured" hint instead of running failed tasks.
+ * credential file or an inline bearer token. When an owner is supplied, the
+ * check also models the permissions of the UID that will run Codex; a root
+ * process must not report a root-only config as usable by that tenant.
  */
-export function isCodexConfigured(codexHome: string | undefined | null): boolean {
+function readableByOwner(file: string, owner: { uid: number; gid: number } | undefined): boolean {
+  try {
+    const stat = fs.statSync(file);
+    if (!owner) {
+      fs.accessSync(file, fs.constants.R_OK);
+      return true;
+    }
+    const parent = fs.statSync(path.dirname(file));
+    const mode = stat.mode & 0o777;
+    const parentMode = parent.mode & 0o777;
+    const readable = stat.uid === owner.uid
+      ? (mode & 0o400) !== 0
+      : stat.gid === owner.gid
+        ? (mode & 0o040) !== 0
+        : (mode & 0o004) !== 0;
+    const traversable = parent.uid === owner.uid
+      ? (parentMode & 0o100) !== 0
+      : parent.gid === owner.gid
+        ? (parentMode & 0o010) !== 0
+        : (parentMode & 0o001) !== 0;
+    return readable && traversable;
+  } catch {
+    return false;
+  }
+}
+
+export function isCodexConfigured(codexHome: string | undefined | null, owner?: { uid: number; gid: number }): boolean {
   if (!codexHome) return false;
   const configToml = path.join(codexHome, "config.toml");
-  if (!fs.existsSync(configToml)) return false;
-  if (["auth.json", "rightcode_auth.json"].some((name) => fs.existsSync(path.join(codexHome, name)))) return true;
+  if (!readableByOwner(configToml, owner)) return false;
+  if (["auth.json", "rightcode_auth.json"].some((name) => readableByOwner(path.join(codexHome, name), owner))) return true;
   try {
     return /experimental_bearer_token\s*=/.test(fs.readFileSync(configToml, "utf8"));
   } catch {

@@ -140,10 +140,11 @@ to the legacy uid/gid-only spawn and task processes keep an empty supplementary
 group set.
 
 The root web process writes provider configuration into each host user's
-`~/.codex` (`config.toml` and `models_cache.json`) and then hands ownership of
-those files back to the host user. This keeps `config.toml` readable by the
-dropped-privilege Codex CLI and lets the CLI refresh `models_cache.json`;
-never work around access errors by chmodding `~/.codex` to 777.
+`~/.codex` (`config.toml` and `models_cache.json`) and then repairs the home
+directory and hands ownership of those files back to the host user. The
+directory is kept at 0700, `config.toml` at 0600, and `models_cache.json` at
+0644. This keeps the dropped-privilege Codex CLI readable and lets it refresh
+the catalog; never work around access errors by chmodding `~/.codex` to 777.
 
 Security trade-off: this mode runs the web service as root and gives each
 tenant full host access under its own Unix identity. Only add users you trust;

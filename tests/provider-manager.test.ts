@@ -6,7 +6,7 @@ import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { AppDatabase } from "../server/db.js";
 import type { AppConfig } from "../server/config.js";
-import { loadAgentOptions } from "../server/model-options.js";
+import { loadAgentOptions, resolveAgentExecutionSelection, resolveAgentSelection } from "../server/model-options.js";
 import {
   assertOfficialOAuthLimit,
   importCatalogModels,
@@ -49,7 +49,7 @@ function sampleCatalog(codexHome: string): void {
         description: "Fast agent",
         visibility: "list",
         input_modalities: ["text"],
-        supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+        supported_reasoning_levels: [{ effort: "low", description: "Template low" }, { effort: "high" }],
         priority: 1,
         context_window: 1000,
       },
@@ -93,6 +93,14 @@ test("colliding model ids get unique source-prefixed catalog slugs", () => {
   reassignProviderModelSlugs(db);
   const slugs = db.listProviderModels().map((model) => model.slug).sort();
   assert.deepEqual(slugs, ["gpt-5.6-sol", "proxy-gpt-5.6-sol"]);
+  const options = loadAgentOptions({} as AppConfig, "", db);
+  const persistedSelection = resolveAgentSelection(options, "proxy-gpt-5.6-sol", "high", "proxy");
+  assert.deepEqual(persistedSelection, { model: "proxy-gpt-5.6-sol", reasoningEffort: "high", provider: "proxy" });
+  assert.deepEqual(resolveAgentExecutionSelection(options, persistedSelection), {
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
+    provider: "proxy",
+  });
   db.close();
 });
 
@@ -120,6 +128,7 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
   assert.equal(config.model_providers.deepseek.name, "DeepSeek");
   assert.equal(config.model_providers.deepseek.base_url, "https://api.deepseek.com/");
   assert.equal(config.model_providers.deepseek.experimental_bearer_token, "sk-test");
+  assert.equal(config.model_providers.deepseek.models_file, "models.json");
   assert.equal(config.model_providers.deepseek.request_max_retries, 10);
   assert.ok(config.model_providers.legacy, "unmanaged provider section must stay");
   assert.equal(config.model_catalog_json, path.join(codexHome, "models_cache.json"));
@@ -131,7 +140,10 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
   assert.equal(typeof catalog.models[0].description, "string");
   assert.ok(catalog.models[0].description);
   assert.equal(catalog.models[0].visibility, "list");
-  assert.deepEqual(catalog.models[0].supported_reasoning_levels, [{ effort: "low" }, { effort: "high" }]);
+  assert.deepEqual(catalog.models[0].supported_reasoning_levels, [
+    { effort: "low", description: "Template low" },
+    { effort: "high", description: "Deeper reasoning for complex tasks" },
+  ]);
   assert.equal(catalog.models[0].context_window, 1000, "template fields are cloned");
   db.close();
 });
@@ -161,6 +173,8 @@ test("aggregated catalog carries Codex-required fields even when templates omit 
     assert.equal(typeof catalog.models[0][field], "string", `${field} must be a string`);
     assert.ok(catalog.models[0][field], `${field} must not be empty`);
   }
+  const reasoningLevels = catalog.models[0].supported_reasoning_levels as Array<Record<string, unknown>>;
+  assert.deepEqual(reasoningLevels, [{ effort: "high", description: "Deeper reasoning for complex tasks" }]);
   db.close();
 });
 

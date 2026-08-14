@@ -20,6 +20,19 @@ test("isCodexConfigured requires config.toml plus credentials", (context) => {
   assert.equal(isCodexConfigured(root), true);
 });
 
+test("isCodexConfigured rejects files unreadable by the tenant identity", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-mode-permissions-test-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  fs.writeFileSync(path.join(root, "config.toml"), "model = \"gpt-5.6-sol\"\n");
+  fs.writeFileSync(path.join(root, "auth.json"), "{}");
+  const owner = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
+  assert.equal(isCodexConfigured(root, owner), true);
+  fs.chmodSync(path.join(root, "config.toml"), 0o600);
+  fs.chmodSync(path.join(root, "auth.json"), 0o600);
+  assert.equal(isCodexConfigured(root, { uid: owner.uid + 1, gid: owner.gid + 1 }), false);
+});
+
 test("isCodexConfigured accepts inline bearer tokens from config.toml", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-mode-token-test-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
