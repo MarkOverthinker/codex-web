@@ -67,6 +67,19 @@ test("login form leaves the username empty for each user to enter", () => {
   assert.match(appSource, /用户名<input autoComplete="username" autoFocus/);
 });
 
+test("account settings expose username and password changes with password confirmation", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  assert.match(apiSource, /updateAccount: \(payload: \{ currentPassword: string; newUsername\?: string; newPassword\?: string \}\)/);
+  assert.match(appSource, /账户与密码/);
+  assert.match(appSource, /登录用户名/);
+  assert.match(appSource, /autoComplete="current-password"/);
+  assert.match(appSource, /autoComplete="new-password"/);
+  assert.match(appSource, /两次输入的新密码不一致/);
+  assert.match(appSource, /新密码至少需要 12 个字符/);
+  assert.match(appSource, /宿主模式下用户名由系统账户决定/);
+});
+
 test("frontend installs an error boundary and client error reporting", () => {
   const mainSource = fs.readFileSync(path.join(process.cwd(), "src", "main.tsx"), "utf8");
   const boundarySource = fs.readFileSync(path.join(process.cwd(), "src", "error-boundary.tsx"), "utf8");
@@ -143,6 +156,126 @@ test("client error endpoint records authenticated reports and rejects anonymous 
     .send({ message: "x".repeat(5000) })
     .expect(200);
   assert.deepEqual(oversized.body, { ok: true });
+});
+
+test("users can change their username and password through the account API", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-account-change-test-"));
+  const initialPassword = "Account-Initial-2026!";
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync(initialPassword, 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: initialPassword }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  assert.equal(login.body.canChangeUsername, true);
+
+  const updated = await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", csrf)
+    .send({ currentPassword: initialPassword, newUsername: "renamed-owner", newPassword: "Account-Renamed-2026!" })
+    .expect(200);
+  assert.equal(updated.body.username, "renamed-owner");
+  assert.equal(updated.body.displayName, "Owner");
+  assert.equal(updated.body.canChangeUsername, true);
+  assert.equal(instance.db.getUserByUsername("renamed-owner")?.username, "renamed-owner");
+
+  await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Account-Renamed-2026!" }).expect(401);
+  const relogin = await agent.post("/codex-web/api/auth/login").send({ username: "renamed-owner", password: "Account-Renamed-2026!" }).expect(200);
+  assert.equal(relogin.body.username, "renamed-owner");
+});
+
+test("account API rejects wrong current password, duplicates, invalid names, and short passwords", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-account-guard-test-"));
+  const ownerPassword = "Account-Guard-2026!";
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync(ownerPassword, 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const now = new Date().toISOString();
+  instance.db.createUser({
+    id: crypto.randomUUID(), username: "member", display_name: "Member",
+    password_hash: bcrypt.hashSync("Member-Guard-2026!", 8), role: "member", status: "active",
+    created_at: now, updated_at: now,
+  });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: ownerPassword }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", csrf).send({ currentPassword: "wrong-password", newUsername: "renamed" }).expect(403);
+  await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", csrf).send({ currentPassword: ownerPassword, newUsername: "MEMBER" }).expect(400);
+  await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", csrf).send({ currentPassword: ownerPassword, newUsername: "1invalid" }).expect(400);
+  await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", csrf).send({ currentPassword: ownerPassword, newPassword: "short" }).expect(400);
+  await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", csrf).send({ currentPassword: ownerPassword, newUsername: "owner" }).expect(400);
+});
+
+test("password change keeps the current session and revokes other sessions", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-account-session-test-"));
+  const password = "Session-Rotate-2026!";
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync(password, 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const first = request.agent(instance.app);
+  const second = request.agent(instance.app);
+  const firstLogin = await first.post("/codex-web/api/auth/login").send({ username: "owner", password }).expect(200);
+  await second.post("/codex-web/api/auth/login").send({ username: "owner", password }).expect(200);
+  await second.get("/codex-web/api/conversations").expect(200);
+
+  await first.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", firstLogin.body.csrfToken as string)
+    .send({ currentPassword: password, newPassword: "Session-Rotated-2026!" })
+    .expect(200);
+  await second.get("/codex-web/api/conversations").expect(401);
+  await first.get("/codex-web/api/conversations").expect(200);
+});
+
+test("host mode forbids web username changes but still allows password changes", async (context) => {
+  const username = process.env.USER || process.env.LOGNAME || "root";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-account-host-mode-test-"));
+  const password = "Host-Password-2026!";
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    hostMode: true, username, passwordHash: bcrypt.hashSync(password, 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username, password }).expect(200);
+  assert.equal(login.body.canChangeUsername, false);
+
+  const blocked = await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", login.body.csrfToken as string)
+    .send({ currentPassword: password, newUsername: "another-user" })
+    .expect(400);
+  assert.match(blocked.body.error, /宿主模式/);
+
+  const changed = await agent.put("/codex-web/api/auth/account")
+    .set("X-CSRF-Token", login.body.csrfToken as string)
+    .send({ currentPassword: password, newPassword: "Host-Renamed-2026!" })
+    .expect(200);
+  assert.equal(changed.body.username, username);
+});
+
+test("owner username survives app restarts instead of being reset by the env seed", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-account-persist-test-"));
+  const seed = { username: "owner", passwordHash: bcrypt.hashSync("Seed-Persist-2026!", 8), displayName: "Owner" };
+  const first = new AppDatabase(path.join(root, "data"), seed, false);
+  first.setUserUsername(LEGACY_USER_ID, "renamed-owner");
+  first.close();
+  const reopened = new AppDatabase(path.join(root, "data"), seed, false);
+  context.after(() => { reopened.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  assert.equal(reopened.getUser(LEGACY_USER_ID)?.username, "renamed-owner");
 });
 
 test("composer replaces stop with send as soon as there is sendable input", () => {
