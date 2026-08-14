@@ -18,6 +18,7 @@ export type TenantWorkerRunRequest = {
   imagePaths: string[];
   outputSchema?: Record<string, unknown>;
   selection: AgentSelection;
+  modelProvider?: string | null;
   networkAccessEnabled: boolean;
   webSearchMode: "cached" | "live";
   codexWindowsSandbox: "elevated" | "unelevated";

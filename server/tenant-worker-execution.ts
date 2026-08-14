@@ -38,6 +38,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     outputSchema: request.outputSchema,
     model: request.selection.model,
     reasoningEffort: request.selection.reasoningEffort,
+    modelProvider: request.modelProvider,
     library: request.library,
     shellEnvironment: buildShellEnvironment(pythonRuntime, request.runtimeRoot, hostMode ? request.home : undefined),
     networkAccessEnabled: request.networkAccessEnabled,
@@ -80,6 +81,9 @@ export function validateTenantWorkerRequest(request: TenantWorkerRunRequest, exp
     throw new Error("Invalid worker identifiers");
   }
   if (!isOptionalAgentCapabilities(request.optionalCapabilities)) throw new Error("Invalid optional capabilities");
+  if (request.modelProvider !== undefined && request.modelProvider !== null && !/^[a-z0-9][a-z0-9._-]{1,80}$/i.test(request.modelProvider)) {
+    throw new Error("Invalid worker model provider");
+  }
   const tenantRoot = path.resolve(expectedTenantRoot);
   const expectedWorkspace = path.join(tenantRoot, "conversations", request.conversationId);
   const expectedRuntime = path.join(expectedWorkspace, ".runtime", "jobs", request.jobId);

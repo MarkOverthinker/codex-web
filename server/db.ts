@@ -30,6 +30,7 @@ export type ConversationRow = {
   working_dir: string | null;
   agent_model: string | null;
   reasoning_effort: string | null;
+  agent_provider: string | null;
   status: "idle" | "running";
   has_unread_result: number;
   has_pending_work: number;
@@ -79,6 +80,7 @@ export type PendingPromptRow = {
   quote_excerpt: string | null;
   agent_model: string;
   reasoning_effort: string;
+  agent_provider: string | null;
   position: number;
   status: "queued" | "editing";
   created_at: string;
@@ -106,6 +108,7 @@ export type JobRow = {
   message_id: string | null;
   agent_model: string | null;
   reasoning_effort: string | null;
+  agent_provider: string | null;
   queue_seq: number;
   status: JobStatus;
   error: string | null;
@@ -133,6 +136,36 @@ export type JobEventRow = {
 export type StoredAgentSelection = {
   model: string;
   reasoningEffort: string;
+  provider?: string | null;
+};
+
+export type ProviderRow = {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key: string | null;
+  models_file: string | null;
+  extra_config: string | null;
+  wire_api: "responses" | "chat" | "anthropic";
+  requires_openai_auth: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProviderModelRow = {
+  id: string;
+  provider_id: string;
+  model_id: string;
+  slug: string;
+  display_name: string;
+  description: string;
+  reasoning_efforts: string;
+  input_modalities: string;
+  priority: number;
+  visible: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type WorkingDirectoryFavorite = {
@@ -300,6 +333,34 @@ export class AppDatabase {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(user_id, key)
       );
+      CREATE TABLE IF NOT EXISTS providers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        api_key TEXT,
+        models_file TEXT,
+        extra_config TEXT,
+        wire_api TEXT NOT NULL DEFAULT 'responses',
+        requires_openai_auth INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS provider_models (
+        id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        model_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        reasoning_efforts TEXT NOT NULL DEFAULT '[]',
+        input_modalities TEXT NOT NULL DEFAULT '["text","image"]',
+        priority INTEGER NOT NULL DEFAULT 0,
+        visible INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(provider_id, model_id)
+      );
     `);
 
     const conversationColumns = this.columnNames("conversations");
@@ -326,6 +387,15 @@ export class AppDatabase {
     if (!jobColumns.has("agent_model")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN agent_model TEXT");
     if (!jobColumns.has("reasoning_effort")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN reasoning_effort TEXT");
     if (!jobColumns.has("queue_seq")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN queue_seq INTEGER");
+    const conversationColumnsAfter = this.columnNames("conversations");
+    if (!conversationColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN agent_provider TEXT");
+    const pendingPromptColumnsAfter = this.columnNames("pending_prompts");
+    if (!pendingPromptColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN agent_provider TEXT");
+    const jobColumnsAfter = this.columnNames("jobs");
+    if (!jobColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN agent_provider TEXT");
+    const providerColumns = this.columnNames("providers");
+    if (!providerColumns.has("models_file")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN models_file TEXT");
+    if (!providerColumns.has("extra_config")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN extra_config TEXT");
     const fileColumns = this.columnNames("files");
     if (!fileColumns.has("pending_prompt_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN pending_prompt_id TEXT REFERENCES pending_prompts(id) ON DELETE CASCADE");
     if (!fileColumns.has("composer_draft_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN composer_draft_id TEXT REFERENCES composer_drafts(conversation_id) ON DELETE CASCADE");
@@ -368,6 +438,8 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS jobs_conversation_idx ON jobs(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, queue_seq);
       CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+      CREATE INDEX IF NOT EXISTS providers_enabled_idx ON providers(enabled, created_at);
+      CREATE INDEX IF NOT EXISTS provider_models_provider_idx ON provider_models(provider_id, priority, created_at);
     `);
 
     const uploadedFiles = this.sqlite.prepare("SELECT id,original_name FROM files WHERE kind='upload'").all() as Array<{ id: string; original_name: string }>;
@@ -437,10 +509,11 @@ export class AppDatabase {
   createConversation(id: string, title: string, selection?: StoredAgentSelection, userId = LEGACY_USER_ID, workingDir?: string | null): ConversationRow {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO conversations(id,user_id,title,title_source,working_dir,agent_model,reasoning_effort,status,created_at,updated_at)
-      VALUES(?,?,?,'default',?,?,?,'idle',?,?)
+      INSERT INTO conversations(id,user_id,title,title_source,working_dir,agent_model,reasoning_effort,agent_provider,status,created_at,updated_at)
+      VALUES(?,?,?,'default',?,?,?,?,'idle',?,?)
     `).run(
-      id, userId, title, workingDir ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null, now, now,
+      id, userId, title, workingDir ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null,
+      selection?.provider ?? null, now, now,
     );
     return this.getConversation(id)!;
   }
@@ -465,8 +538,8 @@ export class AppDatabase {
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
       this.sqlite.prepare(`
-        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,working_dir,agent_model,reasoning_effort,status,created_at,updated_at)
-        VALUES(?,?,?,'legacy',?,?,?,?,'idle',?,?)
+        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,working_dir,agent_model,reasoning_effort,agent_provider,status,created_at,updated_at)
+        VALUES(?,?,?,'legacy',?,?,?,?,NULL,'idle',?,?)
       `).run(input.id, input.userId, input.title, input.threadId, input.workingDir, input.agentModel, input.reasoningEffort, input.createdAt, input.updatedAt);
       const insertMessage = this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,?,?,NULL,?)");
       for (const message of input.messages) {
@@ -485,8 +558,8 @@ export class AppDatabase {
       .run(fields.title, fields.titleSource ?? null, new Date().toISOString(), id);
     if (fields.codexThreadId !== undefined) this.sqlite.prepare("UPDATE conversations SET codex_thread_id=?, updated_at=? WHERE id=?").run(fields.codexThreadId, new Date().toISOString(), id);
     if (fields.workingDir !== undefined) this.sqlite.prepare("UPDATE conversations SET working_dir=?, updated_at=? WHERE id=?").run(fields.workingDir, new Date().toISOString(), id);
-    if (fields.agentSelection !== undefined) this.sqlite.prepare("UPDATE conversations SET agent_model=?, reasoning_effort=?, updated_at=? WHERE id=?").run(
-      fields.agentSelection.model, fields.agentSelection.reasoningEffort, new Date().toISOString(), id,
+    if (fields.agentSelection !== undefined) this.sqlite.prepare("UPDATE conversations SET agent_model=?, reasoning_effort=?, agent_provider=?, updated_at=? WHERE id=?").run(
+      fields.agentSelection.model, fields.agentSelection.reasoningEffort, fields.agentSelection.provider ?? null, new Date().toISOString(), id,
     );
     if (fields.status !== undefined) this.sqlite.prepare("UPDATE conversations SET status=?, updated_at=? WHERE id=?").run(fields.status, new Date().toISOString(), id);
   }
@@ -686,9 +759,9 @@ export class AppDatabase {
     try {
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),0)+1 AS value FROM pending_prompts WHERE conversation_id=? AND status='queued'").get(conversationId) as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,position,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)
-      `).run(pendingId, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, next.value, status, now, now);
+        INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,position,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      `).run(pendingId, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, next.value, status, now, now);
       this.sqlite.prepare("UPDATE files SET pending_prompt_id=?,composer_draft_id=NULL WHERE conversation_id=? AND composer_draft_id=?")
         .run(pendingId, conversationId, conversationId);
       this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);
@@ -719,9 +792,9 @@ export class AppDatabase {
       this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,queue_seq,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,'queued',?,?)
-      `).run(jobId, conversationId, messageId, selection.model, selection.reasoningEffort, next.value, now, now);
+        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,queue_seq,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,'queued',?,?)
+      `).run(jobId, conversationId, messageId, selection.model, selection.reasoningEffort, selection.provider ?? null, next.value, now, now);
       this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, conversationId);
       this.sqlite.exec("COMMIT");
     } catch (error) {
@@ -735,9 +808,9 @@ export class AppDatabase {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),0)+1 AS value FROM pending_prompts WHERE conversation_id=? AND status='queued'").get(conversationId) as { value: number };
     this.sqlite.prepare(`
-      INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,position,status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,'queued',?,?)
-    `).run(id, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, next.value, now, now);
+      INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,position,status,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,'queued',?,?)
+    `).run(id, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, next.value, now, now);
     return this.getPendingPrompt(id)!;
   }
 
@@ -779,15 +852,15 @@ export class AppDatabase {
 
   updatePendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles | undefined {
     const result = this.sqlite.prepare(`
-      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,status='queued',updated_at=? WHERE id=?
-    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, new Date().toISOString(), id);
+      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,status='queued',updated_at=? WHERE id=?
+    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, new Date().toISOString(), id);
     return result.changes ? this.getPendingPrompt(id) : undefined;
   }
 
   updateEditingPendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles | undefined {
     const result = this.sqlite.prepare(`
-      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,updated_at=? WHERE id=? AND status='editing'
-    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, new Date().toISOString(), id);
+      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,updated_at=? WHERE id=? AND status='editing'
+    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, new Date().toISOString(), id);
     return result.changes ? this.getPendingPrompt(id) : undefined;
   }
 
@@ -887,7 +960,9 @@ export class AppDatabase {
     if (!row) return undefined;
     try {
       const value = JSON.parse(row.value) as Partial<StoredAgentSelection>;
-      if (typeof value.model === "string" && typeof value.reasoningEffort === "string") return { model: value.model, reasoningEffort: value.reasoningEffort };
+      if (typeof value.model === "string" && typeof value.reasoningEffort === "string") {
+        return { model: value.model, reasoningEffort: value.reasoningEffort, provider: value.provider ?? null };
+      }
     } catch {
       // Invalid or manually edited preference is repaired by the caller.
     }
@@ -927,6 +1002,180 @@ export class AppDatabase {
       ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
     `).run(userId, String(columnWidth), new Date().toISOString());
     return columnWidth;
+  }
+
+  listProviders(): ProviderRow[] {
+    return this.sqlite.prepare("SELECT * FROM providers ORDER BY created_at,id").all() as unknown as ProviderRow[];
+  }
+
+  listEnabledProviders(): ProviderRow[] {
+    return this.sqlite.prepare("SELECT * FROM providers WHERE enabled=1 ORDER BY created_at,id").all() as unknown as ProviderRow[];
+  }
+
+  getProvider(id: string): ProviderRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM providers WHERE id=?").get(id) as ProviderRow | undefined;
+  }
+
+  createProvider(input: {
+    id: string;
+    name: string;
+    baseUrl: string;
+    apiKey?: string | null;
+    modelsFile?: string | null;
+    extraConfig?: Record<string, unknown> | null;
+    wireApi?: ProviderRow["wire_api"];
+    requiresOpenaiAuth?: boolean;
+    enabled?: boolean;
+  }): ProviderRow {
+    const now = new Date().toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO providers(id,name,base_url,api_key,models_file,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      input.id, input.name.trim(), input.baseUrl.trim(), input.apiKey?.trim() || null,
+      input.modelsFile?.trim() || null,
+      input.extraConfig ? JSON.stringify(input.extraConfig) : null,
+      input.wireApi ?? "responses", input.requiresOpenaiAuth ? 1 : 0, input.enabled === false ? 0 : 1, now, now,
+    );
+    return this.getProvider(input.id)!;
+  }
+
+  updateProvider(
+    id: string,
+    fields: {
+      name?: string;
+      baseUrl?: string;
+      apiKey?: string | null;
+      modelsFile?: string | null;
+      extraConfig?: Record<string, unknown> | null;
+      wireApi?: ProviderRow["wire_api"];
+      requiresOpenaiAuth?: boolean;
+      enabled?: boolean;
+    },
+  ): ProviderRow | undefined {
+    const existing = this.getProvider(id);
+    if (!existing) return undefined;
+    const next = {
+      name: fields.name?.trim() || existing.name,
+      baseUrl: fields.baseUrl?.trim() || existing.base_url,
+      apiKey: fields.apiKey === undefined ? existing.api_key : fields.apiKey?.trim() || null,
+      modelsFile: fields.modelsFile === undefined ? existing.models_file : fields.modelsFile?.trim() || null,
+      extraConfig: fields.extraConfig === undefined ? existing.extra_config : fields.extraConfig ? JSON.stringify(fields.extraConfig) : null,
+      wireApi: fields.wireApi ?? existing.wire_api,
+      requiresOpenaiAuth: fields.requiresOpenaiAuth ?? Boolean(existing.requires_openai_auth),
+      enabled: fields.enabled ?? Boolean(existing.enabled),
+    };
+    this.sqlite.prepare(`
+      UPDATE providers SET name=?,base_url=?,api_key=?,models_file=?,extra_config=?,wire_api=?,requires_openai_auth=?,enabled=?,updated_at=?
+      WHERE id=?
+    `).run(next.name, next.baseUrl, next.apiKey, next.modelsFile, next.extraConfig, next.wireApi, next.requiresOpenaiAuth ? 1 : 0, next.enabled ? 1 : 0, new Date().toISOString(), id);
+    return this.getProvider(id);
+  }
+
+  deleteProvider(id: string): boolean {
+    return this.sqlite.prepare("DELETE FROM providers WHERE id=?").run(id).changes > 0;
+  }
+
+  isProviderReferenced(id: string): boolean {
+    const conversation = this.sqlite.prepare(
+      "SELECT 1 AS found FROM conversations WHERE agent_provider=? AND deleted_at IS NULL LIMIT 1",
+    ).get(id) as { found: number } | undefined;
+    if (conversation) return true;
+    const pending = this.sqlite.prepare(`
+      SELECT 1 AS found FROM pending_prompts prompt
+      JOIN conversations conversation ON conversation.id=prompt.conversation_id
+      WHERE prompt.agent_provider=? AND conversation.deleted_at IS NULL LIMIT 1
+    `).get(id) as { found: number } | undefined;
+    if (pending) return true;
+    const activeJob = this.sqlite.prepare(
+      "SELECT 1 AS found FROM jobs WHERE agent_provider=? AND status IN ('queued','running') LIMIT 1",
+    ).get(id) as { found: number } | undefined;
+    return Boolean(activeJob);
+  }
+
+  listProviderModels(providerId?: string): ProviderModelRow[] {
+    if (providerId) {
+      return this.sqlite.prepare("SELECT * FROM provider_models WHERE provider_id=? ORDER BY priority,created_at,id").all(providerId) as unknown as ProviderModelRow[];
+    }
+    return this.sqlite.prepare("SELECT * FROM provider_models ORDER BY provider_id,priority,created_at,id").all() as unknown as ProviderModelRow[];
+  }
+
+  getProviderModel(id: string): ProviderModelRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM provider_models WHERE id=?").get(id) as ProviderModelRow | undefined;
+  }
+
+  createProviderModel(input: {
+    id: string;
+    providerId: string;
+    modelId: string;
+    slug: string;
+    displayName: string;
+    description?: string;
+    reasoningEfforts?: string[];
+    inputModalities?: string[];
+    priority?: number;
+    visible?: boolean;
+  }): ProviderModelRow {
+    const now = new Date().toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO provider_models(id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      input.id, input.providerId, input.modelId.trim(), input.slug,
+      input.displayName.trim() || input.modelId.trim(),
+      input.description?.trim() ?? "",
+      JSON.stringify(input.reasoningEfforts ?? ["low", "medium", "high", "xhigh"]),
+      JSON.stringify(input.inputModalities ?? ["text", "image"]),
+      Number.isFinite(input.priority) ? Math.max(0, Math.trunc(input.priority ?? 0)) : 0,
+      input.visible === false ? 0 : 1,
+      now, now,
+    );
+    return this.getProviderModel(input.id)!;
+  }
+
+  updateProviderModel(
+    id: string,
+    fields: {
+      modelId?: string;
+      slug?: string;
+      displayName?: string;
+      description?: string;
+      reasoningEfforts?: string[];
+      inputModalities?: string[];
+      priority?: number;
+      visible?: boolean;
+    },
+  ): ProviderModelRow | undefined {
+    const existing = this.getProviderModel(id);
+    if (!existing) return undefined;
+    const next = {
+      modelId: fields.modelId?.trim() || existing.model_id,
+      slug: fields.slug?.trim() || existing.slug,
+      displayName: fields.displayName?.trim() || existing.display_name,
+      description: fields.description?.trim() ?? existing.description,
+      reasoningEfforts: fields.reasoningEfforts ? JSON.stringify(fields.reasoningEfforts) : existing.reasoning_efforts,
+      inputModalities: fields.inputModalities ? JSON.stringify(fields.inputModalities) : existing.input_modalities,
+      priority: Number.isFinite(fields.priority) ? Math.max(0, Math.trunc(fields.priority ?? 0)) : existing.priority,
+      visible: fields.visible ?? Boolean(existing.visible),
+    };
+    this.sqlite.prepare(`
+      UPDATE provider_models SET model_id=?,slug=?,display_name=?,description=?,reasoning_efforts=?,input_modalities=?,priority=?,visible=?,updated_at=?
+      WHERE id=?
+    `).run(
+      next.modelId, next.slug, next.displayName, next.description, next.reasoningEfforts, next.inputModalities,
+      next.priority, next.visible ? 1 : 0, new Date().toISOString(), id,
+    );
+    return this.getProviderModel(id);
+  }
+
+  updateProviderModelSlugs(entries: Array<{ id: string; slug: string }>): void {
+    const update = this.sqlite.prepare("UPDATE provider_models SET slug=?,updated_at=? WHERE id=?");
+    const now = new Date().toISOString();
+    for (const entry of entries) update.run(entry.slug, now, entry.id);
+  }
+
+  deleteProviderModel(id: string): boolean {
+    return this.sqlite.prepare("DELETE FROM provider_models WHERE id=?").run(id).changes > 0;
   }
 
   getFavoriteWorkingDirectories(userId = LEGACY_USER_ID): WorkingDirectoryFavorite[] {
@@ -1029,8 +1278,9 @@ export class AppDatabase {
   createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection): JobRow {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
-    this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?)").run(
-      id, conversationId, messageId ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null, next.value, now, now,
+    this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,?)").run(
+      id, conversationId, messageId ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null,
+      selection?.provider ?? null, next.value, now, now,
     );
     return this.getJob(id)!;
   }

@@ -17,6 +17,16 @@ import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat
 import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt } from "../src/message-source.js";
 import { AppDatabase, type ComposerDraftWithFiles, type ConversationRow, type FileRow, type JobRow, type MessageRow, type PendingPromptWithFiles, type SessionRow, type WorkingDirectoryFavorite } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
+import {
+  assertOfficialOAuthLimit,
+  ensureProviderConfig,
+  importCatalogModels,
+  importProvidersFromConfig,
+  listProviderModelsPublic,
+  listProvidersPublic,
+  nextProviderId,
+  writeProviderConfig,
+} from "./provider-manager.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
 import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
@@ -43,12 +53,15 @@ export function createApp(overrides: AppOverrides = {}) {
   fs.mkdirSync(config.dataRoot, { recursive: true });
   fs.mkdirSync(config.tenantRoot, { recursive: true });
   const db = new AppDatabase(config.dataRoot, { username: config.username, passwordHash: config.passwordHash, displayName: config.displayName });
-  for (const user of db.listUsers()) storageFor(user.id);
+  for (const user of db.listUsers()) {
+    storageFor(user.id);
+    ensureProviderConfig(config, codexHomeFor(user.id), db);
+  }
   migrateExistingOutputFiles(config, db);
   const subscribers = new Map<string, Set<Response>>();
 
   function optionsForUser(userId: string): AgentOptions {
-    return loadAgentOptions(config, codexHomeFor(userId));
+    return loadAgentOptions(config, codexHomeFor(userId), db);
   }
 
   function codexHomeFor(userId: string): string {
@@ -106,7 +119,8 @@ export function createApp(overrides: AppOverrides = {}) {
   function userAgentSelection(userId: string, options: AgentOptions = optionsForUser(userId)): AgentSelection {
     const stored = db.getAgentSelectionPreference(userId);
     const selection = repairAgentSelection(options, stored?.model, stored?.reasoningEffort);
-    if (!stored || stored.model !== selection.model || stored.reasoningEffort !== selection.reasoningEffort) {
+    if (!stored || stored.model !== selection.model || stored.reasoningEffort !== selection.reasoningEffort
+      || (stored.provider ?? null) !== (selection.provider ?? null)) {
       db.setAgentSelectionPreference(selection, userId);
     }
     return selection;
@@ -117,7 +131,7 @@ export function createApp(overrides: AppOverrides = {}) {
       ? { model: conversation.agent_model, reasoningEffort: conversation.reasoning_effort }
       : userAgentSelection(conversation.user_id, options);
     const selection = repairAgentSelection(options, fallback.model, fallback.reasoningEffort);
-    if (conversation.agent_model !== selection.model || conversation.reasoning_effort !== selection.reasoningEffort) {
+    if (conversation.agent_model !== selection.model || conversation.reasoning_effort !== selection.reasoningEffort || conversation.agent_provider !== (selection.provider ?? null)) {
       db.updateConversation(conversation.id, { agentSelection: selection });
     }
     return selection;
@@ -146,8 +160,8 @@ export function createApp(overrides: AppOverrides = {}) {
     return { ...draft, source_reference: parseStoredSourceReference(draft.source_reference) };
   }
 
-  function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow): AgentSelection {
-    const selection = resolveAgentSelection(optionsForUser(userId), rawModel, rawEffort);
+  function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow, rawProvider?: unknown): AgentSelection {
+    const selection = resolveAgentSelection(optionsForUser(userId), rawModel, rawEffort, rawProvider);
     db.setAgentSelectionPreference(selection, userId);
     if (conversation) db.updateConversation(conversation.id, { agentSelection: selection });
     return selection;
@@ -566,8 +580,192 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.put("/agent-selection", (req, res) => {
     const session = res.locals.session as SessionRow;
-    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort) }); }
+    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, undefined, req.body?.provider) }); }
     catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "模型选项无效。" }); }
+  });
+
+  api.get("/providers", (_req, res) => {
+    const session = res.locals.session as SessionRow;
+    return res.json({ providers: listProvidersPublic(db), models: listProviderModelsPublic(db) });
+  });
+
+  api.post("/providers", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const raw = req.body as Record<string, unknown> | undefined;
+    const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 100) : "";
+    const baseUrl = typeof raw?.baseUrl === "string" ? raw.baseUrl.trim().slice(0, 500) : "";
+    if (!name || !baseUrl) return res.status(400).json({ error: "请填写源名称和 Base URL。" });
+    const wireApi = raw?.wireApi === "chat" || raw?.wireApi === "anthropic" ? raw.wireApi : "responses";
+    const requiresOpenaiAuth = raw?.requiresOpenaiAuth === true;
+    const apiKey = typeof raw?.apiKey === "string" && raw.apiKey.trim() ? raw.apiKey.trim() : null;
+    const modelsFile = typeof raw?.modelsFile === "string" && raw.modelsFile.trim() ? raw.modelsFile.trim().replace(/^[./\\]+/, "") : null;
+    try {
+      assertOfficialOAuthLimit(db, { requiresOpenaiAuth, enabled: raw?.enabled !== false });
+      const provider = db.createProvider({
+        id: nextProviderId(db, name),
+        name,
+        baseUrl,
+        apiKey,
+        modelsFile,
+        wireApi,
+        requiresOpenaiAuth,
+        enabled: raw?.enabled !== false,
+      });
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.status(201).json({ provider: listProvidersPublic(db).find((item) => item.id === provider.id) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "添加源失败。" });
+    }
+  });
+
+  api.put("/providers/:id", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const id = String(req.params.id);
+    const provider = db.getProvider(id);
+    if (!provider) return res.status(404).json({ error: "源不存在。" });
+    const raw = req.body as Record<string, unknown> | undefined;
+    const fields: Parameters<typeof db.updateProvider>[1] = {};
+    if (typeof raw?.name === "string") {
+      const name = raw.name.trim().slice(0, 100);
+      if (!name) return res.status(400).json({ error: "源名称不能为空。" });
+      fields.name = name;
+    }
+    if (typeof raw?.baseUrl === "string") {
+      const baseUrl = raw.baseUrl.trim().slice(0, 500);
+      if (!baseUrl) return res.status(400).json({ error: "Base URL 不能为空。" });
+      fields.baseUrl = baseUrl;
+    }
+    if ("apiKey" in (raw ?? {})) {
+      if (raw!.apiKey === null) fields.apiKey = null;
+      else if (typeof raw!.apiKey === "string" && raw!.apiKey.trim()) fields.apiKey = raw!.apiKey.trim();
+    }
+    if ("modelsFile" in (raw ?? {})) {
+      fields.modelsFile = typeof raw!.modelsFile === "string" && raw!.modelsFile.trim()
+        ? raw!.modelsFile.trim().replace(/^[./\\]+/, "")
+        : null;
+    }
+    if (raw?.wireApi === "chat" || raw?.wireApi === "anthropic" || raw?.wireApi === "responses") fields.wireApi = raw.wireApi;
+    if (typeof raw?.requiresOpenaiAuth === "boolean") fields.requiresOpenaiAuth = raw.requiresOpenaiAuth;
+    if (typeof raw?.enabled === "boolean") fields.enabled = raw.enabled;
+    try {
+      assertOfficialOAuthLimit(db, { id, ...fields });
+      const updated = db.updateProvider(id, fields);
+      if (!updated) return res.status(404).json({ error: "源不存在。" });
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.json({ provider: listProvidersPublic(db).find((item) => item.id === id) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "更新源失败。" });
+    }
+  });
+
+  api.delete("/providers/:id", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const id = String(req.params.id);
+    if (!db.getProvider(id)) return res.status(404).json({ error: "源不存在。" });
+    if (db.isProviderReferenced(id)) {
+      return res.status(409).json({ error: "该源仍被会话或任务使用，请先在页面中禁用该源，再删除。", code: "provider-in-use" });
+    }
+    try {
+      db.deleteProvider(id);
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.status(204).end();
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "删除源失败。" });
+    }
+  });
+
+  api.post("/providers/import-config", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    try {
+      const providers = importProvidersFromConfig(codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.json({ providers, models: listProviderModelsPublic(db) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "导入配置失败。" });
+    }
+  });
+
+  api.post("/providers/:id/import-models", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const id = String(req.params.id);
+    if (!db.getProvider(id)) return res.status(404).json({ error: "源不存在。" });
+    try {
+      const models = importCatalogModels(id, codexHomeFor(session.user_id), db);
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.json({ models });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "导入模型失败。" });
+    }
+  });
+
+  api.post("/providers/:id/models", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const providerId = String(req.params.id);
+    if (!db.getProvider(providerId)) return res.status(404).json({ error: "源不存在。" });
+    const raw = req.body as Record<string, unknown> | undefined;
+    const modelId = typeof raw?.modelId === "string" ? raw.modelId.trim().slice(0, 120) : "";
+    if (!modelId) return res.status(400).json({ error: "请填写模型 ID。" });
+    try {
+      db.createProviderModel({
+        id: newId(),
+        providerId,
+        modelId,
+        slug: modelId.toLowerCase().replace(/[^a-z0-9._-]+/g, "-"),
+        displayName: typeof raw?.displayName === "string" ? raw.displayName : modelId,
+        description: typeof raw?.description === "string" ? raw.description : "",
+        reasoningEfforts: Array.isArray(raw?.reasoningEfforts) ? raw.reasoningEfforts.filter((item): item is string => typeof item === "string") : undefined,
+        inputModalities: Array.isArray(raw?.inputModalities) ? raw.inputModalities.filter((item): item is string => typeof item === "string") : undefined,
+        priority: typeof raw?.priority === "number" ? raw.priority : undefined,
+        visible: raw?.visible !== false,
+      });
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.status(201).json({ models: listProviderModelsPublic(db, providerId) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "添加模型失败。" });
+    }
+  });
+
+  api.put("/providers/:id/models/:modelId", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const providerId = String(req.params.id);
+    const id = String(req.params.modelId);
+    const model = db.getProviderModel(id);
+    if (!model || model.provider_id !== providerId) return res.status(404).json({ error: "模型不存在。" });
+    const raw = req.body as Record<string, unknown> | undefined;
+    const fields: Parameters<typeof db.updateProviderModel>[1] = {};
+    if (typeof raw?.modelId === "string" && raw.modelId.trim()) fields.modelId = raw.modelId.trim().slice(0, 120);
+    if (typeof raw?.displayName === "string") fields.displayName = raw.displayName;
+    if (typeof raw?.description === "string") fields.description = raw.description;
+    if (Array.isArray(raw?.reasoningEfforts)) {
+      fields.reasoningEfforts = raw.reasoningEfforts.filter((item): item is string => typeof item === "string");
+    }
+    if (Array.isArray(raw?.inputModalities)) {
+      fields.inputModalities = raw.inputModalities.filter((item): item is string => typeof item === "string");
+    }
+    if (typeof raw?.priority === "number") fields.priority = raw.priority;
+    if (typeof raw?.visible === "boolean") fields.visible = raw.visible;
+    try {
+      db.updateProviderModel(id, fields);
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.json({ models: listProviderModelsPublic(db, providerId) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "更新模型失败。" });
+    }
+  });
+
+  api.delete("/providers/:id/models/:modelId", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const providerId = String(req.params.id);
+    const id = String(req.params.modelId);
+    const model = db.getProviderModel(id);
+    if (!model || model.provider_id !== providerId) return res.status(404).json({ error: "模型不存在。" });
+    try {
+      db.deleteProviderModel(id);
+      writeProviderConfig(codexHomeFor(session.user_id), db);
+      return res.status(204).end();
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "删除模型失败。" });
+    }
   });
 
   api.put("/user-settings/chat-font-size", (req, res) => {
@@ -1015,7 +1213,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
     if (conversation.archived_at) return res.status(409).json({ error: "会话已归档，请恢复后再修改。" });
-    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, conversation) }); }
+    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, conversation, req.body?.provider) }); }
     catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "模型选项无效。" }); }
   });
 

@@ -911,7 +911,7 @@ test("legacy databases gain durable selections and preserve existing titles", (c
   first.close();
 
   reopened = new AppDatabase(root);
-  assert.deepEqual(reopened.getAgentSelectionPreference(), { model: "gpt-5.6-terra", reasoningEffort: "high" });
+  assert.deepEqual(reopened.getAgentSelectionPreference(), { model: "gpt-5.6-terra", reasoningEffort: "high", provider: null });
   assert.equal(reopened.getConversation("legacy")?.agent_model, "gpt-5.6-luna");
   assert.equal(reopened.getConversation("legacy")?.reasoning_effort, "low");
 });
