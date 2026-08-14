@@ -23,6 +23,7 @@ export type AppServerTurnOptions = {
   outputSchema?: Record<string, unknown>;
   model: string;
   reasoningEffort: string;
+  modelProvider?: string | null;
   library: string;
   shellEnvironment: Record<string, string>;
   networkAccessEnabled: boolean;
@@ -166,6 +167,7 @@ class AppServerTurnClient {
       this.notify("initialized");
       const common = {
         model: this.options.model,
+        ...(this.options.modelProvider ? { modelProvider: this.options.modelProvider } : {}),
         cwd: this.options.cwd,
         runtimeWorkspaceRoots: this.options.runtimeWorkspaceRoots ?? [this.options.cwd, this.options.library],
         approvalPolicy: "never",

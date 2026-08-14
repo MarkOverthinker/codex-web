@@ -2,23 +2,32 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import type { AppConfig } from "./config.js";
+import type { AppDatabase } from "./db.js";
+import { listCatalogModelOptions, providerManaged } from "./provider-manager.js";
+
+export type { ModelReasoningEffort } from "@openai/codex-sdk";
 
 export type AgentModelOption = {
   id: string;
   label: string;
   description: string;
   reasoningEfforts: ModelReasoningEffort[];
+  provider?: string;
+  providerName?: string;
+  upstreamModel?: string;
+  displayName?: string;
 };
 
 export type AgentOptions = {
   models: AgentModelOption[];
   reasoningEfforts: Array<{ id: ModelReasoningEffort; label: string }>;
-  defaults: { model: string; reasoningEffort: ModelReasoningEffort };
+  defaults: { model: string; reasoningEffort: ModelReasoningEffort; provider?: string | null };
 };
 
 export type AgentSelection = {
   model: string;
   reasoningEffort: ModelReasoningEffort;
+  provider?: string | null;
 };
 
 type CatalogModel = {
@@ -121,8 +130,10 @@ function strongestModel(models: AgentModelOption[]): string {
   return preferred.find((id) => models.some((model) => model.id === id)) ?? models[0].id;
 }
 
-export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome): AgentOptions {
-  const models = catalogModels(config, codexHome);
+export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome, db?: AppDatabase): AgentOptions {
+  const models = db && providerManaged(db)
+    ? listCatalogModelOptions(db)
+    : catalogModels(config, codexHome);
   const available = models.length > 0 ? models : FALLBACK_MODELS;
   const defaultModel = strongestModel(available);
   const defaultOption = available.find((model) => model.id === defaultModel)!;
@@ -130,14 +141,16 @@ export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome
     ? DEFAULT_REASONING_EFFORT
     : defaultOption.reasoningEfforts.at(-1)!;
   const offeredEfforts = orderedEfforts(available.flatMap((model) => model.reasoningEfforts));
+  const defaults: AgentOptions["defaults"] = { model: defaultModel, reasoningEffort: defaultReasoning };
+  if (defaultOption.provider) defaults.provider = defaultOption.provider;
   return {
     models: available,
     reasoningEfforts: offeredEfforts.map((id) => ({ id, label: EFFORT_LABELS[id] ?? id })),
-    defaults: { model: defaultModel, reasoningEffort: defaultReasoning },
+    defaults,
   };
 }
 
-export function resolveAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown): AgentSelection {
+export function resolveAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown, rawProvider?: unknown): AgentSelection {
   const requestedModel = typeof rawModel === "string" ? rawModel.trim() : "";
   const modelId = requestedModel || options.defaults.model;
   const model = options.models.find((candidate) => candidate.id === modelId);
@@ -148,7 +161,14 @@ export function resolveAgentSelection(options: AgentOptions, rawModel: unknown, 
   if (!model.reasoningEfforts.includes(effort)) {
     throw new Error("所选思考深度不受该模型支持，请重新选择。");
   }
-  return { model: model.id, reasoningEffort: effort };
+  const provider = model.provider ?? null;
+  if (rawProvider !== undefined && rawProvider !== null && rawProvider !== "") {
+    const requestedProvider = String(rawProvider).trim();
+    if (provider && requestedProvider !== provider) {
+      throw new Error("所选模型与源不匹配，请刷新页面后重试。");
+    }
+  }
+  return { model: model.id, reasoningEffort: effort, ...(provider ? { provider } : {}) };
 }
 
 export function repairAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown): AgentSelection {
@@ -156,10 +176,12 @@ export function repairAgentSelection(options: AgentOptions, rawModel: unknown, r
   const model = options.models.find((candidate) => candidate.id === modelId);
   if (!model) return { ...options.defaults };
   const effort = typeof rawEffort === "string" ? rawEffort.trim() as ModelReasoningEffort : undefined;
-  return {
+  const selection: AgentSelection = {
     model: model.id,
     reasoningEffort: effort && model.reasoningEfforts.includes(effort)
       ? effort
       : model.reasoningEfforts.at(-1)!,
   };
+  if (model.provider) selection.provider = model.provider;
+  return selection;
 }

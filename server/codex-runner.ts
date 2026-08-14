@@ -202,6 +202,7 @@ export class CodexRunner {
           .map((file) => resolveInside(workspace, file.relative_path)),
         outputSchema: shouldGenerateTitle ? AUTO_TITLE_OUTPUT_SCHEMA : undefined,
         selection,
+        modelProvider: selection.provider ?? null,
         networkAccessEnabled: taskPolicy.networkAccessEnabled,
         webSearchMode: taskPolicy.isolated ? "cached" : "live",
         codexWindowsSandbox: this.config.codexWindowsSandbox,
