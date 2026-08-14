@@ -15,6 +15,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Server-persistent unsent text, quotes, and attachments, restored across conversations, browsers, and devices
 - Codex thread persistence across browser restarts
 - Import existing local Codex CLI sessions (rollout files in the executor's `sessions/` and `archived_sessions/`) as web conversations, then continue them from the browser
+- Multi-provider management with a "source · model" picker: enable/disable API sources, control per-model visibility, and switch providers per task through the app-server protocol (`modelProvider`) without touching live configuration or isolating session history (see [docs/PROVIDER_MANAGEMENT.md](docs/PROVIDER_MANAGEMENT.md))
 - Soft-deleted conversation audit records while workspace files are removed
 - Archive and restore completed conversations without deleting their history or files
 - Cancellation that retains a concise history of completed work so the next turn can resume from it

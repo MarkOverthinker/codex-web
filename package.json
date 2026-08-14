@@ -10,6 +10,7 @@
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node dist-server/server/index.js",
     "reload": "node scripts/reload-codex-web.mjs",
+    "init-providers": "node scripts/init-provider-sources.mjs",
     "hash-password": "node scripts/hash-password.mjs",
     "test": "npm run build && node --import tsx --test tests/*.test.ts",
     "lint": "tsc --noEmit"
