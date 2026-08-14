@@ -206,7 +206,12 @@ fi
 
 export HOST_MODE=true
 export APP_USERNAME="${APP_USERNAME:-$(id -un)}"
-export CODEX_RUNTIME_PATH="${CODEX_RUNTIME_PATH:-$PACKAGE_ROOT/bin/codex}"
+# dotenv does not override variables already present in the environment, so
+# exporting the bundle default here would silently shadow a CODEX_RUNTIME_PATH
+# the user configured in app/.env. Read .env first and only fall back to the
+# bundled CLI when neither the shell environment nor .env provides a path.
+env_runtime_path="$(sed -n 's/^CODEX_RUNTIME_PATH=//p' "$APP_ROOT/.env" 2>/dev/null | tail -n 1)"
+export CODEX_RUNTIME_PATH="${CODEX_RUNTIME_PATH:-${env_runtime_path:-$PACKAGE_ROOT/bin/codex}}"
 
 echo "Starting codex-web at http://127.0.0.1:${PORT:-37821}${BASE_PATH:-/codex-web}/"
 cd "$APP_ROOT"
