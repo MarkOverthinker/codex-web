@@ -302,6 +302,16 @@ test("mobile Safari keeps the app shell fixed while only inner regions scroll", 
   assert.match(styles, /\.messages \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*-webkit-overflow-scrolling: touch;/);
 });
 
+test("provider management stays vertically scrollable on mobile web", () => {
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  const providerMobileBlock = styles.slice(styles.lastIndexOf("@media (max-width: 720px)"));
+  assert.match(styles, /\.provider-manager-list \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*touch-action: pan-y;[^}]*-webkit-overflow-scrolling: touch;/);
+  assert.match(styles, /\.provider-form-fields \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*touch-action: pan-y;[^}]*-webkit-overflow-scrolling: touch;/);
+  assert.match(providerMobileBlock, /\.provider-manager-backdrop,[\s\S]*?\.provider-form-backdrop \{[^}]*align-items: stretch;[^}]*padding: 0;/);
+  assert.match(providerMobileBlock, /\.provider-manager,[\s\S]*?\.provider-form \{[^}]*height: 100dvh;[^}]*max-height: none;/);
+  assert.match(providerMobileBlock, /\.provider-manager-list,[\s\S]*?\.provider-form-fields \{ overflow-y: scroll; \}/);
+});
+
 test("offscreen message cards stay out of scroll painting", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   assert.match(styles, /\.message \{[^}]*content-visibility: auto;[^}]*contain-intrinsic-size: auto 320px;/);
