@@ -94,7 +94,7 @@ The important boundary is the executor, not the browser account alone. A restric
 
 ### Changing your username and password
 
-Open the account settings at the bottom-left of the sidebar to change your login username and password. Both changes require your current password. New passwords must be at least 12 characters, and changing your password immediately revokes sessions on other devices. In the default container/tenant deployment, usernames can be changed from the UI and persist across restarts instead of being reset by the `.env` seed. In host mode every web username maps to a real system account, so the username cannot be changed from the web; users can still rotate their web login password there, while the system account password is managed with `passwd`.
+Open the account settings at the bottom-left of the sidebar, choose **Account & password** and click **Edit** to open the account dialog. You can change your login username and password there. Both changes require your current password. New passwords must be at least 12 characters, and changing your password immediately revokes sessions on other devices. In the default container/tenant deployment, usernames can be changed from the UI and persist across restarts instead of being reset by the `.env` seed. In host mode every web username maps to a real system account, so the username cannot be changed from the web; users can still rotate their web login password there, while the system account password is managed with `passwd`.
 
 ### Remote computer execution
 

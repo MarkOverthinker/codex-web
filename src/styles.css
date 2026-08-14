@@ -375,27 +375,42 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .account-settings { position: absolute; z-index: 8; inset: auto 0 calc(100% + 9px); max-height: calc(100dvh - 150px); padding: 12px; overflow-y: auto; border: 1px solid rgba(255, 255, 255, .13); border-radius: 13px; color: #f7f7fb; background: #25283d; box-shadow: 0 16px 40px rgba(5, 7, 18, .32); }
 .account-settings-heading { display: flex; align-items: center; gap: 7px; padding: 1px 2px 10px; font-size: 12px; }
 .account-settings-heading svg { color: var(--amber); }
-.account-security-heading { display: flex; align-items: center; gap: 7px; padding: 1px 2px 10px; font-size: 12px; }
-.account-security-heading svg { color: var(--amber); }
-.account-security-form { display: grid; gap: 11px; margin-bottom: 11px; padding: 11px; border-radius: 10px; background: rgba(255, 255, 255, .06); }
-.account-security-field { display: grid; gap: 7px; color: #e2e5ef; font-size: 12px; font-weight: 700; }
+.account-security-trigger { width: 100%; display: flex; align-items: center; gap: 9px; margin-bottom: 11px; padding: 10px; border: 1px solid rgba(255, 255, 255, .11); border-radius: 10px; color: #e2e5ef; background: rgba(255, 255, 255, .055); cursor: pointer; text-align: left; transition: border-color .16s ease, background .16s ease; }
+.account-security-trigger > svg { flex: 0 0 auto; color: var(--amber); }
+.account-security-trigger-copy { min-width: 0; flex: 1 1 auto; display: grid; gap: 3px; }
+.account-security-trigger-copy strong { font-size: 12px; }
+.account-security-trigger-copy small { color: #aeb2c4; font-size: 10px; line-height: 1.4; }
+.account-security-trigger-action { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 5px 9px; border: 1px solid rgba(255, 255, 255, .13); border-radius: 7px; color: #e2e5ef; background: rgba(255, 255, 255, .07); font-size: 11px; font-weight: 700; }
+.account-security-trigger:hover { border-color: rgba(240, 170, 60, .42); background: rgba(255, 255, 255, .1); }
+.account-security-trigger:hover .account-security-trigger-action { border-color: rgba(240, 170, 60, .45); color: var(--amber); }
+.account-security-field { display: grid; gap: 7px; color: #4d5265; font-size: 12px; font-weight: 700; }
 .account-security-field input {
   width: 100%;
-  min-height: 38px;
+  min-height: 40px;
   padding: 8px 11px;
-  border: 1px solid rgba(255, 255, 255, .14);
+  border: 1px solid #d8dbe7;
   border-radius: 9px;
   outline: none;
-  color: #fff;
-  background: rgba(255, 255, 255, .07);
+  color: #34384b;
+  background: #fff;
   font: inherit;
   transition: border-color .16s ease, box-shadow .16s ease;
 }
-.account-security-field input:focus { border-color: rgba(240, 170, 60, .55); box-shadow: 0 0 0 3px rgba(240, 170, 60, .12); }
+.account-security-field input:focus { border-color: #8f9ce8; box-shadow: 0 0 0 3px rgba(118, 134, 230, .16); }
 .account-security-field input:disabled { cursor: not-allowed; opacity: .55; }
-.account-security-field small { color: #aeb2c4; font-size: 10px; font-weight: 500; line-height: 1.45; }
-.account-settings-notice { padding: 9px 11px; border: 1px solid rgba(88, 169, 112, .38); border-radius: 9px; color: #7ddb9a; background: rgba(62, 129, 82, .15); font-size: 12px; }
-.account-settings-save { gap: 7px; min-height: 40px; font-size: 12px; }
+.account-security-field small { color: #858a9b; font-size: 10px; font-weight: 500; line-height: 1.45; }
+.account-security-dialog-backdrop { position: fixed; inset: 0; z-index: 93; display: grid; place-items: center; padding: 18px; background: rgba(15, 17, 32, .5); backdrop-filter: blur(3px); }
+.account-security-dialog { width: min(500px, 100%); min-height: 0; max-height: min(680px, calc(100dvh - 36px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #dfe2ec; border-radius: 16px; color: var(--ink); background: var(--paper); box-shadow: 0 24px 70px rgba(15, 17, 32, .26); }
+.account-security-dialog > header { min-height: 57px; display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 9px 12px 9px 17px; border-bottom: 1px solid #e5e7ee; }
+.account-security-dialog > header > div { display: flex; align-items: center; gap: 9px; }
+.account-security-dialog > header svg { color: var(--indigo); }
+.account-security-dialog-form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.account-security-dialog-fields { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 11px; padding: 14px 17px; overflow-y: auto; overscroll-behavior-y: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+.account-security-dialog-notice { padding: 9px 11px; border: 1px solid #c9e3cf; border-radius: 9px; color: #28713d; background: #f2faf4; font-size: 12px; }
+.account-security-dialog-footer { flex: 0 0 auto; min-height: 62px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 11px 15px; border-top: 1px solid #e5e7ee; }
+.account-security-dialog-footer .primary-button { min-width: 138px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.account-security-dialog-cancel { min-height: 40px; padding: 0 15px; border: 1px solid #d4d8e5; border-radius: 10px; color: #5b6074; background: #fff; cursor: pointer; font-weight: 700; font-size: 13px; }
+.account-security-dialog-cancel:hover { border-color: #b9bfd4; background: #f6f7fb; }
 .font-size-setting, .chat-width-setting { display: grid; gap: 10px; padding: 11px; border-radius: 10px; background: rgba(255, 255, 255, .06); }
 .font-size-setting > div:first-child, .chat-width-setting > div:first-child { display: grid; gap: 3px; }
 .font-size-setting strong, .chat-width-setting strong { font-size: 12px; }
@@ -961,6 +976,14 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 
 :root[data-theme="dark"] .sidebar { box-shadow: 18px 0 45px rgba(0, 0, 0, .2); }
 :root[data-theme="dark"] .account-settings { border-color: #44464f; color: var(--ink); background: #222328; box-shadow: 0 16px 40px rgba(0, 0, 0, .48); }
+:root[data-theme="dark"] .account-security-dialog { border-color: #464852; background: #28292e; }
+:root[data-theme="dark"] .account-security-dialog > header,
+:root[data-theme="dark"] .account-security-dialog-footer { border-color: #3a3c43; }
+:root[data-theme="dark"] .account-security-dialog .account-security-field { color: #c2c5cf; }
+:root[data-theme="dark"] .account-security-dialog .account-security-field input { border-color: #4a4c55; color: var(--ink); background: #212227; }
+:root[data-theme="dark"] .account-security-dialog .account-security-field input:focus { border-color: #7f8bd0; box-shadow: 0 0 0 3px rgba(126, 139, 208, .18); }
+:root[data-theme="dark"] .account-security-dialog-cancel { border-color: #45474f; color: #c9cad1; background: #2c2d33; }
+:root[data-theme="dark"] .account-security-dialog-notice { border-color: #3f5c49; color: #8fd7a4; background: rgba(56, 108, 75, .16); }
 :root[data-theme="dark"] .archive-dialog { border-color: #3b3e47; color: #f0f1f4; background: #24262b; }
 :root[data-theme="dark"] .archive-dialog > header { border-bottom-color: #3b3e47; }
 :root[data-theme="dark"] .archived-conversation-row { border-color: #40434d; background: #2b2d32; }
@@ -1381,12 +1404,15 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 
 @media (max-width: 720px) {
   .provider-manager-backdrop,
-  .provider-form-backdrop { display: flex; align-items: stretch; justify-content: stretch; padding: 0; }
+  .provider-form-backdrop,
+  .account-security-dialog-backdrop { display: flex; align-items: stretch; justify-content: stretch; padding: 0; }
   .provider-manager,
-  .provider-form { width: 100%; height: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
+  .provider-form,
+  .account-security-dialog { width: 100%; height: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
   .provider-manager-toolbar { flex-wrap: wrap; }
   .provider-manager-list,
   .provider-form-fields { overflow-y: scroll; }
   .provider-manager-footer { min-height: calc(56px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); }
-  .provider-form > footer { min-height: calc(58px + env(safe-area-inset-bottom)); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .provider-form > footer,
+  .account-security-dialog-footer { min-height: calc(58px + env(safe-area-inset-bottom)); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 }

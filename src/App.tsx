@@ -363,6 +363,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">("");
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
   const [accountUsername, setAccountUsername] = useState(session.username ?? "");
   const [accountCurrentPassword, setAccountCurrentPassword] = useState("");
@@ -1474,6 +1475,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   async function logout() { try { await api.logout(); } finally { onLogout(); } }
 
+  function openAccountSecurity() {
+    setAccountUsername(session.username ?? "");
+    setAccountCurrentPassword("");
+    setAccountNewPassword("");
+    setAccountConfirmPassword("");
+    setAccountError("");
+    setAccountNotice("");
+    setAccountSecurityOpen(true);
+  }
+
   async function saveAccount(event: FormEvent) {
     event.preventDefault();
     setAccountError("");
@@ -1960,32 +1971,11 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       <div className="account-area">
         {accountSettingsOpen && <section className="account-settings" aria-label="个人设置">
           <div className="account-settings-heading"><Settings2 size={15} /><strong>个人设置</strong></div>
-          <div className="account-security-heading"><KeyRound size={15} /><strong>账户与密码</strong></div>
-          <form className="account-security-form" onSubmit={saveAccount}>
-            <label className="account-security-field">
-              <span>登录用户名</span>
-              <input value={accountUsername} disabled={session.canChangeUsername === false} autoComplete="username" onChange={(event) => setAccountUsername(event.target.value)} />
-              {session.canChangeUsername === false && <small>宿主模式下用户名由系统账户决定，不能在这里修改。</small>}
-            </label>
-            <label className="account-security-field">
-              <span>当前密码</span>
-              <input type="password" value={accountCurrentPassword} autoComplete="current-password" onChange={(event) => setAccountCurrentPassword(event.target.value)} />
-            </label>
-            <label className="account-security-field">
-              <span>新密码（至少 12 位）</span>
-              <input type="password" value={accountNewPassword} autoComplete="new-password" onChange={(event) => setAccountNewPassword(event.target.value)} />
-            </label>
-            <label className="account-security-field">
-              <span>确认新密码</span>
-              <input type="password" value={accountConfirmPassword} autoComplete="new-password" onChange={(event) => setAccountConfirmPassword(event.target.value)} />
-            </label>
-            {accountError && <div className="form-error" role="alert">{accountError}</div>}
-            {accountNotice && <div className="account-settings-notice" role="status">{accountNotice}</div>}
-            <button className="primary-button account-settings-save" disabled={accountSaving} type="submit">
-              {accountSaving ? <LoaderCircle className="spin" size={17} /> : <Check size={16} />}
-              <span>保存账户与密码</span>
-            </button>
-          </form>
+          <button type="button" className="account-security-trigger" onClick={openAccountSecurity}>
+            <KeyRound size={16} />
+            <span className="account-security-trigger-copy"><strong>账户与密码</strong><small>修改登录用户名与密码</small></span>
+            <span className="account-security-trigger-action"><Pencil size={12} />修改</span>
+          </button>
           <div className="font-size-setting">
             <div><strong>聊天正文字号</strong><small>正文、行距与内容间距同步调整</small></div>
             <div className="font-size-stepper">
@@ -2075,6 +2065,42 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         setCategoryMenu(null);
         if (category) void deleteCustomCategory(category);
       }}><Trash2 size={16} /><span>删除分类</span></button>}
+    </div>, document.body)}
+
+    {accountSecurityOpen && createPortal(<div className="account-security-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAccountSecurityOpen(false); }}>
+      <section className="account-security-dialog" role="dialog" aria-modal="true" aria-label="修改账户与密码">
+        <header><div><KeyRound size={19} /><strong>修改账户与密码</strong></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setAccountSecurityOpen(false)}><X size={18} /></button></header>
+        <form className="account-security-dialog-form" onSubmit={saveAccount}>
+          <div className="account-security-dialog-fields">
+            <label className="account-security-field">
+              <span>登录用户名</span>
+              <input value={accountUsername} disabled={session.canChangeUsername === false} autoComplete="username" onChange={(event) => setAccountUsername(event.target.value)} />
+              {session.canChangeUsername === false && <small>宿主模式下用户名由系统账户决定，不能在这里修改。</small>}
+            </label>
+            <label className="account-security-field">
+              <span>当前密码</span>
+              <input type="password" value={accountCurrentPassword} autoComplete="current-password" onChange={(event) => setAccountCurrentPassword(event.target.value)} />
+            </label>
+            <label className="account-security-field">
+              <span>新密码（至少 12 位）</span>
+              <input type="password" value={accountNewPassword} autoComplete="new-password" onChange={(event) => setAccountNewPassword(event.target.value)} />
+            </label>
+            <label className="account-security-field">
+              <span>确认新密码</span>
+              <input type="password" value={accountConfirmPassword} autoComplete="new-password" onChange={(event) => setAccountConfirmPassword(event.target.value)} />
+            </label>
+            {accountError && <div className="form-error" role="alert">{accountError}</div>}
+            {accountNotice && <div className="account-security-dialog-notice" role="status">{accountNotice}</div>}
+          </div>
+          <footer className="account-security-dialog-footer">
+            <button type="button" className="account-security-dialog-cancel" onClick={() => setAccountSecurityOpen(false)}>取消</button>
+            <button className="primary-button account-security-dialog-save" disabled={accountSaving} type="submit">
+              {accountSaving ? <LoaderCircle className="spin" size={17} /> : <Check size={16} />}
+              <span>保存修改</span>
+            </button>
+          </footer>
+        </form>
+      </section>
     </div>, document.body)}
 
     {archivedDialogOpen && createPortal(<div className="archive-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setArchivedDialogOpen(false); }}>
