@@ -21,6 +21,30 @@ export function isRetryableUpstreamError(error: unknown): boolean {
   ].some((pattern) => pattern.test(message));
 }
 
+/**
+ * Translate common upstream failures into an actionable message for the web
+ * UI. Non-matching errors pass through unchanged so real diagnostics are never
+ * hidden. The upstream detail is kept in parentheses for troubleshooting.
+ */
+export function describeUpstreamError(error: unknown): string {
+  const message = upstreamErrorMessage(error).trim();
+  const lower = message.toLowerCase();
+  const detail = message.length > 300 ? `${message.slice(0, 300)}…` : message;
+  if (/\b401\b|authentication fails|authentication_error|unauthorized|api key[^\n]*(?:invalid|expired)|invalid(?: or expired)? api key|invalid_api_key/.test(lower)) {
+    return `上游认证失败：该源的 API Key 无效或已过期，请检查密钥与 base_url 是否匹配（上游返回：${detail}）。`;
+  }
+  if (/\b403\b|forbidden|permission denied/.test(lower)) {
+    return `上游拒绝访问：该源的 API Key 可能缺少权限或 base_url 配置有误（上游返回：${detail}）。`;
+  }
+  if (/模型配置不存在|model[^\n]*(?:not found|不存在)|model_provider[^\n]*not found/.test(lower)) {
+    return `上游不识别所选模型：请检查该源的模型 ID 是否为上游真实支持的模型名（上游返回：${detail}）。`;
+  }
+  if (/failed to load configuration/.test(lower)) {
+    return `Codex 配置加载失败：请检查 ~/.codex/config.toml 与 models_cache.json 是否完整有效（上游返回：${detail}）。`;
+  }
+  return message;
+}
+
 type RetryNotice = {
   attempt: number;
   maxAttempts: number;
