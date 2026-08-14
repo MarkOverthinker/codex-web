@@ -10,7 +10,7 @@ import {
   Eye, EyeOff, CornerUpLeft, GripVertical, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -28,6 +28,7 @@ import { mergeMessagePages, preservePrependedScrollTop } from "./message-history
 import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
+import { ProviderManagerDialog } from "./provider-manager-dialog";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
@@ -362,6 +363,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">("");
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [providerManagerOpen, setProviderManagerOpen] = useState(false);
   const [taskMenu, setTaskMenu] = useState<{ conversationId: string; top: number; left: number } | null>(null);
   const [archivedDialogOpen, setArchivedDialogOpen] = useState(false);
   const [archivedConversations, setArchivedConversations] = useState<Conversation[]>([]);
@@ -1465,12 +1467,15 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
 
   async function logout() { try { await api.logout(); } finally { onLogout(); } }
 
-  async function persistAgentSelection(selection: { model: string; reasoningEffort: ReasoningEffort }) {
+  async function persistAgentSelection(selection: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null }) {
     const targetId = selectedIdRef.current;
     const previous = { model: selectedModel, reasoningEffort };
     setSelectedModel(selection.model); setReasoningEffort(selection.reasoningEffort); setSelectionSaving(true); setError("");
     try {
-      const result = await api.updateAgentSelection(selection, targetId ?? undefined);
+      const model = agentOptions?.models.find((candidate) => candidate.id === selection.model);
+      const provider = selection.provider ?? model?.provider ?? null;
+      const payload: AgentSelection = { model: selection.model, reasoningEffort: selection.reasoningEffort, ...(provider ? { provider } : {}) };
+      const result = await api.updateAgentSelection(payload, targetId ?? undefined);
       if (selectedIdRef.current === targetId) {
         setSelectedModel(result.selection.model);
         setReasoningEffort(result.selection.reasoningEffort);
@@ -1496,12 +1501,13 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
       : model.reasoningEfforts.includes(options.defaults.reasoningEffort)
         ? options.defaults.reasoningEffort
         : model.reasoningEfforts.at(-1)!;
-    void persistAgentSelection({ model: model.id, reasoningEffort: nextEffort });
+    void persistAgentSelection({ model: model.id, reasoningEffort: nextEffort, ...(model.provider ? { provider: model.provider } : {}) });
   }
 
   function changeReasoning(effort: ReasoningEffort) {
     if (!selectedModel) return;
-    void persistAgentSelection({ model: selectedModel, reasoningEffort: effort });
+    const selectedModelOption = agentOptions?.models.find((candidate) => candidate.id === selectedModel);
+    void persistAgentSelection({ model: selectedModel, reasoningEffort: effort, ...(selectedModelOption?.provider ? { provider: selectedModelOption.provider } : {}) });
   }
 
   async function changeChatFontSize(delta: number) {
@@ -1929,6 +1935,7 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
             </div>
           </div>
           <button type="button" className="account-settings-archive" onClick={() => void openArchivedConversations()}><Archive size={15} /><span>已归档任务</span></button>
+          <button type="button" className="account-settings-archive" onClick={() => { setProviderManagerOpen(true); setAccountSettingsOpen(false); }}><Settings2 size={15} /><span>API 源管理</span></button>
         </section>}
         <div className="account-row">
           <button className="account-profile" type="button" aria-expanded={accountSettingsOpen} onClick={() => setAccountSettingsOpen((open) => !open)}>
@@ -2153,6 +2160,15 @@ function Workspace({ session, onLogout, themePreference, onThemePreferenceChange
         <footer className="category-manager-footer"><small>目录移入自定义分类后，该目录下所有任务都会随分类显示；隐藏的分类可从上方恢复，删除分类不会删除任务。</small></footer>
       </section>
     </div>, document.body)}
+
+    <ProviderManagerDialog
+      open={providerManagerOpen}
+      onClose={() => setProviderManagerOpen(false)}
+      onChanged={() => {
+        void api.agentOptions().then(setAgentOptions).catch(() => undefined);
+        if (selectedIdRef.current) void reconcile(selectedIdRef.current);
+      }}
+    />
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
@@ -2913,7 +2929,11 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(); } }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
-  const modelOptions = agentOptions?.models.map((model) => ({ id: model.id, label: model.label, description: model.description })) ?? [];
+  const modelOptions = agentOptions?.models.map((model) => ({
+    id: model.id,
+    label: model.providerName ? `${model.providerName} · ${model.label}` : model.label,
+    description: model.description,
+  })) ?? [];
   const hasRetainedEditingFile = Boolean(editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id)));
   const primaryAction = chooseComposerPrimaryAction({
     running: Boolean(sending && onCancel),
