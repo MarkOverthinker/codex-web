@@ -21,7 +21,7 @@ import { assessTaskPolicy } from "../server/task-policy.js";
 import { listTenantIdentities, tenantIdentityForUser } from "../server/tenant-identities.js";
 import { consumeTenantTurnEvents, validateTenantWorkerRequest } from "../server/tenant-worker-execution.js";
 import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js";
-import { isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
+import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
@@ -608,6 +608,17 @@ test("transient upstream failures use bounded 15/45/120 retry policy", async () 
     throw new Error("authentication failed");
   }, { signal: new AbortController().signal, delaysMs: [0, 0, 0] }), /authentication failed/);
   assert.equal(permanentCalls, 1);
+});
+
+test("upstream failures get actionable diagnostics while unknowns pass through", () => {
+  const auth = describeUpstreamError("unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****cd63 is invalid, url: https://api.deepseek.com/responses");
+  assert.match(auth, /^上游认证失败/);
+  assert.match(auth, /API Key 无效或已过期/);
+  const model = describeUpstreamError("{\"error\":{\"message\":\"模型配置不存在: gpt-5.6-sol\",\"type\":\"invalid_request_error\"}}");
+  assert.match(model, /^上游不识别所选模型/);
+  const config = describeUpstreamError("failed to load configuration: failed to parse model_catalog_json path `/home/gyli/.codex/models_cache.json` as JSON");
+  assert.match(config, /^Codex 配置加载失败/);
+  assert.equal(describeUpstreamError("The agent got stuck"), "The agent got stuck");
 });
 
 test("path confinement rejects traversal", () => {

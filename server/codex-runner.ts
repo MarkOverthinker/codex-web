@@ -12,7 +12,7 @@ import { startTenantTurn } from "./tenant-worker-execution.js";
 import { TenantWorkerClient } from "./tenant-worker-client.js";
 import type { TenantWorkerRunRequest } from "./tenant-worker-protocol.js";
 import type { AppServerTurnExecution } from "./app-server-turn.js";
-import { isRetryableUpstreamError, runWithTransientRetries } from "./retry-policy.js";
+import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "./retry-policy.js";
 import { buildAgentSteerPrompt, buildAgentTurnPrompt, type AgentAttachmentContext } from "./agent-context.js";
 import { detectOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { latestUserCancellationContext } from "./cancellation-summary.js";
@@ -278,7 +278,11 @@ export class CodexRunner {
       this.publish(jobId, "done", { status: "completed" });
     } catch (error) {
       const cancelled = controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
-      const message = cancelled ? "任务已停止" : error instanceof Error ? redactBrandForDisplay(error.message) : "Agent 任务失败";
+      const message = cancelled
+        ? "任务已停止"
+        : error instanceof Error
+          ? redactBrandForDisplay(describeUpstreamError(error.message))
+          : "Agent 任务失败";
       try {
         this.db.finishJob(jobId, conversationId, cancelled ? "cancelled" : "failed", message);
       } catch {

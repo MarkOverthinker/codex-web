@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import readline from "node:readline";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
-import { isRetryableUpstreamError } from "./retry-policy.js";
+import { describeUpstreamError, isRetryableUpstreamError } from "./retry-policy.js";
 import { buildOptionalCapabilityConfig, type OptionalAgentCapabilities } from "./optional-capabilities.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 
@@ -77,6 +77,8 @@ class AppServerTurnClient {
   private activeTurnId: string | null = null;
   private finalResponse = "";
   private terminal = false;
+  private reconnectNotices = 0;
+  private reconnectWarningSent = false;
   private stderr = "";
   private readonly completion: Promise<string>;
   private resolveCompletion!: (value: string) => void;
@@ -252,9 +254,24 @@ class AppServerTurnClient {
     if (message.method === "error") {
       const error = params.error as { message?: string } | undefined;
       const detail = error?.message || "上游处理发生错误";
-      this.callbacks.onProgress(isRetryableUpstreamError(detail)
-        ? { kind: "status", status: "retrying", label: "上游连接短暂中断，正在自动重试" }
-        : { kind: "error", label: redactBrand(detail) });
+      if (isRetryableUpstreamError(detail)) {
+        this.callbacks.onProgress({ kind: "status", status: "retrying", label: "上游连接短暂中断，正在自动重试" });
+        return;
+      }
+      if (/reconnecting/i.test(detail)) {
+        this.reconnectNotices += 1;
+        if (this.reconnectNotices >= 3 && !this.reconnectWarningSent) {
+          this.reconnectWarningSent = true;
+          this.callbacks.onProgress({
+            kind: "status",
+            status: "retrying",
+            label: "上游连续多次连接失败，请检查该源的 API Key 与 base_url；若是临时网络抖动将自动恢复",
+          });
+        }
+        this.callbacks.onProgress({ kind: "status", status: "retrying", label: "上游连接不稳定，正在自动重连" });
+        return;
+      }
+      this.callbacks.onProgress({ kind: "error", label: describeUpstreamError(redactBrand(detail)) });
       return;
     }
     if (message.method === "item/started" || message.method === "item/completed") {
