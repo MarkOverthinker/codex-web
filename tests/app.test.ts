@@ -26,6 +26,7 @@ import { deriveImportedTitle, discoverImportableSessions, importSessionThread, n
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "../src/file-links.js";
 import { parseCodexSnippetUrl, parseFileLine, parseSnippetHref } from "../src/code-snippet.js";
+import { findUserMessageJump, findViewportAnchorMessageId } from "../src/message-jump.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
 import { chooseComposerPrimaryAction } from "../src/composer-action.js";
@@ -616,7 +617,8 @@ test("running work journal retains every important direction and compacts repeat
   assert.doesNotMatch(appSource, /stageFeedback|process-journal-pinned/);
   assert.match(styles, /\.process-journal \{[^}]*position: relative;[^}]*overflow-x: hidden;[^}]*border-top:/);
   assert.doesNotMatch(styles, /\.process-journal \{[^}]*max-height:|\.process-journal \{[^}]*overflow-y: auto|\.process-journal \{[^}]*overscroll-behavior-y:/);
-  assert.doesNotMatch(styles, /\.process-journal-pinned|position: sticky;/);
+  assert.doesNotMatch(styles, /\.process-journal-pinned/);
+  assert.doesNotMatch(styles, /\.process-journal[^{]*\{[^}]*position:\s*sticky/);
   assert.match(appSource, /\{sending && <article className="message assistant running"/);
   assert.match(appSource, /完成前持续保留，可随时引导/);
 });
@@ -1250,6 +1252,21 @@ test("file:line references open a lazy-loading code preview", () => {
   assert.match(styles, /\.code-snippet-lines \{/);
   assert.match(styles, /\.code-snippet-trigger \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.code-snippet-lines code/);
+});
+
+test("message list offers previous/next user message jump controls", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const jumpSource = fs.readFileSync(path.join(process.cwd(), "src", "message-jump.ts"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(jumpSource, /findUserMessageJump/);
+  assert.match(jumpSource, /findViewportAnchorMessageId/);
+  assert.match(appSource, /className="message-jump-nav"/);
+  assert.match(appSource, /onJumpToUserMessage/);
+  assert.match(appSource, /jumpPendingRef/);
+  assert.match(appSource, /historyLoadVersion/);
+  assert.match(appSource, /JUMP_LOAD_PAGE_LIMIT/);
+  assert.match(styles, /\.message-jump-nav \{/);
+  assert.match(styles, /:root\[data-theme="dark"\] \.message-jump-nav button/);
 });
 
 test("risky uploads and execution requests use offline isolation", () => {
@@ -2764,6 +2781,31 @@ test("file:line fragments parse into clickable code references without protocol 
   assert.equal(parseSnippetHref("https://example.com/a.py:9"), null);
   assert.deepEqual(parseCodexSnippetUrl("codex-snippet://outputs%2Freport.py?line=9"), { path: "outputs/report.py", line: 9 });
   assert.equal(parseCodexSnippetUrl("https://example.com/a.py:9"), null);
+});
+
+test("message jump finds adjacent user messages and viewport anchors", () => {
+  const messages = [
+    { id: "a", role: "assistant" },
+    { id: "b", role: "user" },
+    { id: "c", role: "assistant" },
+    { id: "d", role: "user" },
+    { id: "e", role: "assistant" },
+  ];
+  assert.equal(findUserMessageJump(messages, "c", "previous"), "b");
+  assert.equal(findUserMessageJump(messages, "c", "next"), "d");
+  assert.equal(findUserMessageJump(messages, "a", "previous"), null);
+  assert.equal(findUserMessageJump(messages, "e", "next"), null);
+  assert.equal(findUserMessageJump(messages, "missing", "previous"), "d");
+  assert.equal(findUserMessageJump(messages, "missing", "next"), "b");
+  const rows = [
+    { offsetTop: 0, dataset: { messageId: "a" } },
+    { offsetTop: 100, dataset: { messageId: "b" } },
+    { offsetTop: 200, dataset: { messageId: "c" } },
+  ] as unknown as HTMLElement[];
+  assert.equal(
+    findViewportAnchorMessageId({ scrollTop: 0, clientHeight: 250, querySelectorAll: () => rows as unknown as NodeListOf<HTMLElement> }),
+    "b",
+  );
 });
 
 test("message file links map only registered safe attachments", () => {
