@@ -1933,10 +1933,20 @@ export function createApp(overrides: AppOverrides = {}) {
     } else if (pdf) {
       body = `<iframe class="media" src="${escapeHtml(contentUrl)}" title="${escapeHtml(file.original_name)}"></iframe>`;
     } else {
-      body = `<p class="notice">文本内容过大，分享页仅支持 2 MB 以内的文本预览。</p>`;
-      if (stat.size <= SHARE_TEXT_LIMIT_BYTES) {
-        const content = fs.readFileSync(absolute, "utf8");
-        if (!content.includes("\0")) body = `<pre class="text">${escapeHtml(content)}</pre>`;
+      const buffer = Buffer.alloc(Math.min(stat.size, SHARE_TEXT_LIMIT_BYTES));
+      const fd = fs.openSync(absolute, "r");
+      let bytesRead = 0;
+      try {
+        bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+      const content = buffer.subarray(0, bytesRead).toString("utf8");
+      if (content.includes("\0")) {
+        body = `<p class="notice">文件包含二进制数据，无法以文本方式预览。</p>`;
+      } else {
+        const truncated = bytesRead < stat.size;
+        body = `<pre class="text">${escapeHtml(content)}</pre>${truncated ? `<p class="notice">文件较大，分享页仅展示前 ${shareBytesLabel(SHARE_TEXT_LIMIT_BYTES)}。</p>` : ""}`;
       }
     }
     const html = `<!doctype html>

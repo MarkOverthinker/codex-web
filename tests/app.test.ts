@@ -1277,12 +1277,14 @@ test("output previews expose temporary unauthenticated share links", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   const shareSource = fs.readFileSync(path.join(process.cwd(), "server", "share-link.ts"), "utf8");
+  const viteSource = fs.readFileSync(path.join(process.cwd(), "vite.config.ts"), "utf8");
   assert.match(apiSource, /createFileShare: \(id: string\)/);
   assert.match(apiSource, /files\/\$\{id\}\/share/);
   assert.match(appSource, /Share2/);
   assert.match(appSource, /shareable = file\.kind === "output" && isBrowserPreviewable/);
   assert.match(appSource, /api\.createFileShare/);
   assert.match(appSource, /复制分享链接/);
+  assert.match(viteSource, /"\/codex-web\/share":/);
   assert.match(shareSource, /createShareToken/);
   assert.match(shareSource, /parseShareToken/);
   assert.match(shareSource, /SHARE_LIFETIME_SECONDS/);
@@ -1752,6 +1754,20 @@ test("output files can be shared as temporary unauthenticated preview links", as
     original_name: "data.xlsx", relative_path: "outputs/data.xlsx",
     mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 10, kind: "output", created_at: now,
   });
+  const bigTextId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "big.txt"), Buffer.concat([Buffer.from("# big text\n"), Buffer.alloc(2 * 1024 * 1024 + 1, 0x61)]));
+  instance.db.addFile({
+    id: bigTextId, conversation_id: conversationId, message_id: null,
+    original_name: "big.txt", relative_path: "outputs/big.txt",
+    mime_type: "text/plain", size: 2 * 1024 * 1024 + 11, kind: "output", created_at: now,
+  });
+  const binaryTextId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "binary.txt"), Buffer.from([0x68, 0x69, 0x00, 0x0a]));
+  instance.db.addFile({
+    id: binaryTextId, conversation_id: conversationId, message_id: null,
+    original_name: "binary.txt", relative_path: "outputs/binary.txt",
+    mime_type: "text/plain", size: 4, kind: "output", created_at: now,
+  });
 
   const share = await agent.post(`/codex-web/api/files/${markdownId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   assert.match(share.body.url, /^\/codex-web\/share\/[A-Za-z0-9_-]+$/);
@@ -1762,6 +1778,16 @@ test("output files can be shared as temporary unauthenticated preview links", as
   assert.match(page.text, /report\.md/);
   assert.match(page.text, /hello 中文/);
   await guest.get(`${share.body.url}/content`).expect(404);
+
+  const bigShare = await agent.post(`/codex-web/api/files/${bigTextId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  const bigPage = await guest.get(bigShare.body.url).expect(200);
+  assert.match(bigPage.text, /# big text/);
+  assert.match(bigPage.text, /仅展示前/);
+
+  const binaryShare = await agent.post(`/codex-web/api/files/${binaryTextId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  const binaryPage = await guest.get(binaryShare.body.url).expect(200);
+  assert.match(binaryPage.text, /文件包含二进制数据/);
+  assert.doesNotMatch(binaryPage.text, /<pre class="text">/);
 
   const imageShare = await agent.post(`/codex-web/api/files/${imageId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   const imageContent = await guest.get(`${imageShare.body.url}/content`).expect(200);
