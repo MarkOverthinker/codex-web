@@ -14,6 +14,7 @@ import { assertProductionConfig, loadConfig } from "../server/config.js";
 import { AUTO_TITLE_OUTPUT_SCHEMA, extractLeakedAutoTitleAnswer, parseAutoTitleResponse, redactBrandForDisplay, summarizeEvent } from "../server/codex-runner.js";
 import { AppDatabase, LEGACY_USER_ID } from "../server/db.js";
 import { resolveSystemUser } from "../server/host-mode.js";
+import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "../server/share-link.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection } from "../server/model-options.js";
 import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, ensureWorkspace, isDeliverablePath, isPersistedDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName, persistDeliverable, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName } from "../server/paths.js";
 import { buildShellEnvironment, cleanupJobRuntime, prepareJobRuntime } from "../server/python-runtime.js";
@@ -1269,6 +1270,21 @@ test("message list offers previous/next user message jump controls", () => {
   assert.match(styles, /:root\[data-theme="dark"\] \.message-jump-nav button/);
 });
 
+test("output previews expose temporary unauthenticated share links", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const shareSource = fs.readFileSync(path.join(process.cwd(), "server", "share-link.ts"), "utf8");
+  assert.match(apiSource, /createFileShare: \(id: string\)/);
+  assert.match(apiSource, /files\/\$\{id\}\/share/);
+  assert.match(appSource, /Share2/);
+  assert.match(appSource, /shareable = file\.kind === "output" && isBrowserPreviewable/);
+  assert.match(appSource, /api\.createFileShare/);
+  assert.match(appSource, /复制分享链接/);
+  assert.match(shareSource, /createShareToken/);
+  assert.match(shareSource, /parseShareToken/);
+  assert.match(shareSource, /SHARE_LIFETIME_SECONDS/);
+});
+
 test("risky uploads and execution requests use offline isolation", () => {
   assert.deepEqual(assessTaskPolicy("整理表格", [{ original_name: "source.xlsx" }]), { isolated: false, networkAccessEnabled: true });
   const macro = assessTaskPolicy("看看这个文件", [{ original_name: "unknown.xlsm" }]);
@@ -1684,6 +1700,78 @@ test("code snippet API returns bounded line windows and rejects unsafe paths", a
 
   await agent.post(`/codex-web/api/conversations/${conversationId}/archive`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=50`).expect(200);
+});
+
+test("output files can be shared as temporary unauthenticated preview links", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-share-link-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const secret = "test-share-secret-that-is-longer-than-thirty-two-chars";
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: secret,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id;
+  const userId = instance.db.getConversation(conversationId)?.user_id ?? LEGACY_USER_ID;
+  const workspace = ensureTenantWorkspace(tenantRoot, userId, conversationId);
+  const now = new Date().toISOString();
+
+  const markdownId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "report.md"), "# 报告\n\nhello 中文\n");
+  instance.db.addFile({
+    id: markdownId, conversation_id: conversationId, message_id: null,
+    original_name: "report.md", relative_path: "outputs/report.md",
+    mime_type: "text/markdown", size: 15, kind: "output", created_at: now,
+  });
+  const imageId = crypto.randomUUID();
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+  fs.writeFileSync(path.join(workspace, "outputs", "chart.png"), png);
+  instance.db.addFile({
+    id: imageId, conversation_id: conversationId, message_id: null,
+    original_name: "chart.png", relative_path: "outputs/chart.png",
+    mime_type: "image/png", size: png.length, kind: "output", created_at: now,
+  });
+  const uploadId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "uploads", "note.txt"), "private upload");
+  instance.db.addFile({
+    id: uploadId, conversation_id: conversationId, message_id: null,
+    original_name: "note.txt", relative_path: "uploads/note.txt",
+    mime_type: "text/plain", size: 14, kind: "upload", created_at: now,
+  });
+  const xlsxId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "data.xlsx"), "xlsx-bytes");
+  instance.db.addFile({
+    id: xlsxId, conversation_id: conversationId, message_id: null,
+    original_name: "data.xlsx", relative_path: "outputs/data.xlsx",
+    mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 10, kind: "output", created_at: now,
+  });
+
+  const share = await agent.post(`/codex-web/api/files/${markdownId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  assert.match(share.body.url, /^\/codex-web\/share\/[A-Za-z0-9_-]+$/);
+  assert.ok(Number.isFinite(Date.parse(share.body.expiresAt)));
+  const guest = request.agent(instance.app);
+  const page = await guest.get(share.body.url).expect(200);
+  assert.match(page.text, /分享预览/);
+  assert.match(page.text, /report\.md/);
+  assert.match(page.text, /hello 中文/);
+  await guest.get(`${share.body.url}/content`).expect(404);
+
+  const imageShare = await agent.post(`/codex-web/api/files/${imageId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  const imageContent = await guest.get(`${imageShare.body.url}/content`).expect(200);
+  assert.equal(imageContent.headers["content-type"], "image/png");
+  assert.deepEqual(imageContent.body, png);
+
+  await agent.post(`/codex-web/api/files/${uploadId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(404);
+  await agent.post(`/codex-web/api/files/${xlsxId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(400);
+  const shareToken = share.body.url.split("/").at(-1)!;
+  const tamperedToken = shareToken.slice(0, 8) + (shareToken[8] === "A" ? "B" : "A") + shareToken.slice(9);
+  await guest.get(`/codex-web/share/${tamperedToken}`).expect(404);
+  const expiredToken = createShareToken(secret, markdownId, Math.floor(Date.now() / 1000) - 60);
+  await guest.get(`/codex-web/share/${expiredToken}`).expect(404);
 });
 
 test("host mode reports unconfigured tenants and blocks task sends until ~/.codex exists", async (context) => {
@@ -2806,6 +2894,21 @@ test("message jump finds adjacent user messages and viewport anchors", () => {
     findViewportAnchorMessageId({ scrollTop: 0, clientHeight: 250, querySelectorAll: () => rows as unknown as NodeListOf<HTMLElement> }),
     "b",
   );
+});
+
+test("share tokens round-trip, reject tampering, and expire", () => {
+  const secret = "test-share-secret-that-is-longer-than-thirty-two-chars";
+  const fileId = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const expires = now + 3600;
+  const token = createShareToken(secret, fileId, expires);
+  assert.equal(SHARE_LIFETIME_SECONDS, 7 * 24 * 60 * 60);
+  assert.deepEqual(parseShareToken(secret, token), { fileId, expires });
+  const tampered = token.slice(0, 8) + (token[8] === "A" ? "B" : "A") + token.slice(9);
+  assert.equal(parseShareToken(secret, tampered), null);
+  assert.equal(parseShareToken("a-different-secret-".padEnd(40, "z"), token), null);
+  assert.equal(parseShareToken(secret, createShareToken(secret, fileId, now - 60)), null);
+  assert.equal(parseShareToken(secret, "not-a-token"), null);
 });
 
 test("message file links map only registered safe attachments", () => {

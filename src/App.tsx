@@ -7,7 +7,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
-  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
+  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
@@ -15,9 +15,9 @@ import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
-import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
+import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
 import { parseCodexSnippetUrl, parseFileLine, parseSnippetHref, type FileLineRef } from "./code-snippet";
-import { CopyPathButton } from "./copy-path";
+import { CopyPathButton, copyText } from "./copy-path";
 import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
@@ -2828,7 +2828,28 @@ function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose 
   const source = fileUrl(file);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [shareState, setShareState] = useState<"idle" | "loading" | "copied" | "error">("idle");
+  const shareTimerRef = useRef<number | null>(null);
   const isTextKind = kind === "markdown" || kind === "text";
+  const shareable = file.kind === "output" && isBrowserPreviewable(file);
+
+  useEffect(() => () => {
+    if (shareTimerRef.current !== null) window.clearTimeout(shareTimerRef.current);
+  }, []);
+
+  async function handleShare() {
+    if (shareState === "loading") return;
+    setShareState("loading");
+    try {
+      const { url } = await api.createFileShare(file.id);
+      const ok = await copyText(new URL(url, window.location.origin).href);
+      setShareState(ok ? "copied" : "error");
+    } catch {
+      setShareState("error");
+    }
+    if (shareTimerRef.current !== null) window.clearTimeout(shareTimerRef.current);
+    shareTimerRef.current = window.setTimeout(() => setShareState("idle"), 2200);
+  }
 
   useEffect(() => {
     if (!isTextKind) return;
@@ -2878,9 +2899,10 @@ function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose 
       <header>
         {kind === "image" ? <FileImage size={19} /> : kind ? <FileText size={19} /> : <FileIcon size={19} />}
         <span className="file-preview-title"><strong>{file.original_name}</strong><small title={path}>{path} · {subtitle}</small></span>
-        <span className="file-preview-actions">
-          <CopyPathButton value={path} className="file-preview-copy" />
-          <a className="icon-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={17} /></a>
+      <span className="file-preview-actions">
+        <CopyPathButton value={path} className="file-preview-copy" />
+        {shareable && <button type="button" className="icon-button" title={shareState === "copied" ? "分享链接已复制（7 天内有效）" : shareState === "error" ? "分享链接生成失败" : "复制分享链接（7 天内有效）"} aria-label="复制分享链接" onClick={() => void handleShare()}>{shareState === "copied" ? <Check size={17} /> : <Share2 size={17} />}</button>}
+        <a className="icon-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={17} /></a>
           <button type="button" className="icon-button" aria-label="关闭" autoFocus onClick={onClose}><X size={18} /></button>
         </span>
       </header>

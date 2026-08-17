@@ -15,6 +15,10 @@
   workspace, registered deliverables, tenant library, and (in host mode) the
   conversation's selected working directory; path traversal and arbitrary
   host paths are rejected.
+- Output preview share links are HMAC-signed, expire after 7 days, and work
+  without login. They are minted only for previewable files with `kind=output`;
+  uploads and other files can never be shared, and the public routes expose
+  only the preview content, not arbitrary paths or download endpoints.
 - The container is not a complete security boundary for hostile workloads. Its Codex sandbox requires relaxed seccomp/AppArmor settings for user namespaces.
 - The container keeps `CHOWN`, `FOWNER`, and `DAC_OVERRIDE` in addition to
   `SETUID`/`SETGID`/`KILL` because startup must migrate tenant volume
