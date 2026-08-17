@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/codex-web/api": "http://127.0.0.1:37821",
+      "/codex-web/share": "http://127.0.0.1:37821",
     },
   },
 });
