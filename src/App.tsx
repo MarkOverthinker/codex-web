@@ -28,6 +28,7 @@ import { CHAT_COLUMN_WIDTH_DEFAULT, CHAT_COLUMN_WIDTH_MAX, CHAT_COLUMN_WIDTH_MIN
 import { applyThemePreference, readStoredThemePreference, THEME_PREFERENCE_KEY, type ThemePreference } from "./theme";
 import { ASK_AGENT_SELECTION_MAX_CHARS, normalizeAskAgentSelection } from "./ask-agent-selection";
 import { mergeMessagePages, preservePrependedScrollTop } from "./message-history";
+import { findUserMessageJump, findViewportAnchorMessageId, type JumpDirection } from "./message-jump";
 import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
@@ -53,6 +54,7 @@ const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
+const JUMP_LOAD_PAGE_LIMIT = 50;
 const EMPTY_WORK_FILES: WorkFile[] = [];
 const EMPTY_PENDING_PROMPTS: PendingPrompt[] = [];
 const EMPTY_REASONING_STEPS: ReasoningStep[] = [];
@@ -419,6 +421,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [editingFavoriteLabelValue, setEditingFavoriteLabelValue] = useState("");
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [historyLoadVersion, setHistoryLoadVersion] = useState(0);
   const messagesRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<ConversationDetail | null>(detail);
   const filteredImportableSessions = useMemo(
@@ -437,6 +440,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const autoFollowRef = useRef(true);
   const lastScrollTopRef = useRef(0);
   const loadingOlderMessagesRef = useRef(false);
+  const jumpPendingRef = useRef<{ conversationId: string; direction: JumpDirection; anchorId: string; pages: number } | null>(null);
   const prependScrollRestoreRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const connectedJobRef = useRef<string | null>(null);
@@ -902,7 +906,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       setError(reason instanceof Error ? reason.message : "更早消息加载失败");
     } finally {
       loadingOlderMessagesRef.current = false;
-      if (selectedIdRef.current === conversationId) setLoadingOlderMessages(false);
+      if (selectedIdRef.current === conversationId) {
+        setLoadingOlderMessages(false);
+        setHistoryLoadVersion((version) => version + 1);
+      }
     }
   }, []);
 
@@ -919,6 +926,48 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     lastScrollTopRef.current = messages.scrollTop;
     if (scrollingUp && messages.scrollTop <= 80) void loadOlderMessages();
   }, [loadOlderMessages]);
+
+  const jumpToUserMessage = useCallback((direction: JumpDirection) => {
+    const current = detailRef.current;
+    const container = messagesRef.current;
+    if (!current || !container) return;
+    const anchorId = findViewportAnchorMessageId(container);
+    if (!anchorId) return;
+    const found = findUserMessageJump(current.messages, anchorId, direction);
+    if (found) {
+      scrollToMessage(found, container);
+      return;
+    }
+    if (direction === "next" || !current.messagePage.hasMore) {
+      setNotice(direction === "previous" ? "没有更早的我的消息" : "没有更晚的我的消息");
+      return;
+    }
+    jumpPendingRef.current = { conversationId: current.conversation.id, direction, anchorId, pages: 0 };
+    void loadOlderMessages();
+  }, [loadOlderMessages]);
+
+  useEffect(() => {
+    const pending = jumpPendingRef.current;
+    if (!pending || !detail || detail.conversation.id !== pending.conversationId || loadingOlderMessagesRef.current) return;
+    const found = findUserMessageJump(detail.messages, pending.anchorId, pending.direction);
+    if (found) {
+      jumpPendingRef.current = null;
+      const frame = window.requestAnimationFrame(() => {
+        const container = messagesRef.current;
+        if (container) scrollToMessage(found, container);
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    if (!detail.messagePage.hasMore || pending.pages >= JUMP_LOAD_PAGE_LIMIT) {
+      jumpPendingRef.current = null;
+      setNotice(!detail.messagePage.hasMore
+        ? (pending.direction === "previous" ? "没有更早的我的消息" : "没有更晚的我的消息")
+        : "更早消息较多，请继续向上滚动查找");
+      return;
+    }
+    jumpPendingRef.current = { ...pending, pages: pending.pages + 1 };
+    void loadOlderMessages();
+  }, [detail, historyLoadVersion, loadOlderMessages]);
 
   function connectJob(activeJob: Job) {
     if (connectedJobRef.current === activeJob.id && eventSourceRef.current?.readyState !== EventSource.CLOSED) return;
@@ -1012,16 +1061,21 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     }
   }
 
-  function scrollToSourceMessage(messageId: string) {
-    const container = messagesRef.current;
-    const message = container?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
-    if (!container || !message) return;
+  function scrollToMessage(messageId: string, container: HTMLElement) {
+    const message = container.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+    if (!message) return;
     const containerTop = container.getBoundingClientRect().top;
     const messageTop = message.getBoundingClientRect().top;
     const top = messageTop - containerTop + container.scrollTop;
     container.scrollTo({ top: Math.max(0, top - (container.clientHeight - message.clientHeight) / 2), behavior: "smooth" });
     message.classList.add("message-highlight");
     window.setTimeout(() => message.classList.remove("message-highlight"), 2200);
+    autoFollowRef.current = false;
+  }
+
+  function scrollToSourceMessage(messageId: string) {
+    const container = messagesRef.current;
+    if (container) scrollToMessage(messageId, container);
   }
 
   function openSourceReference(reference: MessageSourceReference) {
@@ -2340,7 +2394,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -2491,6 +2545,7 @@ type MessageListProps = {
   taskDurationSeconds: number | null;
   messagesRef: React.RefObject<HTMLDivElement | null>;
   onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void;
+  onJumpToUserMessage: (direction: JumpDirection) => void;
   onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
   userInitials: string;
@@ -2506,7 +2561,7 @@ function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   return <ProcessPanel key={detail.conversation.id} activities={activities} startedAt={detail.activeJob?.startedAt ?? null} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
@@ -2519,6 +2574,10 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
     {!sending && reasoningMessageIndex === -1 && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
+    {messages.some((message) => message.role === "user") && <div className="message-jump-nav" aria-label="我的消息导航">
+      <button type="button" title="上一条我的消息" aria-label="上一条我的消息" onClick={() => onJumpToUserMessage("previous")}><ArrowUp size={15} /></button>
+      <button type="button" title="下一条我的消息" aria-label="下一条我的消息" onClick={() => onJumpToUserMessage("next")}><ArrowDown size={15} /></button>
+    </div>}
     <div />
   </div>;
 });
@@ -2546,8 +2605,8 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail]);
@@ -2652,6 +2711,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       taskDurationSeconds={taskDurationSeconds}
       messagesRef={messagesRef}
       onMessagesScroll={onMessagesScroll}
+      onJumpToUserMessage={onJumpToUserMessage}
       onOpenSnippet={onOpenSnippet}
       onOpenSourceReference={onOpenSourceReference}
       userInitials={userInitials}
