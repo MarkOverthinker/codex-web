@@ -8,6 +8,10 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import multer from "multer";
 import pino, { type Logger } from "pino";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { loadConfig, type AppConfig } from "./config.js";
 import { CodexRunner, extractLeakedAutoTitleAnswer } from "./codex-runner.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -186,6 +190,10 @@ export function createApp(overrides: AppOverrides = {}) {
     return value.replace(/[&<>"']/g, (character) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character] ?? character
     ));
+  }
+
+  function renderShareMarkdown(content: string): string {
+    return renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, content));
   }
 
   const CODE_SNIPPET_MAX_BYTES = 20 * 1024 * 1024;
@@ -1925,8 +1933,10 @@ export function createApp(overrides: AppOverrides = {}) {
     }
     const stat = fs.statSync(absolute);
     const contentUrl = `${config.basePath.replace(/\/$/, "")}/share/${req.params.token}/content`;
+    const downloadUrl = `${config.basePath.replace(/\/$/, "")}/share/${req.params.token}/download`;
     const image = file.mime_type.startsWith("image/");
     const pdf = file.mime_type === "application/pdf";
+    const markdown = file.mime_type === "text/markdown";
     let body: string;
     if (image) {
       body = `<img class="media" src="${escapeHtml(contentUrl)}" alt="${escapeHtml(file.original_name)}">`;
@@ -1942,10 +1952,12 @@ export function createApp(overrides: AppOverrides = {}) {
         fs.closeSync(fd);
       }
       const content = buffer.subarray(0, bytesRead).toString("utf8");
+      const truncated = bytesRead < stat.size;
       if (content.includes("\0")) {
         body = `<p class="notice">文件包含二进制数据，无法以文本方式预览。</p>`;
+      } else if (markdown) {
+        body = `<div class="markdown">${renderShareMarkdown(content)}</div>${truncated ? `<p class="notice">文件较大，分享页仅展示前 ${shareBytesLabel(SHARE_TEXT_LIMIT_BYTES)}。</p>` : ""}`;
       } else {
-        const truncated = bytesRead < stat.size;
         body = `<pre class="text">${escapeHtml(content)}</pre>${truncated ? `<p class="notice">文件较大，分享页仅展示前 ${shareBytesLabel(SHARE_TEXT_LIMIT_BYTES)}。</p>` : ""}`;
       }
     }
@@ -1959,16 +1971,33 @@ export function createApp(overrides: AppOverrides = {}) {
   body { margin: 0; color: #1f2333; background: #f4f5f9; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
   header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #e0e3ec; background: #fff; }
   header h1 { margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  header small { flex: 0 0 auto; color: #7b7f8e; font-size: 11px; }
+  .header-right { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+  .header-right small { color: #7b7f8e; font-size: 11px; }
+  .header-right a { display: inline-flex; align-items: center; padding: 6px 12px; border: 1px solid #d6d9e3; border-radius: 8px; color: #1f2333; background: #fff; font-size: 12px; font-weight: 600; text-decoration: none; }
+  .header-right a:hover { background: #f0f2f8; }
   main { padding: 18px 22px 32px; }
   .media { display: block; max-width: 100%; max-height: calc(100vh - 120px); margin: 0 auto; border: 0; border-radius: 10px; background: #fff; box-shadow: 0 10px 28px rgba(15, 17, 32, .08); }
   iframe.media { width: 100%; height: calc(100vh - 130px); }
   pre.text { margin: 0; padding: 18px; border: 1px solid #e0e3ec; border-radius: 10px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .markdown { max-width: 900px; margin: 0 auto; padding: 20px 22px; border: 1px solid #e0e3ec; border-radius: 10px; background: #fff; line-height: 1.72; overflow-wrap: anywhere; }
+  .markdown > :first-child { margin-top: 0; }
+  .markdown > :last-child { margin-bottom: 0; }
+  .markdown a { color: #334a98; font-weight: 650; text-decoration-color: rgba(51, 74, 152, .35); text-underline-offset: 2px; }
+  .markdown ul, .markdown ol { padding-inline-start: 1.5em; }
+  .markdown li + li { margin-top: .25em; }
+  .markdown blockquote { margin-inline: 0; padding: .0625em 0 .0625em .8125em; border-left: 3px solid #c5cae2; color: #4b5063; }
+  .markdown pre { overflow-x: auto; padding: .875em; border: 1px solid #e3e5ed; border-radius: .625em; color: #e9ebf4; background: #171b32; }
+  .markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+  .markdown :not(pre) > code { padding: .125em .3125em; border-radius: .3125em; color: #29356f; background: #eef0fa; }
+  .markdown table { width: 100%; border-collapse: collapse; }
+  .markdown th, .markdown td { padding: .5em; border: 1px solid #dfe2ec; text-align: left; }
+  .markdown th { color: #29356f; background: #eef0fa; }
+  .markdown hr { border: 0; border-top: 1px solid #e0e3ec; }
   .notice { padding: 16px; border: 1px solid #ead7b7; border-radius: 10px; color: #704b18; background: #fff4df; font-size: 13px; }
 </style>
 </head>
 <body>
-<header><h1>分享预览 · ${escapeHtml(file.original_name)}</h1><small>${shareBytesLabel(stat.size)} · 7 天内有效</small></header>
+<header><h1>分享预览 · ${escapeHtml(file.original_name)}</h1><span class="header-right"><small>${shareBytesLabel(stat.size)} · 7 天内有效</small><a href="${escapeHtml(downloadUrl)}">下载</a></span></header>
 <main>${body}</main>
 </body>
 </html>`;
@@ -1989,6 +2018,20 @@ export function createApp(overrides: AppOverrides = {}) {
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Type", file.mime_type);
     res.setHeader("Content-Disposition", contentDisposition("inline", file.original_name));
+    return res.sendFile(path.basename(absolute), { root: path.dirname(absolute) });
+  });
+  router.get("/share/:token/download", (req, res) => {
+    const parsed = parseShareToken(config.sessionSecret, String(req.params.token ?? ""));
+    const file = parsed ? db.getFile(parsed.fileId) : undefined;
+    const conversation = file ? db.getConversation(file.conversation_id) : undefined;
+    const absolute = file && conversation ? fileAbsolutePath(file, conversation.user_id) : null;
+    if (!parsed || !file || file.kind !== "output" || !isSharePreviewable(file) || !absolute) {
+      return res.status(404).type("text/plain; charset=utf-8").send("分享链接无效或已过期。");
+    }
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", file.mime_type);
+    res.setHeader("Content-Disposition", contentDisposition("attachment", file.original_name));
     return res.sendFile(path.basename(absolute), { root: path.dirname(absolute) });
   });
   const distPath = path.join(config.projectRoot, "dist");
