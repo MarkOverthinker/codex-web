@@ -11,6 +11,10 @@
   point at Codex Web's own data, tenant, or workspace roots; the worker
   revalidates the absolute path and the tenant system user's access before
   starting.
+- Code preview reads are scoped to the signed-in user's conversation
+  workspace, registered deliverables, tenant library, and (in host mode) the
+  conversation's selected working directory; path traversal and arbitrary
+  host paths are rejected.
 - The container is not a complete security boundary for hostile workloads. Its Codex sandbox requires relaxed seccomp/AppArmor settings for user namespaces.
 - The container keeps `CHOWN`, `FOWNER`, and `DAC_OVERRIDE` in addition to
   `SETUID`/`SETGID`/`KILL` because startup must migrate tenant volume

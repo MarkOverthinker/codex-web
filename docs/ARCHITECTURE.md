@@ -34,6 +34,14 @@ Markdown rendering uses GFM, KaTeX for `$...$`/`$$...$$` math, and static
 highlight.js token styling for fenced code blocks; malformed math falls back
 to readable text instead of breaking the message.
 
+Assistant replies that mention `file:line` references are rendered as
+clickable code references. The web process serves bounded line windows around
+the referenced line from files the conversation can already reach: the
+conversation workspace, registered deliverables, the tenant library, or (in
+host mode) the conversation's selected working directory. Paths are
+revalidated with `resolveInside`, traversal is rejected, and scrolling the
+preview lazily requests adjacent windows.
+
 Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
 
 In host mode the importer also recovers the rollout's recorded `cwd` into the

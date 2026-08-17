@@ -146,6 +146,15 @@ export type ConversationDetail = {
 };
 export type MessagePage = { hasMore: boolean; nextCursor: string | null };
 export type ConversationMessagesPage = { messages: Message[]; messagePage: MessagePage };
+export type CodeSnippetWindow = {
+  path: string;
+  originalName: string;
+  totalLines: number;
+  start: number;
+  end: number;
+  line: number;
+  lines: string[];
+};
 export type ImportableSession = {
   threadId: string;
   title: string;
@@ -261,6 +270,10 @@ export const api = {
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
   conversationMessages: (id: string, before: string) => request<ConversationMessagesPage>(
     `/conversations/${id}/messages?before=${encodeURIComponent(before)}`,
+  ),
+  codeSnippet: (conversationId: string, params: { path: string; line: number; before?: number; after?: number }, signal?: AbortSignal) => request<CodeSnippetWindow>(
+    `/conversations/${conversationId}/code-snippet?path=${encodeURIComponent(params.path)}&line=${params.line}${params.before ? `&before=${params.before}` : ""}${params.after ? `&after=${params.after}` : ""}`,
+    { signal },
   ),
   renameConversation: (id: string, title: string) => request<{ conversation: Conversation }>(`/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   markConversationSeen: (id: string) => request<{ conversation: Conversation }>(`/conversations/${id}/seen`, { method: "POST" }),

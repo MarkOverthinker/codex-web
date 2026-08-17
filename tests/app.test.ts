@@ -25,6 +25,7 @@ import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetrie
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "../src/file-links.js";
+import { parseCodexSnippetUrl, parseFileLine, parseSnippetHref } from "../src/code-snippet.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
 import { chooseComposerPrimaryAction } from "../src/composer-action.js";
@@ -1200,6 +1201,7 @@ test("output files are maintained in conversation details and open in a side-by-
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  const copyPathSource = fs.readFileSync(path.join(process.cwd(), "src", "copy-path.tsx"), "utf8");
   assert.match(apiSource, /outputFiles: WorkFile\[\];/);
   assert.match(apiSource, /host_path\?: string/);
   assert.match(serverSource, /outputFiles = db\.listFiles\(conversation\.id\)\.filter\(\(file\) => file\.kind === "output"\)\.map/);
@@ -1208,9 +1210,9 @@ test("output files are maintained in conversation details and open in a side-by-
   assert.match(appSource, /className="chat-outputs"/);
   assert.match(appSource, /function FilePreviewPane/);
   assert.match(appSource, /className="file-preview-trigger"/);
-  assert.match(appSource, /function CopyPathButton/);
+  assert.match(copyPathSource, /function CopyPathButton/);
+  assert.match(copyPathSource, /className=\{`copy-path-button/);
   assert.match(appSource, /className="file-path"/);
-  assert.match(appSource, /className=\{`copy-path-button/);
   assert.match(appSource, /className="chat-output-chip-wrap"/);
   assert.match(appSource, /className="unavailable-file-path"/);
   assert.match(appSource, /onPreview=\{onPreview\}/);
@@ -1224,6 +1226,30 @@ test("output files are maintained in conversation details and open in a side-by-
   assert.match(styles, /\.chat-output-chip-wrap \{/);
   assert.match(styles, /\.unavailable-file-path \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.file-preview-pane/);
+});
+
+test("file:line references open a lazy-loading code preview", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "code-snippet-pane.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(apiSource, /codeSnippet: \(conversationId: string/);
+  assert.match(apiSource, /code-snippet\?path=/);
+  assert.match(appSource, /className="code-snippet-trigger"/);
+  assert.match(appSource, /parseCodexSnippetUrl/);
+  assert.match(appSource, /parseSnippetHref/);
+  assert.match(appSource, /parseFileLine/);
+  assert.match(appSource, /onOpenSnippet=\{openCodeSnippet\}/);
+  assert.match(appSource, /<CodeSnippetPane/);
+  assert.match(paneSource, /function CodeSnippetPane/);
+  assert.match(paneSource, /className="code-snippet-scroll"/);
+  assert.match(paneSource, /loadMore\("above"\)/);
+  assert.match(paneSource, /loadMore\("below"\)/);
+  assert.match(paneSource, /data-line-number/);
+  assert.match(paneSource, /anchorRef/);
+  assert.match(styles, /\.code-snippet-lines \{/);
+  assert.match(styles, /\.code-snippet-trigger \{/);
+  assert.match(styles, /:root\[data-theme="dark"\] \.code-snippet-lines code/);
 });
 
 test("risky uploads and execution requests use offline isolation", () => {
@@ -1581,6 +1607,66 @@ test("message attachments and composer drafts expose host paths for copyable dis
   assert.equal(draftUpload.body.composerDraft.files.length, 1);
   assert.ok(draftUpload.body.composerDraft.files[0].host_path.startsWith(path.join(workspace, conversationId, "uploads")));
   assert.ok(draftUpload.body.composerDraft.files[0].host_path.endsWith(".txt"));
+});
+
+test("code snippet API returns bounded line windows and rejects unsafe paths", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-code-snippet-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id;
+  const userId = instance.db.getConversation(conversationId)?.user_id ?? LEGACY_USER_ID;
+  const workspace = ensureTenantWorkspace(tenantRoot, userId, conversationId);
+  fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "src", "demo.py"), Array.from({ length: 90 }, (_, index) => `line ${index + 1}`).join("\n") + "\n");
+  const base = `/codex-web/api/conversations/${conversationId}/code-snippet`;
+
+  const middle = await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=50&before=10&after=10`).expect(200);
+  assert.equal(middle.body.totalLines, 90);
+  assert.equal(middle.body.start, 40);
+  assert.equal(middle.body.end, 60);
+  assert.equal(middle.body.lines.length, 21);
+  assert.equal(middle.body.lines[10], "line 50");
+  assert.equal(middle.body.path, "src/demo.py");
+
+  const top = await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=1&before=20&after=0`).expect(200);
+  assert.equal(top.body.start, 1);
+  assert.equal(top.body.end, 1);
+  const bottom = await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=90&before=0&after=20`).expect(200);
+  assert.equal(bottom.body.start, 90);
+  assert.equal(bottom.body.end, 90);
+  const lazy = await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=61&before=0&after=10`).expect(200);
+  assert.equal(lazy.body.start, 61);
+  assert.equal(lazy.body.end, 71);
+  assert.equal(lazy.body.lines[0], "line 61");
+
+  await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=1&before=1000`).expect(400);
+  await agent.get(`${base}?path=${encodeURIComponent("../../etc/passwd")}&line=1`).expect(404);
+  await agent.get(`${base}?path=${encodeURIComponent("/etc/passwd")}&line=1`).expect(404);
+  await agent.get(`${base}?path=${encodeURIComponent("src/missing.py")}&line=1`).expect(404);
+  fs.writeFileSync(path.join(workspace, "bin.dat"), Buffer.from([0x00, 0x01, 0x02]));
+  await agent.get(`${base}?path=${encodeURIComponent("bin.dat")}&line=1`).expect(400);
+
+  const registeredId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "uploads", "a.py"), "x = 1\n");
+  instance.db.addFile({
+    id: registeredId, conversation_id: conversationId, message_id: null,
+    original_name: "a.py", relative_path: "uploads/a.py",
+    mime_type: "text/x-python", size: 7, kind: "upload", created_at: new Date().toISOString(),
+  });
+  const registered = await agent.get(`${base}?path=${encodeURIComponent("a.py")}&line=1&before=0&after=0`).expect(200);
+  assert.equal(registered.body.originalName, "a.py");
+  assert.equal(registered.body.totalLines, 1);
+
+  await agent.post(`/codex-web/api/conversations/${conversationId}/archive`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=50`).expect(200);
 });
 
 test("host mode reports unconfigured tenants and blocks task sends until ~/.codex exists", async (context) => {
@@ -2665,6 +2751,21 @@ test("database restart keeps queued work but interrupts a previously running job
   assert.equal(reopened.getNextQueuedJob()?.id, queuedId);
 });
 
+test("file:line fragments parse into clickable code references without protocol false positives", () => {
+  const file = { original_name: "demo.py", relative_path: "src/demo.py", host_path: "/home/owner/app/workspaces/abc/src/demo.py" };
+  assert.deepEqual(parseFileLine("src/demo.py:42", [file]), { path: "src/demo.py", line: 42 });
+  assert.deepEqual(parseFileLine("`src/demo.py:7`", [file]), { path: "src/demo.py", line: 7 });
+  assert.deepEqual(parseFileLine("sandbox:/mnt/data/report.py:12"), { path: "/mnt/data/report.py", line: 12 });
+  assert.deepEqual(parseFileLine("D:\\work\\src\\a.py:3"), { path: "D:/work/src/a.py", line: 3 });
+  assert.equal(parseFileLine("12:30"), null);
+  assert.equal(parseFileLine("https://example.com:8080"), null);
+  assert.equal(parseFileLine("README.md"), null);
+  assert.deepEqual(parseSnippetHref("src/demo.py:42", [file]), { path: "src/demo.py", line: 42 });
+  assert.equal(parseSnippetHref("https://example.com/a.py:9"), null);
+  assert.deepEqual(parseCodexSnippetUrl("codex-snippet://outputs%2Freport.py?line=9"), { path: "outputs/report.py", line: 9 });
+  assert.equal(parseCodexSnippetUrl("https://example.com/a.py:9"), null);
+});
+
 test("message file links map only registered safe attachments", () => {
   const file: WorkFile = {
     id: "file-1",
@@ -2699,6 +2800,12 @@ test("private file citations become safe readable references", () => {
   const safe = sanitizeAgentMarkdown(raw, [file]);
   assert.equal(safe, "已读完。 （引用：24级6班物理成绩复盘.pptx，第 1 页）");
   assert.doesNotMatch(safe, /codex-file-citation|\/app\/workspaces/);
+  const lineSafe = sanitizeAgentMarkdown(
+    ':codex-file-citation{path="/app/workspaces/conversation/outputs/report.py" line_number="42"}',
+    [{ original_name: "report.py", relative_path: "outputs/report.py" }],
+  );
+  assert.equal(lineSafe, "[引用：report.py，第 42 行](codex-snippet://outputs%2Freport.py?line=42)");
+  assert.doesNotMatch(lineSafe, /codex-file-citation|\/app\/workspaces/);
   assert.equal(
     sanitizeAgentMarkdown(':codex-file-citation{path="/tmp/unknown.pdf" artifact_kind="pdf" page_number="3"}'),
     "（引用：PDF，第 3 页）",

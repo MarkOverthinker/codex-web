@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
-  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Copy, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
@@ -16,6 +16,9 @@ import {
   pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
+import { parseCodexSnippetUrl, parseFileLine, parseSnippetHref, type FileLineRef } from "./code-snippet";
+import { CopyPathButton } from "./copy-path";
+import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
@@ -405,6 +408,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
+  const [snippetPreview, setSnippetPreview] = useState<{ conversationId: string; path: string; line: number } | null>(null);
   const pendingSourceFocusRef = useRef<{ conversationId: string; messageId: string } | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
   const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
@@ -480,6 +484,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   const openFilePreview = useCallback((file: WorkFile) => setPreviewFile(file), []);
   const closeFilePreview = useCallback(() => setPreviewFile(null), []);
+  const openCodeSnippet = useCallback((target: FileLineRef) => {
+    const conversation = detailRef.current;
+    if (!conversation) return;
+    setPreviewFile(null);
+    setSnippetPreview({ conversationId: conversation.conversation.id, path: target.path, line: target.line });
+  }, []);
+  const closeCodeSnippet = useCallback(() => setSnippetPreview(null), []);
 
   const refreshList = useCallback(async () => {
     const result = await api.conversations();
@@ -2329,7 +2340,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -2343,14 +2354,24 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
-    {previewFile && <FilePreviewPane
-      key={previewFile.id}
-      file={previewFile}
-      width={previewWidth}
-      onResizeStart={(event) => beginPaneResize(event, previewWidth, PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX, "grow-left", setPreviewWidth, (width) => commitPaneWidth(PREVIEW_WIDTH_KEY, width))}
-      onResizeKeyDown={(event) => handlePaneResizerKey(event, "preview")}
-      onClose={closeFilePreview}
-    />}
+    {snippetPreview
+      ? <CodeSnippetPane
+          key={`${snippetPreview.conversationId}:${snippetPreview.path}:${snippetPreview.line}`}
+          conversationId={snippetPreview.conversationId}
+          target={snippetPreview}
+          width={previewWidth}
+          onResizeStart={(event) => beginPaneResize(event, previewWidth, PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX, "grow-left", setPreviewWidth, (width) => commitPaneWidth(PREVIEW_WIDTH_KEY, width))}
+          onResizeKeyDown={(event) => handlePaneResizerKey(event, "preview")}
+          onClose={closeCodeSnippet}
+        />
+      : previewFile && <FilePreviewPane
+          key={previewFile.id}
+          file={previewFile}
+          width={previewWidth}
+          onResizeStart={(event) => beginPaneResize(event, previewWidth, PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX, "grow-left", setPreviewWidth, (width) => commitPaneWidth(PREVIEW_WIDTH_KEY, width))}
+          onResizeKeyDown={(event) => handlePaneResizerKey(event, "preview")}
+          onClose={closeFilePreview}
+        />}
   </div>;
 }
 
@@ -2410,10 +2431,11 @@ type MessageCardProps = {
   chatFontSize: number;
   citationFiles: WorkFile[];
   onPreview: (file: WorkFile) => void;
+  onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
 };
 
-const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSourceReference }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference }: MessageCardProps) {
   return <article className={`message ${message.role}`} data-message-id={message.id}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
@@ -2421,8 +2443,10 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
       {message.role === "assistant" ? <div className="markdown" data-agent-selectable="true"><ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
-        urlTransform={(url) => isLocalMarkdownUrl(url) ? url : defaultUrlTransform(url)}
+        urlTransform={(url) => isLocalMarkdownUrl(url) || url.toLowerCase().startsWith("codex-snippet:") ? url : defaultUrlTransform(url)}
         components={{ a: ({ href, children }) => {
+          const snippet = parseCodexSnippetUrl(href) ?? parseSnippetHref(href, message.files);
+          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}:${snippet.line}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
           const resolved = resolveMessageFileLink(href, message.files);
           if (resolved.kind === "download") return <a href={resolved.href} download>{children}</a>;
           if (resolved.kind === "unavailable") {
@@ -2432,6 +2456,11 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
             </span>;
           }
           return <a href={resolved.href} target="_blank" rel="noreferrer">{children}</a>;
+        }, code: ({ className, children }) => {
+          const text = typeof children === "string" ? children : Array.isArray(children) ? children.join("") : "";
+          const snippet = !className && !text.includes("\n") ? parseFileLine(text, message.files) : null;
+          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}:${snippet.line}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
+          return <code className={className}>{children}</code>;
         } }}
       >{sanitizeAgentMarkdown(message.content, citationFiles)}</ReactMarkdown></div> : <>
         {message.source_reference
@@ -2462,6 +2491,7 @@ type MessageListProps = {
   taskDurationSeconds: number | null;
   messagesRef: React.RefObject<HTMLDivElement | null>;
   onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void;
+  onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
   userInitials: string;
   chatFontSize: number;
@@ -2476,7 +2506,7 @@ function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
   return <ProcessPanel key={detail.conversation.id} activities={activities} startedAt={detail.activeJob?.startedAt ?? null} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
@@ -2484,7 +2514,7 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
       const reasoningAbove = !sending && index === reasoningMessageIndex && reasoningSteps.length > 0;
       return <Fragment key={message.id}>
         {reasoningAbove && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
-        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSourceReference={onOpenSourceReference} />
+        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} />
       </Fragment>;
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
@@ -2516,11 +2546,11 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, onNewConversationFromSource, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
   detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
-  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void;
+  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void;
 }) {
-  const citationFiles = useMemo(() => detail.messages.flatMap((message) => message.files), [detail.messages]);
+  const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail]);
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
 
@@ -2622,6 +2652,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       taskDurationSeconds={taskDurationSeconds}
       messagesRef={messagesRef}
       onMessagesScroll={onMessagesScroll}
+      onOpenSnippet={onOpenSnippet}
       onOpenSourceReference={onOpenSourceReference}
       userInitials={userInitials}
       chatFontSize={chatFontSize}
@@ -2724,48 +2755,6 @@ function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkF
     <CopyPathButton value={path} className="file-path-copy" />
     <a className="download-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={16} /></a>
   </div>;
-}
-
-async function copyText(value: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch { /* Fall through to the legacy selection copy below. */ }
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.top = "0";
-    textarea.style.left = "0";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand("copy");
-    textarea.remove();
-    return copied;
-  } catch { return false; }
-}
-
-function CopyPathButton({ value, className }: { value: string; className?: string }) {
-  const [copied, setCopied] = useState(false);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (!copied && !failed) return;
-    const timer = window.setTimeout(() => { setCopied(false); setFailed(false); }, 1600);
-    return () => window.clearTimeout(timer);
-  }, [copied, failed]);
-  async function handleCopy() {
-    const ok = await copyText(value);
-    setCopied(ok);
-    setFailed(!ok);
-  }
-  const label = failed ? "复制失败" : copied ? "已复制" : "复制路径";
-  return <button type="button" className={`copy-path-button ${copied ? "copied" : ""} ${failed ? "failed" : ""} ${className ?? ""}`} title={label} aria-label={label} onClick={() => void handleCopy()}>
-    {copied ? <Check size={14} /> : <Copy size={14} />}
-  </button>;
 }
 
 function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose }: {
