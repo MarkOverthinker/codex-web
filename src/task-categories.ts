@@ -392,7 +392,7 @@ export function buildTaskCategoryBodyState(
   };
 }
 
-function pathLabel(dir: string): string {
+export function pathLabel(dir: string): string {
   const segments = dir.replace(/[\\/]+$/, "").split(/[\\/]/);
   return segments.at(-1) || dir;
 }

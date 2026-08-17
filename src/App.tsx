@@ -13,7 +13,7 @@ import {
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
-  type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
+  pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
@@ -400,6 +400,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [editingCategoryName, setEditingCategoryName] = useState("");
   const [workingDirSaving, setWorkingDirSaving] = useState(false);
   const [categoryMenu, setCategoryMenu] = useState<{ categoryKey: string; top: number; left: number } | null>(null);
+  const [categoryNewTaskMenu, setCategoryNewTaskMenu] = useState<{ categoryKey: string; top: number; left: number } | null>(null);
   const [categoryExpanded, setCategoryExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY));
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
@@ -1374,6 +1375,24 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       window.removeEventListener("resize", closeOnResize);
     };
   }, [categoryMenu]);
+  useEffect(() => {
+    if (!categoryNewTaskMenu) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Element && !event.target.closest("[data-category-new-task-menu]")) setCategoryNewTaskMenu(null);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setCategoryNewTaskMenu(null);
+    };
+    const closeOnResize = () => setCategoryNewTaskMenu(null);
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnResize);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnResize);
+    };
+  }, [categoryNewTaskMenu]);
 
   async function openArchivedConversations() {
     setAccountSettingsOpen(false);
@@ -1834,6 +1853,22 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setCategoryMenu({ categoryKey, top, left });
   }
 
+  function startNewTaskInCategory(category: TaskListCategoryView) {
+    const anchor = categoryMenu;
+    setCategoryMenu(null);
+    if (category.assignedDirs.length <= 1) {
+      void newConversation(category.assignedDirs[0] ?? null);
+      return;
+    }
+    if (!anchor) return;
+    const width = 280;
+    const left = anchor.left + 186 + 6 <= window.innerWidth - width - 8
+      ? anchor.left + 186 + 6
+      : Math.max(8, anchor.left - width - 6);
+    const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 8 - 300));
+    setCategoryNewTaskMenu({ categoryKey: category.key, top, left });
+  }
+
   const deferredQuery = useDeferredValue(query);
   const filtered = useMemo(
     () => conversations.filter((item) => (item.title ?? "").toLowerCase().includes(deferredQuery.toLowerCase())),
@@ -1881,6 +1916,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const composerCanSteer = job?.status === "running";
   const taskMenuConversation = taskMenu ? conversations.find((conversation) => conversation.id === taskMenu.conversationId) : undefined;
   const categoryMenuCategory = categoryMenu ? categoryViews.find((category) => category.key === categoryMenu.categoryKey) : undefined;
+  const categoryNewTaskCategory = categoryNewTaskMenu ? categoryViews.find((category) => category.key === categoryNewTaskMenu.categoryKey) : undefined;
   const account = resolveAccountIdentity(session);
   // Memoize the composer element so the high-frequency activity stream does not
   // re-render the textarea, pending queue, model menus and file chips. React
@@ -1957,7 +1993,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           <button type="button" className={taskViewMode === "list" ? "active" : ""} aria-pressed={taskViewMode === "list"} title="竖列列表" onClick={() => changeTaskViewMode("list")}><List size={13} /></button>
           <button type="button" className={taskViewMode === "grid" ? "active" : ""} aria-pressed={taskViewMode === "grid"} title="多宫格" onClick={() => changeTaskViewMode("grid")}><LayoutGrid size={13} /></button>
         </div>}{workingDirSettings?.enabled && taskCategorySettings && <button type="button" className="category-manage-trigger" onClick={() => setCategoryManagerOpen(true)}><LayoutList size={13} />管理分类</button>}</span></div>
-        <div className="conversation-list" ref={categoryGridLayout.containerRef} onScroll={() => { setTaskMenu(null); setCategoryMenu(null); }}>
+        <div className="conversation-list" ref={categoryGridLayout.containerRef} onScroll={() => { setTaskMenu(null); setCategoryMenu(null); setCategoryNewTaskMenu(null); }}>
           {workingDirSettings?.enabled && taskCategorySettings
             ? taskViewMode === "grid"
               ? <div className="task-category-grid" style={categoryGridLayout.gridStyle}>
@@ -2043,6 +2079,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       aria-label={`分类 ${categoryMenuCategory.name} 操作`}
       style={{ top: categoryMenu!.top, left: categoryMenu!.left }}
     >
+      <button type="button" role="menuitem" onClick={() => startNewTaskInCategory(categoryMenuCategory)}>
+        <Plus size={16} /><span>新建任务</span>
+      </button>
       <button type="button" role="menuitem" onClick={() => { setCategoryMenu(null); void toggleCategoryPinned(categoryMenuCategory); }}>
         {categoryMenuCategory.pinned ? <PinOff size={16} /> : <Pin size={16} />}
         <span>{categoryMenuCategory.pinned ? "取消置顶" : "置顶"}</span>
@@ -2065,6 +2104,22 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         setCategoryMenu(null);
         if (category) void deleteCustomCategory(category);
       }}><Trash2 size={16} /><span>删除分类</span></button>}
+    </div>, document.body)}
+
+    {categoryNewTaskCategory && createPortal(<div
+      className="task-menu-panel category-new-task-panel"
+      data-category-new-task-menu
+      role="menu"
+      aria-label={`在分类 ${categoryNewTaskCategory.name} 新建任务`}
+      style={{ top: categoryNewTaskMenu!.top, left: categoryNewTaskMenu!.left }}
+    >
+      <div className="category-new-task-heading"><FolderOpen size={14} /><strong>在“{categoryNewTaskCategory.name}”新建任务</strong></div>
+      {categoryNewTaskCategory.assignedDirs.map((dir) => (
+        <button type="button" role="menuitem" key={dir} onClick={() => { setCategoryNewTaskMenu(null); void newConversation(dir); }}>
+          <FolderOpen size={15} />
+          <span><strong>{pathLabel(dir)}</strong><small>{dir}</small></span>
+        </button>
+      ))}
     </div>, document.body)}
 
     {accountSecurityOpen && createPortal(<div className="account-security-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAccountSecurityOpen(false); }}>

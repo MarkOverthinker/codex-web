@@ -322,6 +322,20 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .task-menu-panel svg { flex: 0 0 auto; color: #c8ccdc; }
 .task-menu-panel button.danger svg { color: #ff9292; }
 .task-menu-panel.category-menu-panel { width: 186px; }
+.task-menu-panel.category-new-task-panel {
+  width: min(280px, calc(100vw - 16px));
+  max-height: min(330px, calc(100dvh - 24px));
+  display: grid;
+  gap: 2px;
+  overflow-y: auto;
+}
+.category-new-task-heading { display: flex; align-items: center; gap: 8px; padding: 4px 8px 7px; color: #c8ccdc; font-size: 11px; }
+.category-new-task-heading svg { color: var(--amber); }
+.task-menu-panel.category-new-task-panel button > span { min-width: 0; display: grid; gap: 2px; }
+.task-menu-panel.category-new-task-panel button > span strong,
+.task-menu-panel.category-new-task-panel button > span small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-menu-panel.category-new-task-panel button > span strong { font-size: 12px; }
+.task-menu-panel.category-new-task-panel button > span small { color: #9da1b3; font-size: 9.5px; }
 .archive-dialog-backdrop, .import-dialog-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 18px; background: rgba(15, 17, 32, .5); backdrop-filter: blur(3px); }
 .archive-dialog, .import-dialog { width: min(620px, 100%); max-height: min(680px, calc(100dvh - 36px)); overflow: hidden; border: 1px solid #dfe2ec; border-radius: 16px; color: var(--ink); background: var(--paper); box-shadow: 0 24px 70px rgba(15, 17, 32, .26); }
 .archive-dialog > header, .import-dialog > header { min-height: 57px; display: flex; align-items: center; justify-content: space-between; padding: 9px 12px 9px 17px; border-bottom: 1px solid #e5e7ee; }
