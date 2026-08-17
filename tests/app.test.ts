@@ -1277,6 +1277,7 @@ test("output previews expose temporary unauthenticated share links", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   const shareSource = fs.readFileSync(path.join(process.cwd(), "server", "share-link.ts"), "utf8");
+  const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
   const viteSource = fs.readFileSync(path.join(process.cwd(), "vite.config.ts"), "utf8");
   assert.match(apiSource, /createFileShare: \(id: string\)/);
   assert.match(apiSource, /files\/\$\{id\}\/share/);
@@ -1285,6 +1286,8 @@ test("output previews expose temporary unauthenticated share links", () => {
   assert.match(appSource, /api\.createFileShare/);
   assert.match(appSource, /复制分享链接/);
   assert.match(viteSource, /"\/codex-web\/share":/);
+  assert.match(serverSource, /\/share\/:token\/download/);
+  assert.match(serverSource, /renderShareMarkdown/);
   assert.match(shareSource, /createShareToken/);
   assert.match(shareSource, /parseShareToken/);
   assert.match(shareSource, /SHARE_LIFETIME_SECONDS/);
@@ -1776,8 +1779,14 @@ test("output files can be shared as temporary unauthenticated preview links", as
   const page = await guest.get(share.body.url).expect(200);
   assert.match(page.text, /分享预览/);
   assert.match(page.text, /report\.md/);
-  assert.match(page.text, /hello 中文/);
+  assert.match(page.text, /<h1>报告<\/h1>/);
+  assert.match(page.text, /<p>hello 中文<\/p>/);
+  assert.doesNotMatch(page.text, /<pre class="text">/);
+  assert.match(page.text, />下载</);
   await guest.get(`${share.body.url}/content`).expect(404);
+  const markdownDownload = await guest.get(`${share.body.url}/download`).expect(200);
+  assert.match(markdownDownload.headers["content-disposition"] ?? "", /attachment/);
+  assert.equal(markdownDownload.text, "# 报告\n\nhello 中文\n");
 
   const bigShare = await agent.post(`/codex-web/api/files/${bigTextId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   const bigPage = await guest.get(bigShare.body.url).expect(200);
@@ -1793,14 +1802,20 @@ test("output files can be shared as temporary unauthenticated preview links", as
   const imageContent = await guest.get(`${imageShare.body.url}/content`).expect(200);
   assert.equal(imageContent.headers["content-type"], "image/png");
   assert.deepEqual(imageContent.body, png);
+  const imageDownload = await guest.get(`${imageShare.body.url}/download`).expect(200);
+  assert.equal(imageDownload.headers["content-type"], "image/png");
+  assert.deepEqual(imageDownload.body, png);
+  assert.match(imageDownload.headers["content-disposition"] ?? "", /attachment/);
 
   await agent.post(`/codex-web/api/files/${uploadId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(404);
   await agent.post(`/codex-web/api/files/${xlsxId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(400);
   const shareToken = share.body.url.split("/").at(-1)!;
   const tamperedToken = shareToken.slice(0, 8) + (shareToken[8] === "A" ? "B" : "A") + shareToken.slice(9);
   await guest.get(`/codex-web/share/${tamperedToken}`).expect(404);
+  await guest.get(`/codex-web/share/${tamperedToken}/download`).expect(404);
   const expiredToken = createShareToken(secret, markdownId, Math.floor(Date.now() / 1000) - 60);
   await guest.get(`/codex-web/share/${expiredToken}`).expect(404);
+  await guest.get(`/codex-web/share/${expiredToken}/download`).expect(404);
 });
 
 test("host mode reports unconfigured tenants and blocks task sends until ~/.codex exists", async (context) => {
