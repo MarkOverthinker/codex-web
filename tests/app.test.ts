@@ -430,6 +430,21 @@ test("sidebar task actions collapse into a stable overflow menu", () => {
   assert.match(styles, /@media \(hover: none\) \{\s*\.row-actions \{ opacity: 1; pointer-events: auto; \}/);
 });
 
+test("category menu can start a new task in the category's working directory", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  const categoryMenu = appSource.slice(
+    appSource.indexOf("categoryMenuCategory && createPortal"),
+    appSource.indexOf("categoryNewTaskCategory && createPortal"),
+  );
+  assert.match(categoryMenu, /<Plus size=\{16\} \/><span>新建任务<\/span>/);
+  assert.match(appSource, /function startNewTaskInCategory\(category: TaskListCategoryView\)[\s\S]*?newConversation\(category\.assignedDirs\[0\] \?\? null\)/);
+  assert.match(appSource, /setCategoryNewTaskMenu\(\{ categoryKey: category\.key, top, left \}\)/);
+  assert.match(appSource, /categoryNewTaskCategory && createPortal\(<div[\s\S]*?className="task-menu-panel category-new-task-panel"[\s\S]*?assignedDirs\.map/);
+  assert.match(appSource, /data-category-new-task-menu/);
+  assert.match(styles, /\.task-menu-panel\.category-new-task-panel \{[^}]*overflow-y: auto;/);
+});
+
 test("mobile Safari keeps the app shell fixed while only inner regions scroll", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   assert.match(styles, /html, body, #root \{[^}]*overflow: hidden;[^}]*overscroll-behavior: none;/);
