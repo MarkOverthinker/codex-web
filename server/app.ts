@@ -30,6 +30,7 @@ import {
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
 import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
+import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
 import {
@@ -163,6 +164,28 @@ export function createApp(overrides: AppOverrides = {}) {
     let hostPath = file.relative_path;
     try { hostPath = resolveInside(storageRoot, file.relative_path); } catch { /* Keep the stored relative path when the row is malformed. */ }
     return { ...file, host_path: hostPath };
+  }
+
+  function isSharePreviewable(file: FileRow): boolean {
+    const mime = file.mime_type.toLowerCase();
+    return mime.startsWith("image/") || mime === "application/pdf" || /^text\/(?:plain|markdown|csv)$/.test(mime);
+  }
+
+  function fileAbsolutePath(file: FileRow, userId: string): string | null {
+    const workspace = workspaceFor(userId, file.conversation_id);
+    const storageRoot = file.kind === "output" && isPersistedDeliverablePath(file.relative_path) ? config.dataRoot : workspace;
+    try {
+      const absolute = resolveInside(storageRoot, file.relative_path);
+      return fs.existsSync(absolute) ? absolute : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function escapeHtml(value: string): string {
+    return value.replace(/[&<>"']/g, (character) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character] ?? character
+    ));
   }
 
   const CODE_SNIPPET_MAX_BYTES = 20 * 1024 * 1024;
@@ -1871,7 +1894,93 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.sendFile(path.basename(absolute), { root: path.dirname(absolute) });
   });
 
+  api.post("/files/:id/share", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const file = db.getFileForUser(String(req.params.id), session.user_id);
+    if (!file || file.kind !== "output") return res.status(404).json({ error: "文件不存在。" });
+    if (!isSharePreviewable(file)) return res.status(400).json({ error: "该文件类型不支持分享预览。" });
+    if (!fileAbsolutePath(file, session.user_id)) return res.status(404).json({ error: "文件已不存在。" });
+    const expires = Math.floor(Date.now() / 1000) + SHARE_LIFETIME_SECONDS;
+    const token = createShareToken(config.sessionSecret, file.id, expires);
+    return res.json({
+      url: `${config.basePath.replace(/\/$/, "")}/share/${token}`,
+      expiresAt: new Date(expires * 1000).toISOString(),
+    });
+  });
+
   router.use("/api", api);
+  const SHARE_TEXT_LIMIT_BYTES = 2 * 1024 * 1024;
+  function shareBytesLabel(bytes: number): string {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }
+  router.get("/share/:token", (req, res) => {
+    const parsed = parseShareToken(config.sessionSecret, String(req.params.token ?? ""));
+    const file = parsed ? db.getFile(parsed.fileId) : undefined;
+    const conversation = file ? db.getConversation(file.conversation_id) : undefined;
+    const absolute = file && conversation ? fileAbsolutePath(file, conversation.user_id) : null;
+    if (!parsed || !file || file.kind !== "output" || !isSharePreviewable(file) || !absolute) {
+      return res.status(404).type("text/plain; charset=utf-8").send("分享链接无效或已过期。");
+    }
+    const stat = fs.statSync(absolute);
+    const contentUrl = `${config.basePath.replace(/\/$/, "")}/share/${req.params.token}/content`;
+    const image = file.mime_type.startsWith("image/");
+    const pdf = file.mime_type === "application/pdf";
+    let body: string;
+    if (image) {
+      body = `<img class="media" src="${escapeHtml(contentUrl)}" alt="${escapeHtml(file.original_name)}">`;
+    } else if (pdf) {
+      body = `<iframe class="media" src="${escapeHtml(contentUrl)}" title="${escapeHtml(file.original_name)}"></iframe>`;
+    } else {
+      body = `<p class="notice">文本内容过大，分享页仅支持 2 MB 以内的文本预览。</p>`;
+      if (stat.size <= SHARE_TEXT_LIMIT_BYTES) {
+        const content = fs.readFileSync(absolute, "utf8");
+        if (!content.includes("\0")) body = `<pre class="text">${escapeHtml(content)}</pre>`;
+      }
+    }
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分享预览 · ${escapeHtml(file.original_name)}</title>
+<style>
+  body { margin: 0; color: #1f2333; background: #f4f5f9; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #e0e3ec; background: #fff; }
+  header h1 { margin: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header small { flex: 0 0 auto; color: #7b7f8e; font-size: 11px; }
+  main { padding: 18px 22px 32px; }
+  .media { display: block; max-width: 100%; max-height: calc(100vh - 120px); margin: 0 auto; border: 0; border-radius: 10px; background: #fff; box-shadow: 0 10px 28px rgba(15, 17, 32, .08); }
+  iframe.media { width: 100%; height: calc(100vh - 130px); }
+  pre.text { margin: 0; padding: 18px; border: 1px solid #e0e3ec; border-radius: 10px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .notice { padding: 16px; border: 1px solid #ead7b7; border-radius: 10px; color: #704b18; background: #fff4df; font-size: 13px; }
+</style>
+</head>
+<body>
+<header><h1>分享预览 · ${escapeHtml(file.original_name)}</h1><small>${shareBytesLabel(stat.size)} · 7 天内有效</small></header>
+<main>${body}</main>
+</body>
+</html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(html);
+  });
+  router.get("/share/:token/content", (req, res) => {
+    const parsed = parseShareToken(config.sessionSecret, String(req.params.token ?? ""));
+    const file = parsed ? db.getFile(parsed.fileId) : undefined;
+    const conversation = file ? db.getConversation(file.conversation_id) : undefined;
+    const absolute = file && conversation ? fileAbsolutePath(file, conversation.user_id) : null;
+    const media = file && (file.mime_type.startsWith("image/") || file.mime_type === "application/pdf");
+    if (!parsed || !file || file.kind !== "output" || !media || !absolute) {
+      return res.status(404).type("text/plain; charset=utf-8").send("分享链接无效或已过期。");
+    }
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", file.mime_type);
+    res.setHeader("Content-Disposition", contentDisposition("inline", file.original_name));
+    return res.sendFile(path.basename(absolute), { root: path.dirname(absolute) });
+  });
   const distPath = path.join(config.projectRoot, "dist");
   if (fs.existsSync(distPath)) router.use(express.static(distPath, { index: false, maxAge: "1h" }));
   router.use((req, res, next) => {

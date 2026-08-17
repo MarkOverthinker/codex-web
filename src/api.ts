@@ -275,6 +275,7 @@ export const api = {
     `/conversations/${conversationId}/code-snippet?path=${encodeURIComponent(params.path)}&line=${params.line}${params.before ? `&before=${params.before}` : ""}${params.after ? `&after=${params.after}` : ""}`,
     { signal },
   ),
+  createFileShare: (id: string) => request<{ url: string; expiresAt: string }>(`/files/${id}/share`, { method: "POST" }),
   renameConversation: (id: string, title: string) => request<{ conversation: Conversation }>(`/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   markConversationSeen: (id: string) => request<{ conversation: Conversation }>(`/conversations/${id}/seen`, { method: "POST" }),
   deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: "DELETE" }),
