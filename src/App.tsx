@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
-  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Copy, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
@@ -15,7 +15,7 @@ import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
-import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, resolveMessageFileLink } from "./file-links";
+import { canPreviewInline, filePreviewKind, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { chooseComposerPrimaryAction } from "./composer-action";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
@@ -2425,7 +2425,12 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
         components={{ a: ({ href, children }) => {
           const resolved = resolveMessageFileLink(href, message.files);
           if (resolved.kind === "download") return <a href={resolved.href} download>{children}</a>;
-          if (resolved.kind === "unavailable") return <span className="unavailable-file-link" title="该本机文件未登记为此消息的附件">{children}（不可下载）</span>;
+          if (resolved.kind === "unavailable") {
+            const path = localPathText(href);
+            return <span className="unavailable-file-link" title={path ? `本机文件路径：${path}` : "该本机文件未登记为此消息的附件"}>
+              {children}<code className="unavailable-file-path">{path}</code><CopyPathButton value={path} className="unavailable-file-copy" /><span className="unavailable-file-note">（未登记，不可下载）</span>
+            </span>;
+          }
           return <a href={resolved.href} target="_blank" rel="noreferrer">{children}</a>;
         } }}
       >{sanitizeAgentMarkdown(message.content, citationFiles)}</ReactMarkdown></div> : <>
@@ -2596,9 +2601,16 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
     />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
     {detail.outputFiles.length > 0 && <div className="chat-outputs" aria-label="输出文件">
       <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
-      <div className="chat-outputs-list">{detail.outputFiles.map((file) => canPreviewInline(file)
-        ? <button type="button" key={file.id} className="chat-output-chip" title={file.original_name} onClick={() => onPreview(file)}>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></button>
-        : <a key={file.id} className="chat-output-chip" href={fileUrl(file, true)} download={file.original_name} title={file.original_name}>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></a>)}</div>
+      <div className="chat-outputs-list">{detail.outputFiles.map((file) => {
+        const path = file.host_path ?? file.relative_path;
+        const chipContent = <>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></>;
+        return <span className="chat-output-chip-wrap" key={file.id}>
+          {canPreviewInline(file)
+            ? <button type="button" className="chat-output-chip" title={path} onClick={() => onPreview(file)}>{chipContent}</button>
+            : <a className="chat-output-chip" href={fileUrl(file, true)} download={file.original_name} title={path}>{chipContent}</a>}
+          <CopyPathButton value={path} className="chat-output-chip-copy" />
+        </span>;
+      })}</div>
     </div>}
     <MessageList
       messages={detail.messages}
@@ -2663,7 +2675,7 @@ function ProcessPanel({ activities, startedAt: jobStartedAt }: { activities: Job
             ? activity.reviewStatus === "inProgress" ? <LoaderCircle className="spin" size={14} /> : activity.reviewStatus === "approved" ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />
             : activity.label?.startsWith("正在") ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
           <div><span>{activity.label}</span>{activity.created_at && <time dateTime={activity.created_at}>{formatActivityTime(activity.created_at)}</time>}
-            {activity.kind === "file" && activity.files?.length ? <small>{activity.files.map((file) => file.split(/[\\/]/).at(-1)).join("、")}</small> : null}
+            {activity.kind === "file" && activity.files?.length ? <small title={activity.files.join("、")}>{activity.files.map((file) => file.split(/[\\/]/).at(-1)).join("、")}</small> : null}
             {["search", "tool"].includes(activity.kind ?? "") && activity.detail ? <small>{activity.detail}</small> : null}
             {activity.kind === "command" && activity.detail ? <details className="technical-detail"><summary>{activity.actionCount && activity.actionCount > 1 ? `查看 ${activity.actionCount} 个技术步骤` : "查看技术细节"}</summary><code>{activity.groupedDetails?.join("\n\n") || activity.detail}</code></details> : null}
             {activity.kind === "approval" && activity.detail ? <details className={`approval-detail ${activity.reviewStatus ?? ""}`}><summary>查看审核内容</summary><div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{activity.detail}</ReactMarkdown></div></details> : null}
@@ -2702,14 +2714,58 @@ function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkF
   const kind = filePreviewKind(file);
   const previewable = canPreviewInline(file);
   const icon = kind === "image" ? <FileImage size={20} /> : kind ? <FileText size={20} /> : <FileIcon size={20} />;
+  const path = file.host_path ?? file.relative_path;
   const meta = `${formatSize(file.size)} · ${file.kind === "output" ? "结果文件" : "上传文件"}${previewable ? " · 点击预览" : ""}`;
-  const body = <>{icon}<span><strong>{file.original_name}</strong><small>{meta}</small></span></>;
+  const body = <>{icon}<span><strong>{file.original_name}</strong><small>{meta}</small><small className="file-path" title={path}>{path}</small></span></>;
   return <div className="file-card">
     {previewable
       ? <button type="button" className="file-preview-trigger" title="点击预览" onClick={() => onPreview(file)}>{body}</button>
       : <a href={fileUrl(file, true)} download={file.original_name}>{body}</a>}
+    <CopyPathButton value={path} className="file-path-copy" />
     <a className="download-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={16} /></a>
   </div>;
+}
+
+async function copyText(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch { /* Fall through to the legacy selection copy below. */ }
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "0";
+    textarea.style.left = "0";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  } catch { return false; }
+}
+
+function CopyPathButton({ value, className }: { value: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!copied && !failed) return;
+    const timer = window.setTimeout(() => { setCopied(false); setFailed(false); }, 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied, failed]);
+  async function handleCopy() {
+    const ok = await copyText(value);
+    setCopied(ok);
+    setFailed(!ok);
+  }
+  const label = failed ? "复制失败" : copied ? "已复制" : "复制路径";
+  return <button type="button" className={`copy-path-button ${copied ? "copied" : ""} ${failed ? "failed" : ""} ${className ?? ""}`} title={label} aria-label={label} onClick={() => void handleCopy()}>
+    {copied ? <Check size={14} /> : <Copy size={14} />}
+  </button>;
 }
 
 function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose }: {
@@ -2755,6 +2811,7 @@ function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose 
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
+  const path = file.host_path ?? file.relative_path;
   const subtitle = `${file.kind === "output" ? "结果文件" : "上传文件"} · ${formatSize(file.size)}`;
   return <aside className="file-preview-pane" style={{ width }} aria-label={`预览 ${file.original_name}`}>
       <div
@@ -2771,8 +2828,9 @@ function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose 
       />
       <header>
         {kind === "image" ? <FileImage size={19} /> : kind ? <FileText size={19} /> : <FileIcon size={19} />}
-        <span className="file-preview-title"><strong>{file.original_name}</strong><small>{subtitle}</small></span>
+        <span className="file-preview-title"><strong>{file.original_name}</strong><small title={path}>{path} · {subtitle}</small></span>
         <span className="file-preview-actions">
+          <CopyPathButton value={path} className="file-preview-copy" />
           <a className="icon-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={17} /></a>
           <button type="button" className="icon-button" aria-label="关闭" autoFocus onClick={onClose}><X size={18} /></button>
         </span>

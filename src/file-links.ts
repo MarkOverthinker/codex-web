@@ -40,6 +40,13 @@ export function isLocalMarkdownUrl(url: string): boolean {
   return /^sandbox:/i.test(url) || /^[a-z]:[\\/]/i.test(url) || /^file:\/\//i.test(url) || /^\\\\/.test(url);
 }
 
+/** Human-readable path for a local Markdown link, safe to display and copy. */
+export function localPathText(href: string | undefined): string {
+  if (!href) return "";
+  const stripped = href.replace(/^sandbox:/i, "");
+  return normalizePath(stripped) || decodePath(stripped);
+}
+
 export function isBrowserPreviewable(file: WorkFile): boolean {
   return file.mime_type.startsWith("image/")
     || file.mime_type === "application/pdf"

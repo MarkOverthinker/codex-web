@@ -24,7 +24,7 @@ import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js
 import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
-import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, resolveMessageFileLink } from "../src/file-links.js";
+import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "../src/file-links.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
 import { chooseComposerPrimaryAction } from "../src/composer-action.js";
@@ -1201,11 +1201,18 @@ test("output files are maintained in conversation details and open in a side-by-
   const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   assert.match(apiSource, /outputFiles: WorkFile\[\];/);
-  assert.match(serverSource, /outputFiles = db\.listFiles\(conversation\.id\)\.filter\(\(file\) => file\.kind === "output"\)/);
+  assert.match(apiSource, /host_path\?: string/);
+  assert.match(serverSource, /outputFiles = db\.listFiles\(conversation\.id\)\.filter\(\(file\) => file\.kind === "output"\)\.map/);
   assert.match(serverSource, /outputFiles,/);
+  assert.match(serverSource, /host_path:/);
   assert.match(appSource, /className="chat-outputs"/);
   assert.match(appSource, /function FilePreviewPane/);
   assert.match(appSource, /className="file-preview-trigger"/);
+  assert.match(appSource, /function CopyPathButton/);
+  assert.match(appSource, /className="file-path"/);
+  assert.match(appSource, /className=\{`copy-path-button/);
+  assert.match(appSource, /className="chat-output-chip-wrap"/);
+  assert.match(appSource, /className="unavailable-file-path"/);
   assert.match(appSource, /onPreview=\{onPreview\}/);
   assert.match(appSource, /ReactMarkdown remarkPlugins=\{\[remarkGfm, remarkMath\]\}/);
   assert.match(appSource, /rehypePlugins=\{\[\[rehypeKatex/);
@@ -1213,6 +1220,9 @@ test("output files are maintained in conversation details and open in a side-by-
   assert.match(styles, /\.file-preview-pane \{/);
   assert.match(styles, /\.file-preview-pane \{[^}]*border-left:/);
   assert.match(styles, /\.chat-outputs \{/);
+  assert.match(styles, /\.file-path-copy \{/);
+  assert.match(styles, /\.chat-output-chip-wrap \{/);
+  assert.match(styles, /\.unavailable-file-path \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.file-preview-pane/);
 });
 
@@ -1523,6 +1533,7 @@ test("single-user login and CSRF protection", async (context) => {
   const detailWithOutput = await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200);
   assert.equal(detailWithOutput.body.outputFiles.length, 1);
   assert.equal(detailWithOutput.body.outputFiles[0].original_name, originalName);
+  assert.equal(detailWithOutput.body.outputFiles[0].host_path, absolutePath);
   const download = await agent.get(`/codex-web/api/files/${fileId}?download=1`).expect(200);
   assert.equal(download.headers["cache-control"], "private, no-store");
   assert.match(download.headers["content-disposition"], /^attachment; filename="download\.pptx"; filename\*=UTF-8''/);
@@ -1533,6 +1544,43 @@ test("single-user login and CSRF protection", async (context) => {
     .field("message", "请制作一份很长很长的家长会成绩分析演示文稿").expect(202);
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.title, "新任务");
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.title_source, "default");
+});
+
+test("message attachments and composer drafts expose host paths for copyable display", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-file-host-path-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id;
+  const userId = instance.db.getConversation(conversationId)?.user_id ?? LEGACY_USER_ID;
+  const workspace = ensureTenant(tenantRoot, userId).conversations;
+  const messageId = crypto.randomUUID();
+  instance.db.addMessage({ id: messageId, conversation_id: conversationId, role: "user", content: "任务", created_at: new Date().toISOString() });
+  const uploadId = crypto.randomUUID();
+  instance.db.addFile({
+    id: uploadId, conversation_id: conversationId, message_id: messageId,
+    original_name: "source.pdf", relative_path: path.posix.join("uploads", `${uploadId}.pdf`),
+    mime_type: "application/pdf", size: 12, kind: "upload", created_at: new Date().toISOString(),
+  });
+  const detail = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  const messageFile = detail.body.messages.find((message: { id: string }) => message.id === messageId)?.files[0];
+  assert.ok(messageFile);
+  assert.equal(messageFile.host_path, path.join(workspace, conversationId, "uploads", `${uploadId}.pdf`));
+
+  const draftUpload = await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files`)
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .attach("files", Buffer.from("draft"), { filename: "draft.txt", contentType: "text/plain" })
+    .expect(201);
+  assert.equal(draftUpload.body.composerDraft.files.length, 1);
+  assert.ok(draftUpload.body.composerDraft.files[0].host_path.startsWith(path.join(workspace, conversationId, "uploads")));
+  assert.ok(draftUpload.body.composerDraft.files[0].host_path.endsWith(".txt"));
 });
 
 test("host mode reports unconfigured tenants and blocks task sends until ~/.codex exists", async (context) => {
@@ -2636,6 +2684,10 @@ test("message file links map only registered safe attachments", () => {
   assert.deepEqual(resolveMessageFileLink("D:\\secret\\not-registered.xlsx", [file]), { kind: "unavailable" });
   assert.deepEqual(resolveMessageFileLink("outputs/../secret.xlsx", [file]), { kind: "unavailable" });
   assert.deepEqual(resolveMessageFileLink("https://example.com/help", [file]), { kind: "regular", href: "https://example.com/help" });
+  assert.equal(localPathText("sandbox:/mnt/data/ConditionType%20%E7%BB%9F%E8%AE%A1%E7%BB%93%E6%9E%9C.xlsx"), "/mnt/data/ConditionType 统计结果.xlsx");
+  assert.equal(localPathText("D:\\workspace\\codex-web\\workspaces\\abc\\outputs\\a%20b.txt"), "D:/workspace/codex-web/workspaces/abc/outputs/a b.txt");
+  assert.equal(localPathText("outputs/report.md"), "outputs/report.md");
+  assert.equal(localPathText(undefined), "");
 });
 
 test("private file citations become safe readable references", () => {

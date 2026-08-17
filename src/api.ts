@@ -26,7 +26,7 @@ export type ReloadStatus = {
   };
 };
 export type WorkFile = {
-  id: string; original_name: string; relative_path: string; mime_type: string; size: number; kind: "upload" | "output";
+  id: string; original_name: string; relative_path: string; host_path?: string; mime_type: string; size: number; kind: "upload" | "output";
 };
 export type Message = {
   id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; source_reference: MessageSourceReference | null; created_at: string; files: WorkFile[];
