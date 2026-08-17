@@ -16,7 +16,7 @@ import {
   pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
-import { parseCodexSnippetUrl, parseFileLine, parseSnippetHref, type FileLineRef } from "./code-snippet";
+import { parseCodexSnippetUrl, parseFileRef, parseSnippetHref, type FileLineRef } from "./code-snippet";
 import { CopyPathButton, copyText } from "./copy-path";
 import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
@@ -410,7 +410,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
-  const [snippetPreview, setSnippetPreview] = useState<{ conversationId: string; path: string; line: number } | null>(null);
+  const [snippetPreview, setSnippetPreview] = useState<{ conversationId: string; path: string; line?: number } | null>(null);
   const pendingSourceFocusRef = useRef<{ conversationId: string; messageId: string } | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
   const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
@@ -2500,20 +2500,22 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
         urlTransform={(url) => isLocalMarkdownUrl(url) || url.toLowerCase().startsWith("codex-snippet:") ? url : defaultUrlTransform(url)}
         components={{ a: ({ href, children }) => {
           const snippet = parseCodexSnippetUrl(href) ?? parseSnippetHref(href, message.files);
-          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}:${snippet.line}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
+          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
           const resolved = resolveMessageFileLink(href, message.files);
           if (resolved.kind === "download") return <a href={resolved.href} download>{children}</a>;
           if (resolved.kind === "unavailable") {
+            const ref = parseFileRef(href, message.files);
+            if (ref) return <button type="button" className="code-snippet-trigger" title={ref.path} onClick={() => onOpenSnippet(ref)}><Code size={12} />{children}</button>;
             const path = localPathText(href);
             return <span className="unavailable-file-link" title={path ? `本机文件路径：${path}` : "该本机文件未登记为此消息的附件"}>
-              {children}<code className="unavailable-file-path">{path}</code><CopyPathButton value={path} className="unavailable-file-copy" /><span className="unavailable-file-note">（未登记，不可下载）</span>
+              {children}{path && <><code className="unavailable-file-path">{path}</code><CopyPathButton value={path} className="unavailable-file-copy" /></>}<span className="unavailable-file-note">（不可下载）</span>
             </span>;
           }
           return <a href={resolved.href} target="_blank" rel="noreferrer">{children}</a>;
         }, code: ({ className, children }) => {
           const text = typeof children === "string" ? children : Array.isArray(children) ? children.join("") : "";
-          const snippet = !className && !text.includes("\n") ? parseFileLine(text, message.files) : null;
-          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}:${snippet.line}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
+          const snippet = !className && !text.includes("\n") ? parseFileRef(text, message.files) : null;
+          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
           return <code className={className}>{children}</code>;
         } }}
       >{sanitizeAgentMarkdown(message.content, citationFiles)}</ReactMarkdown></div> : <>
