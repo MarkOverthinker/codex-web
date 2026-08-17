@@ -51,11 +51,20 @@ function citationLocation(attributes: Record<string, string>): string {
   return "";
 }
 
+function citationLine(attributes: Record<string, string>): number | null {
+  const line = attributes.line_number ?? attributes.line_start;
+  return line && /^\d{1,9}$/.test(line) ? Number(line) : null;
+}
+
 /** Convert private Codex file citations into safe, user-readable Markdown. */
 export function sanitizeAgentMarkdown(value: string, files: readonly CitationFile[] = []): string {
   return value.replace(FILE_CITATION_PATTERN, (_full, rawAttributes: string) => {
     const attributes = citationAttributes(rawAttributes);
     const file = citedFile(attributes.path ?? "", files);
+    const line = citationLine(attributes);
+    if (file && line) {
+      return `[引用：${escapeMarkdownText(file.original_name)}，第 ${line} 行](codex-snippet://${encodeURIComponent(file.relative_path)}?line=${line})`;
+    }
     const source = file?.original_name
       ?? ARTIFACT_LABELS[(attributes.artifact_kind ?? "").toLowerCase()]
       ?? "文件";

@@ -165,6 +165,60 @@ export function createApp(overrides: AppOverrides = {}) {
     return { ...file, host_path: hostPath };
   }
 
+  const CODE_SNIPPET_MAX_BYTES = 20 * 1024 * 1024;
+  const CODE_SNIPPET_MAX_WINDOW = 500;
+
+  function normalizeSnippetPath(raw: string): string | null {
+    let value = String(raw ?? "").trim().replace(/^<|>$/g, "");
+    for (let index = 0; index < 2; index += 1) {
+      try {
+        const next = decodeURIComponent(value);
+        if (next === value) break;
+        value = next;
+      } catch {
+        break;
+      }
+    }
+    value = value.replace(/^sandbox:/i, "").replace(/^file:\/+/i, "").replace(/\\/g, "/");
+    if (/^\/[a-z]:\//i.test(value)) value = value.slice(1);
+    const parts = value.split("/");
+    if (parts.some((part) => part === "..") || value.includes("\0")) return null;
+    return value.replace(/^\.\//, "").replace(/\/{2,}/g, "/") || null;
+  }
+
+  function snippetTargetFor(conversation: ConversationRow, userId: string, rawPath: string): { absolute: string; displayPath: string; originalName?: string } | null {
+    const normalized = normalizeSnippetPath(rawPath);
+    if (!normalized) return null;
+    const folded = normalized.toLocaleLowerCase();
+    const workspace = workspaceFor(userId, conversation.id);
+    const files = db.listFiles(conversation.id);
+    const basename = folded.split("/").pop() ?? "";
+    const registered = files.find((file) => {
+      const relative = normalizeSnippetPath(file.relative_path)?.toLocaleLowerCase() ?? "";
+      if (relative && (folded === relative || folded.endsWith(`/${relative}`))) return true;
+      if (!normalized.includes("/") && file.original_name.toLocaleLowerCase() === basename) return true;
+      const hostPath = normalizeSnippetPath(fileForClient(file, userId).host_path)?.toLocaleLowerCase() ?? "";
+      return Boolean(hostPath) && (folded === hostPath || folded.endsWith(`/${hostPath}`));
+    });
+    if (registered) {
+      const storageRoot = registered.kind === "output" && isPersistedDeliverablePath(registered.relative_path) ? config.dataRoot : workspace;
+      try {
+        const absolute = resolveInside(storageRoot, registered.relative_path);
+        if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) {
+          return { absolute, displayPath: fileForClient(registered, userId).host_path, originalName: registered.original_name };
+        }
+      } catch { /* Fall through to the workspace lookup below. */ }
+    }
+    const roots = [{ root: workspace }, ...(config.hostMode && conversation.working_dir ? [{ root: conversation.working_dir }] : []), { root: storageFor(userId).library }];
+    for (const { root } of roots) {
+      try {
+        const absolute = resolveInside(root, normalized);
+        if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) return { absolute, displayPath: normalized };
+      } catch { /* Path escapes this root; try the next one. */ }
+    }
+    return null;
+  }
+
   function parseStoredSourceReference(value: string | null | undefined) {
     if (!value) return null;
     try { return normalizeMessageSourceReference(JSON.parse(value)); }
@@ -1263,6 +1317,44 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json({
       messages: safeConversationMessages(conversation, messagePage.messages),
       messagePage: { hasMore: messagePage.hasMore, nextCursor: messagePage.nextCursor },
+    });
+  });
+
+  api.get("/conversations/:id/code-snippet", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    const rawPath = typeof req.query.path === "string" ? req.query.path : "";
+    const line = Number(req.query.line);
+    const before = Number(req.query.before ?? 80);
+    const after = Number(req.query.after ?? 80);
+    if (!rawPath) return res.status(400).json({ error: "缺少文件路径。" });
+    if (!Number.isInteger(line) || line < 1) return res.status(400).json({ error: "行号无效。" });
+    if (![before, after].every((value) => Number.isInteger(value) && value >= 0 && value <= CODE_SNIPPET_MAX_WINDOW)) {
+      return res.status(400).json({ error: "行窗口无效。" });
+    }
+    const target = snippetTargetFor(conversation, session.user_id, rawPath);
+    if (!target) return res.status(404).json({ error: "文件不存在或不可访问。" });
+    let stat: fs.Stats;
+    try { stat = fs.statSync(target.absolute); } catch { return res.status(404).json({ error: "文件不存在。" }); }
+    if (!stat.isFile()) return res.status(400).json({ error: "不是文件，无法预览。" });
+    if (stat.size > CODE_SNIPPET_MAX_BYTES) return res.status(413).json({ error: "文件过大，无法预览。" });
+    let content: string;
+    try { content = fs.readFileSync(target.absolute, "utf8"); } catch { return res.status(500).json({ error: "文件读取失败。" }); }
+    if (content.includes("\0")) return res.status(400).json({ error: "二进制文件无法预览。" });
+    const lines = content.split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    const totalLines = lines.length;
+    const start = Math.max(1, line - before);
+    const end = Math.min(totalLines, line + after);
+    return res.json({
+      path: target.displayPath,
+      originalName: target.originalName ?? path.basename(target.absolute),
+      totalLines,
+      start,
+      end,
+      line,
+      lines: lines.slice(start - 1, end).map((value) => value.replace(/\r$/, "")),
     });
   });
 
