@@ -149,12 +149,20 @@ export function createApp(overrides: AppOverrides = {}) {
     const citationFiles = db.listFiles(conversation.id);
     return messages.map((message) => {
       const sourceReference = parseStoredSourceReference(message.source_reference);
-      if (message.role !== "assistant") return { ...message, source_reference: sourceReference };
+      if (message.role !== "assistant") return { ...message, source_reference: sourceReference, files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
       const visibleContent = conversation.title_source === "ai"
         ? extractLeakedAutoTitleAnswer(message.content, true) ?? message.content
         : message.content;
-      return { ...message, source_reference: sourceReference, content: sanitizeAgentMarkdown(visibleContent, citationFiles) };
+      return { ...message, source_reference: sourceReference, content: sanitizeAgentMarkdown(visibleContent, citationFiles), files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
     });
+  }
+
+  function fileForClient(file: FileRow, userId: string) {
+    const workspace = workspaceFor(userId, file.conversation_id);
+    const storageRoot = file.kind === "output" && isPersistedDeliverablePath(file.relative_path) ? config.dataRoot : workspace;
+    let hostPath = file.relative_path;
+    try { hostPath = resolveInside(storageRoot, file.relative_path); } catch { /* Keep the stored relative path when the row is malformed. */ }
+    return { ...file, host_path: hostPath };
   }
 
   function parseStoredSourceReference(value: string | null | undefined) {
@@ -163,9 +171,17 @@ export function createApp(overrides: AppOverrides = {}) {
     catch { return null; }
   }
 
-  function composerDraftForClient(draft: ComposerDraftWithFiles | null | undefined) {
+  function composerDraftForClient(draft: ComposerDraftWithFiles | null | undefined, userId: string) {
     if (!draft) return null;
-    return { ...draft, source_reference: parseStoredSourceReference(draft.source_reference) };
+    return {
+      ...draft,
+      source_reference: parseStoredSourceReference(draft.source_reference),
+      files: draft.files.map((file) => fileForClient(file, userId)),
+    };
+  }
+
+  function pendingPromptForClient(prompt: PendingPromptWithFiles, userId: string) {
+    return { ...prompt, files: prompt.files.map((file) => fileForClient(file, userId)) };
   }
 
   function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow, rawProvider?: unknown): AgentSelection {
@@ -1093,7 +1109,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const agentSelection = userAgentSelection(session.user_id);
     const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
     const composerDraft = db.saveComposerDraft(id, "", excerpt, JSON.stringify(reference));
-    return res.status(201).json({ conversation, agentSelection, composerDraft: composerDraftForClient(composerDraft) });
+    return res.status(201).json({ conversation, agentSelection, composerDraft: composerDraftForClient(composerDraft, session.user_id) });
   });
 
   api.post("/conversations", (req, res) => {
@@ -1211,14 +1227,15 @@ export function createApp(overrides: AppOverrides = {}) {
       : [];
     const messagePage = db.listMessagesPage(conversation.id, undefined, CONVERSATION_MESSAGE_PAGE_SIZE)!;
     const safeMessages = safeConversationMessages(conversation, messagePage.messages);
-    const outputFiles = db.listFiles(conversation.id).filter((file) => file.kind === "output");
+    const outputFiles = db.listFiles(conversation.id).filter((file) => file.kind === "output").map((file) => fileForClient(file, session.user_id));
     const agentSelection = conversationAgentSelection(conversation);
     const activeJob = latestJobWithStartedAt && ["queued", "running"].includes(latestJobWithStartedAt.status)
       ? { ...latestJobWithStartedAt, queuePosition: db.getQueuePosition(latestJobWithStartedAt.id) }
       : null;
-    const pendingPrompts = db.listPendingPrompts(conversation.id);
-    const editingPrompt = db.listPendingPrompts(conversation.id, "editing")[0] ?? null;
-    const composerDraft = composerDraftForClient(db.getComposerDraft(conversation.id));
+    const pendingPrompts = db.listPendingPrompts(conversation.id).map((prompt) => pendingPromptForClient(prompt, session.user_id));
+    const editingPromptRow = db.listPendingPrompts(conversation.id, "editing")[0] ?? null;
+    const editingPrompt = editingPromptRow ? pendingPromptForClient(editingPromptRow, session.user_id) : null;
+    const composerDraft = composerDraftForClient(db.getComposerDraft(conversation.id), session.user_id);
     return res.json({
       conversation,
       agentSelection,
@@ -1342,7 +1359,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const content = req.body.content.slice(0, 100_000);
     let quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
     const sourceReference = submittedSourceReference(req.body?.sourceReference);
-    return res.json({ composerDraft: composerDraftForClient(db.saveComposerDraft(conversation.id, content, quoteExcerpt, sourceReference)) });
+    return res.json({ composerDraft: composerDraftForClient(db.saveComposerDraft(conversation.id, content, quoteExcerpt, sourceReference), session.user_id) });
   });
 
   api.post("/conversations/:id/draft/files", upload.array("files", 12), (req, res) => {
@@ -1359,7 +1376,7 @@ export function createApp(overrides: AppOverrides = {}) {
       return res.status(400).json({ error: "单个会话草稿最多包含 12 个附件。" });
     }
     registerComposerUploads(conversation.id, uploaded);
-    return res.status(201).json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id))! });
+    return res.status(201).json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id), session.user_id)! });
   });
 
   api.delete("/conversations/:id/draft/files/:fileId", (req, res) => {
@@ -1375,7 +1392,7 @@ export function createApp(overrides: AppOverrides = {}) {
     db.removeFile(file.id);
     db.pruneEmptyComposerDraft(conversation.id);
     if (db.getComposerDraft(conversation.id)) db.touchComposerDraft(conversation.id);
-    return res.json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id)) });
+    return res.json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id), session.user_id) });
   });
 
   api.delete("/conversations/:id/draft", (req, res) => {

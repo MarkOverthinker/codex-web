@@ -11,7 +11,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - A responsive React chat interface for Codex CLI
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions
 - Persistent attachments and generated deliverables
-- Side-by-side in-page previews for Markdown, text, CSV, PDF, and image outputs, with a per-conversation output-file strip
+- Side-by-side in-page previews for Markdown, text, CSV, PDF, and image outputs, with a per-conversation output-file strip; every attachment and output shows its real server path with a copy button, including referenced local files that were not registered as attachments
 - Server-persistent unsent text, quotes, and attachments, restored across conversations, browsers, and devices
 - Codex thread persistence across browser restarts
 - Import existing local Codex CLI sessions (rollout files in the executor's `sessions/` and `archived_sessions/`) as web conversations, then continue them from the browser
