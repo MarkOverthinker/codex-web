@@ -26,7 +26,7 @@ import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetrie
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "../src/file-links.js";
-import { parseCodexSnippetUrl, parseFileLine, parseSnippetHref } from "../src/code-snippet.js";
+import { parseCodexSnippetUrl, parseFileLine, parseFileRef, parseSnippetHref } from "../src/code-snippet.js";
 import { findUserMessageJump, findViewportAnchorMessageId } from "../src/message-jump.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { resolveAccountIdentity } from "../src/account-identity.js";
@@ -1241,7 +1241,7 @@ test("file:line references open a lazy-loading code preview", () => {
   assert.match(appSource, /className="code-snippet-trigger"/);
   assert.match(appSource, /parseCodexSnippetUrl/);
   assert.match(appSource, /parseSnippetHref/);
-  assert.match(appSource, /parseFileLine/);
+  assert.match(appSource, /parseFileRef/);
   assert.match(appSource, /onOpenSnippet=\{openCodeSnippet\}/);
   assert.match(appSource, /<CodeSnippetPane/);
   assert.match(paneSource, /function CodeSnippetPane/);
@@ -1250,6 +1250,9 @@ test("file:line references open a lazy-loading code preview", () => {
   assert.match(paneSource, /loadMore\("below"\)/);
   assert.match(paneSource, /data-line-number/);
   assert.match(paneSource, /anchorRef/);
+  assert.match(paneSource, /hasLine/);
+  assert.match(paneSource, /INITIAL_FROM_START_LINES/);
+  assert.match(paneSource, /从头预览/);
   assert.match(styles, /\.code-snippet-lines \{/);
   assert.match(styles, /\.code-snippet-trigger \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.code-snippet-lines code/);
@@ -2858,6 +2861,7 @@ test("database restart keeps queued work but interrupts a previously running job
 
 test("file:line fragments parse into clickable code references without protocol false positives", () => {
   const file = { original_name: "demo.py", relative_path: "src/demo.py", host_path: "/home/owner/app/workspaces/abc/src/demo.py" };
+  assert.deepEqual(parseFileRef("src/demo.py", [file]), { path: "src/demo.py" });
   assert.deepEqual(parseFileLine("src/demo.py:42", [file]), { path: "src/demo.py", line: 42 });
   assert.deepEqual(parseFileLine("`src/demo.py:7`", [file]), { path: "src/demo.py", line: 7 });
   assert.deepEqual(parseFileLine("sandbox:/mnt/data/report.py:12"), { path: "/mnt/data/report.py", line: 12 });
@@ -2866,7 +2870,11 @@ test("file:line fragments parse into clickable code references without protocol 
   assert.equal(parseFileLine("https://example.com:8080"), null);
   assert.equal(parseFileLine("README.md"), null);
   assert.deepEqual(parseSnippetHref("src/demo.py:42", [file]), { path: "src/demo.py", line: 42 });
+  assert.deepEqual(parseSnippetHref("outputs/report.py"), { path: "outputs/report.py" });
   assert.equal(parseSnippetHref("https://example.com/a.py:9"), null);
+  assert.equal(parseFileRef("https://example.com/a.py"), null);
+  assert.equal(parseFileRef("chart.png", [{ original_name: "chart.png", relative_path: "outputs/chart.png", mime_type: "image/png" }]), null);
+  assert.deepEqual(parseFileRef("report.py", [{ original_name: "report.py", relative_path: "outputs/report.py", mime_type: "text/x-python" }]), { path: "report.py" });
   assert.deepEqual(parseCodexSnippetUrl("codex-snippet://outputs%2Freport.py?line=9"), { path: "outputs/report.py", line: 9 });
   assert.equal(parseCodexSnippetUrl("https://example.com/a.py:9"), null);
 });

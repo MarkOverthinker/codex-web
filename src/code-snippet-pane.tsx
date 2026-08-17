@@ -6,6 +6,7 @@ import { CopyPathButton } from "./copy-path";
 
 const INITIAL_BEFORE = 80;
 const INITIAL_AFTER = 80;
+const INITIAL_FROM_START_LINES = 160;
 const LOAD_MORE_LINES = 150;
 const SCROLL_THRESHOLD = 48;
 
@@ -28,6 +29,8 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
   const seqRef = useRef(0);
   const anchorRef = useRef<{ line: number; gap: number } | null>(null);
   snippetRef.current = snippet;
+  const hasLine = Boolean(target.line);
+  const line = target.line ?? 1;
 
   useEffect(() => {
     const seq = ++seqRef.current;
@@ -38,21 +41,31 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
     setLoadingMore(null);
     loadingMoreRef.current = null;
     anchorRef.current = null;
-    api.codeSnippet(conversationId, { path: target.path, line: target.line, before: INITIAL_BEFORE, after: INITIAL_AFTER })
+    api.codeSnippet(conversationId, {
+      path: target.path,
+      line,
+      before: hasLine ? INITIAL_BEFORE : 0,
+      after: hasLine ? INITIAL_AFTER : INITIAL_FROM_START_LINES,
+    })
       .then((data) => {
         if (seq !== seqRef.current) return;
         setSnippet(data);
         requestAnimationFrame(() => {
           const body = bodyRef.current;
-          const row = body?.querySelector<HTMLElement>(`[data-line-number="${data.line}"]`);
-          if (body && row) body.scrollTop = Math.max(0, row.offsetTop - body.clientHeight / 2);
+          if (!body) return;
+          if (hasLine) {
+            const row = body.querySelector<HTMLElement>(`[data-line-number="${data.line}"]`);
+            if (row) body.scrollTop = Math.max(0, row.offsetTop - body.clientHeight / 2);
+          } else {
+            body.scrollTop = 0;
+          }
         });
       })
       .catch((reason) => {
         if (seq !== seqRef.current) return;
         setError(reason instanceof Error ? reason.message : "代码预览加载失败");
       });
-  }, [conversationId, target.path, target.line, retry]);
+  }, [conversationId, target.path, hasLine, line, retry]);
 
   function loadMore(direction: "above" | "below") {
     const current = snippetRef.current;
@@ -127,7 +140,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
 
   const title = snippet?.path ?? target.path;
   const fileName = snippet?.originalName ?? title.split(/[\\/]/).at(-1) ?? title;
-  return <aside className="file-preview-pane code-snippet-pane" style={{ width }} aria-label={`代码预览 ${title}:${target.line}`}>
+  return <aside className="file-preview-pane code-snippet-pane" style={{ width }} aria-label={`代码预览 ${title}${hasLine ? `:${target.line}` : ""}`}>
     <div
       className="file-preview-resizer"
       role="separator"
@@ -144,7 +157,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
       <FileCode size={19} />
       <span className="file-preview-title">
         <strong>{fileName}</strong>
-        <small title={title}>{title} · 第 {target.line} 行</small>
+        <small title={title}>{title}{hasLine ? ` · 第 ${target.line} 行` : " · 从头预览"}</small>
       </span>
       <span className="file-preview-actions">
         <CopyPathButton value={title} className="file-preview-copy" />
@@ -160,7 +173,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
             <ol className="code-snippet-lines">
               {snippet.lines.map((text, index) => {
                 const lineNumber = snippet.start + index;
-                return <li key={lineNumber} data-line-number={lineNumber} className={lineNumber === snippet.line ? "current" : ""}>
+                return <li key={lineNumber} data-line-number={lineNumber} className={hasLine && lineNumber === target.line ? "current" : ""}>
                   <span className="code-snippet-line-number">{lineNumber}</span>
                   <code>{text || " "}</code>
                 </li>;
@@ -169,6 +182,6 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
             {snippet.end < snippet.totalLines && <div className="code-snippet-more">{loadingMore === "below" ? <><LoaderCircle className="spin" size={13} /><span>正在加载下方代码…</span></> : <span>继续向下滚动加载更多</span>}</div>}
             {moreError && <p className="code-snippet-more-error"><TriangleAlert size={12} />{moreError}</p>}
           </div>}
-    {snippet && <footer className="code-snippet-status">第 {snippet.start}–{snippet.end} 行 · 共 {snippet.totalLines} 行{snippet.line >= snippet.start && snippet.line <= snippet.end ? ` · 定位 ${snippet.line} 行` : ""}</footer>}
+    {snippet && <footer className="code-snippet-status">第 {snippet.start}–{snippet.end} 行 · 共 {snippet.totalLines} 行{hasLine && target.line! >= snippet.start && target.line! <= snippet.end ? ` · 定位 ${target.line} 行` : ""}</footer>}
   </aside>;
 }

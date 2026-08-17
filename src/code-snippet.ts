@@ -1,15 +1,17 @@
 export type FileLineRef = {
   path: string;
-  line: number;
+  line?: number;
 };
 
 type KnownFile = {
   original_name: string;
   relative_path: string;
   host_path?: string;
+  mime_type?: string;
 };
 
 const PROTOCOL_URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+const NON_CODE_MIME_PATTERN = /^(?:image\/(?!svg)|application\/(?:pdf|vnd\.|zip|gzip|x-|octet-stream)|audio\/|video\/)/i;
 const CODEX_SNIPPET_URL_PATTERN = /^codex-snippet:\/\/([^?]+)\?line=(\d{1,9})$/i;
 
 function decodePathValue(value: string): string {
@@ -40,31 +42,48 @@ function isPlausibleFilePath(path: string, known: readonly KnownFile[]): boolean
     const relative = normalizeFilePath(file.relative_path)?.toLocaleLowerCase();
     const host = file.host_path ? normalizeFilePath(file.host_path)?.toLocaleLowerCase() : undefined;
     const name = file.original_name.toLocaleLowerCase();
-    if (relative && (folded === relative || folded.endsWith(`/${relative}`))) return true;
-    if (host && (folded === host || folded.endsWith(`/${host}`))) return true;
-    if (!path.includes("/") && folded === name) return true;
+    const matches = Boolean(
+      (relative && (folded === relative || folded.endsWith(`/${relative}`)))
+      || (host && (folded === host || folded.endsWith(`/${host}`)))
+      || (!path.includes("/") && folded === name),
+    );
+    if (matches) return Boolean(file.mime_type && !NON_CODE_MIME_PATTERN.test(file.mime_type)) || !file.mime_type;
   }
   if (/^[a-z]:\//i.test(folded) || folded.startsWith("/") || folded.startsWith("./") || /^(?:outputs|uploads|\.runtime)\//i.test(folded)) return true;
   return /[\\/]/.test(path) || /\.[a-z0-9]{1,12}$/i.test(path);
 }
 
-/** Parse a `path:line` fragment (inline code, link text or href) into a code reference. */
-export function parseFileLine(value: string | undefined, known: readonly KnownFile[] = []): FileLineRef | null {
-  if (!value) return null;
-  const text = decodePathValue(value).replace(/^`+|`+$/g, "");
-  const match = text.match(/^(.*):(\d{1,9})$/);
-  if (!match) return null;
-  const rawPath = match[1];
-  if (PROTOCOL_URL_PATTERN.test(rawPath) || /^\d+$/.test(rawPath)) return null;
-  const normalized = normalizeFilePath(rawPath);
-  if (!normalized || !isPlausibleFilePath(normalized, known)) return null;
-  return { path: normalized, line: Number(match[2]) };
+function isExternalUrl(value: string): boolean {
+  return PROTOCOL_URL_PATTERN.test(value) && !/^file:\/\//i.test(value);
 }
 
-/** Parse a Markdown href that points at a local file with a line number. */
+/** Parse a local file path, optionally with a `:line` suffix, into a code reference. */
+export function parseFileRef(value: string | undefined, known: readonly KnownFile[] = []): FileLineRef | null {
+  if (!value) return null;
+  const text = decodePathValue(value).replace(/^`+|`+$/g, "");
+  if (isExternalUrl(text)) return null;
+  const match = text.match(/^(.*):(\d{1,9})$/);
+  if (match) {
+    const rawPath = match[1];
+    if (/^\d+$/.test(rawPath)) return null;
+    const normalized = normalizeFilePath(rawPath);
+    if (normalized && isPlausibleFilePath(normalized, known)) return { path: normalized, line: Number(match[2]) };
+    return null;
+  }
+  const normalized = normalizeFilePath(text);
+  if (!normalized || !isPlausibleFilePath(normalized, known)) return null;
+  return { path: normalized };
+}
+
+/** Parse a `path:line` fragment (inline code, link text or href) into a code reference. */
+export function parseFileLine(value: string | undefined, known: readonly KnownFile[] = []): FileLineRef | null {
+  const ref = parseFileRef(value, known);
+  return ref?.line ? ref : null;
+}
+
+/** Parse a Markdown href that points at a local file, with or without a line number. */
 export function parseSnippetHref(href: string | undefined, known: readonly KnownFile[] = []): FileLineRef | null {
-  if (!href || PROTOCOL_URL_PATTERN.test(href)) return null;
-  return parseFileLine(href, known);
+  return parseFileRef(href, known);
 }
 
 /** Parse links emitted by sanitizeAgentMarkdown for `:codex-file-citation{... line_number=...}`. */
