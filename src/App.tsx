@@ -58,6 +58,13 @@ const COMPOSER_TEXT_HEIGHT_MIN = 72;
 const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
+
+type CategoryTaskDragState = {
+  categoryKey: string;
+  conversationId: string;
+  overIndex: number;
+  order: string[];
+};
 const ACTIVITY_FLUSH_DELAY_MS = 60;
 const TASK_CATEGORY_DRAG_PX_PER_STEP = 28;
 const TASK_CATEGORY_DRAG_THRESHOLD_PX = 4;
@@ -454,6 +461,14 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [categoryVisibleCounts, setCategoryVisibleCounts] = useState<Record<string, number>>(() => readCategoryVisibleCounts());
   const [categoryDragKey, setCategoryDragKey] = useState<string | null>(null);
   const categoryDragRef = useRef<{ moved: boolean } | null>(null);
+  const [categoryTaskDrag, setCategoryTaskDrag] = useState<CategoryTaskDragState | null>(null);
+  const categoryTaskDragRef = useRef<CategoryTaskDragState & { list: HTMLElement | null; moved: boolean } | null>(null);
+  const conversationsRef = useRef(conversations);
+  useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
+  const workingDirSettingsRef = useRef(workingDirSettings);
+  useEffect(() => { workingDirSettingsRef.current = workingDirSettings; }, [workingDirSettings]);
+  const taskCategorySettingsRef = useRef(taskCategorySettings);
+  useEffect(() => { taskCategorySettingsRef.current = taskCategorySettings; }, [taskCategorySettings]);
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
   const [snippetPreview, setSnippetPreview] = useState<{ conversationId: string; path: string; line?: number } | null>(null);
@@ -1862,7 +1877,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       category.conversations.length,
     );
     const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded, previewLimit);
-    const visible = category.conversations.slice(0, bodyState.visibleCount);
+    const dragState = categoryTaskDrag?.categoryKey === category.key ? categoryTaskDrag : null;
+    const orderedConversations = dragState ? orderCategoryConversations(category.conversations, dragState.order) : category.conversations;
+    // 拖动期间临时显示全部任务，避免把拖出折叠范围的任务截断。
+    const visible = dragState ? orderedConversations : orderedConversations.slice(0, bodyState.visibleCount);
     const runningCount = countRunningConversations(category.conversations);
     const dragging = categoryDragKey === category.key;
     return <section key={category.key} style={style} className={`task-category ${category.pinned ? "pinned" : ""} ${taskViewMode === "grid" ? "task-category-card" : ""}`}>
@@ -1886,8 +1904,20 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           <button type="button" className="category-menu-trigger" data-category-menu aria-label={`分类 ${category.name} 操作`} aria-haspopup="menu" aria-expanded={categoryMenu?.categoryKey === category.key} title="分类操作" onClick={(event) => toggleCategoryMenu(category.key, event.currentTarget)}><MoreHorizontal size={15} /></button>
         </div>
       </div>
-      {expanded && <div className="task-category-body">
-        {visible.map(renderConversationRow)}
+      {expanded && <div className="task-category-body" data-category-key={category.key} onPointerDown={handleCategoryBodyPointerDown}>
+        {visible.map((conversation) => (
+          <ConversationRow
+            key={conversation.id}
+            conversation={conversation}
+            selected={selectedId === conversation.id}
+            menuOpen={taskMenu?.conversationId === conversation.id}
+            onSelect={selectConversation}
+            onMenu={toggleTaskMenu}
+            draggableInCategory
+            dragging={dragState?.conversationId === conversation.id}
+            rowCategoryKey={category.key}
+          />
+        ))}
         {bodyState.showExpandControl && <button
           type="button"
           className={`task-category-more${dragging ? " dragging" : ""}`}
@@ -1975,6 +2005,129 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
   }
+
+  /**
+   * Reorder the conversations inside a category by dragging rows. The
+   * pointer-down handler is delegated on the category body so the stable
+   * callback never invalidates memoized row components; the current DOM row
+   * order is read at drag start and the pending order is kept in state for
+   * live preview, then persisted once the drag ends.
+   */
+  const handleCategoryBodyPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || categoryTaskDragRef.current) return;
+    if (event.target instanceof Element && event.target.closest(".row-actions")) return;
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-category-task-row]") : null;
+    if (!row) return;
+    const categoryKey = row.dataset.categoryTaskKey;
+    const conversationId = row.dataset.categoryTaskId;
+    const list = row.closest<HTMLElement>(".task-category-body");
+    if (!categoryKey || !conversationId || !list) return;
+    const rows = Array.from(list.querySelectorAll<HTMLElement>("[data-category-task-id]"));
+    if (rows.length <= 1) return;
+    const order = rows.map((candidate) => candidate.dataset.categoryTaskId ?? "").filter(Boolean);
+    const fromIndex = order.indexOf(conversationId);
+    if (fromIndex < 0) return;
+    const startY = event.clientY;
+    const dragState = {
+      categoryKey,
+      conversationId,
+      overIndex: fromIndex,
+      order,
+      list,
+      moved: false,
+    };
+    categoryTaskDragRef.current = dragState;
+    let suppressingClick = false;
+    const suppressClick = (clickEvent: MouseEvent) => {
+      clickEvent.preventDefault();
+      clickEvent.stopPropagation();
+    };
+    const move = (moveEvent: PointerEvent) => {
+      const deltaY = moveEvent.clientY - startY;
+      if (Math.abs(deltaY) >= TASK_CATEGORY_DRAG_THRESHOLD_PX) {
+        if (!dragState.moved) {
+          dragState.moved = true;
+          suppressingClick = true;
+          document.body.style.userSelect = "none";
+          document.addEventListener("click", suppressClick, true);
+          setCategoryTaskDrag({ categoryKey, conversationId, overIndex: dragState.overIndex, order: dragState.order });
+        }
+        let overIndex = dragState.overIndex;
+        const listRect = dragState.list?.getBoundingClientRect();
+        if (listRect && listRect.height > 0) {
+          let candidate = 0;
+          const pointerY = moveEvent.clientY;
+          for (const item of dragState.list!.querySelectorAll<HTMLElement>("[data-category-task-id]")) {
+            if (item.dataset.categoryTaskId === conversationId) continue;
+            const rect = item.getBoundingClientRect();
+            if (pointerY > rect.top + rect.height / 2) candidate += 1;
+            else break;
+          }
+          overIndex = Math.max(0, Math.min(candidate, dragState.order.length - 1));
+        }
+        if (overIndex !== dragState.overIndex) {
+          dragState.overIndex = overIndex;
+          const next = [...dragState.order];
+          const current = next.indexOf(conversationId);
+          if (current >= 0) {
+            next.splice(current, 1);
+            next.splice(overIndex, 0, conversationId);
+            dragState.order = next;
+            setCategoryTaskDrag({ categoryKey, conversationId, overIndex, order: next });
+          }
+        }
+      }
+    };
+    const stop = (endEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      if (suppressingClick) document.removeEventListener("click", suppressClick, true);
+      document.body.style.userSelect = "";
+      const savedOrder = dragState.order;
+      const moved = dragState.moved;
+      const savedCategoryKey = dragState.categoryKey;
+      if (dragState.list) dragState.list.style.touchAction = "";
+      if (moved) setCategoryTaskDrag(null);
+      categoryTaskDragRef.current = null;
+      if (moved && endEvent.type !== "pointercancel") {
+        const settings = taskCategorySettingsRef.current;
+        const existingOrder = settings?.conversationOrders[savedCategoryKey];
+        let fullOrder = savedOrder;
+        if (existingOrder?.length) {
+          fullOrder = mergeCategoryTaskOrder(existingOrder, savedOrder);
+        } else {
+          const fullViews = buildTaskCategoryViews(
+            conversationsRef.current,
+            workingDirSettingsRef.current?.favorites ?? [],
+            settings ?? EMPTY_TASK_LIST_CATEGORY_SETTINGS,
+          );
+          const fullCategory = fullViews.find((view) => view.key === savedCategoryKey);
+          if (fullCategory?.conversations.length) {
+            fullOrder = mergeCategoryTaskOrder(
+              fullCategory.conversations.map((item) => item.id),
+              savedOrder,
+            );
+          }
+        }
+        void (async () => {
+          setCategorySaving(true);
+          setError("");
+          try {
+            const { settings: saved } = await api.updateTaskCategoryConversationOrder(savedCategoryKey, fullOrder);
+            setTaskCategorySettings(saved);
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : "保存任务顺序失败");
+          } finally {
+            setCategorySaving(false);
+          }
+        })();
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }, []);
 
   function changeTaskViewMode(mode: TaskViewMode) {
     setTaskViewMode(mode);
@@ -2673,11 +2826,64 @@ function Welcome({ onSuggestion }: { onSuggestion: (value: string) => void }) {
   </div></section>;
 }
 
+/**
+ * Reorder conversations according to a live drag order. Ids missing from the
+ * order (e.g. tasks created mid-drag) are appended in their current order.
+ */
+function orderCategoryConversations(
+  conversations: readonly Conversation[],
+  order: readonly string[] | undefined,
+): Conversation[] {
+  if (!order || order.length === 0) return conversations as Conversation[];
+  const byId = new Map(conversations.map((item) => [item.id, item]));
+  const result: Conversation[] = [];
+  for (const id of order) {
+    const item = byId.get(id);
+    if (item) {
+      result.push(item);
+      byId.delete(id);
+    }
+  }
+  for (const item of conversations) if (byId.has(item.id)) result.push(item);
+  return result;
+}
+
+/**
+ * Merge a drag result (only the rows that were visible during the drag) back
+ * into the full category order. Rows that were not part of the drag keep their
+ * relative position; the dragged rows are inserted together at the position of
+ * the first dragged row, preserving the full order even when the drag happened
+ * under search filtering.
+ */
+function mergeCategoryTaskOrder(
+  baseIds: readonly string[],
+  visibleOrder: readonly string[],
+): string[] {
+  const visible = new Set(visibleOrder);
+  const result: string[] = [];
+  let inserted = false;
+  for (const id of baseIds) {
+    if (visible.has(id)) {
+      if (!inserted) {
+        result.push(...visibleOrder);
+        inserted = true;
+      }
+    } else {
+      result.push(id);
+    }
+  }
+  if (!inserted) result.push(...visibleOrder);
+  return result;
+}
+
 function conversationRowPropsEqual(previous: ConversationRowProps, next: ConversationRowProps): boolean {
   return previous.selected === next.selected
     && previous.menuOpen === next.menuOpen
     && previous.onSelect === next.onSelect
     && previous.onMenu === next.onMenu
+    && previous.draggableInCategory === next.draggableInCategory
+    && previous.dragging === next.dragging
+    && previous.rowCategoryKey === next.rowCategoryKey
     && conversationFieldsEqual(previous.conversation, next.conversation);
 }
 
@@ -2687,10 +2893,23 @@ type ConversationRowProps = {
   menuOpen: boolean;
   onSelect: (id: string) => void;
   onMenu: (conversation: Conversation, button: HTMLButtonElement) => void;
+  draggableInCategory?: boolean;
+  dragging?: boolean;
+  rowCategoryKey?: string;
 };
 
-const ConversationRow = memo(function ConversationRow({ conversation, selected, menuOpen, onSelect, onMenu }: ConversationRowProps) {
-  return <div className={`conversation-row ${selected ? "active" : ""} ${conversation.has_unread_result ? "unread" : ""} ${menuOpen ? "menu-open" : ""}`}>
+const ConversationRow = memo(function ConversationRow({
+  conversation, selected, menuOpen, onSelect, onMenu, draggableInCategory, dragging, rowCategoryKey,
+}: ConversationRowProps) {
+  return <div
+    className={`conversation-row ${selected ? "active" : ""} ${conversation.has_unread_result ? "unread" : ""} ${menuOpen ? "menu-open" : ""} ${draggableInCategory ? "category-draggable" : ""} ${dragging ? "dragging" : ""}`}
+    {...(rowCategoryKey ? {
+      "data-category-task-row": "",
+      "data-category-task-key": rowCategoryKey,
+      "data-category-task-id": conversation.id,
+      title: "按住拖动排序",
+    } : {})}
+  >
     <button className="conversation-select" onClick={() => onSelect(conversation.id)}>
       <FolderOpen size={16} /><span>{conversation.title}</span>
       {conversation.status === "running"

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Conversation, WorkingDirFavorite } from "../src/api.js";
 import {
+  applyCategoryConversationOrder,
   autoDirCategoryKey,
   buildTaskCategoryBodyState,
   buildHiddenCategoryInfos,
@@ -46,6 +47,7 @@ test("task category view groups standalone, favorite, per-directory, and custom 
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: ["/tmp/temporary-a"] }],
     pinned: [],
     hidden: [],
+    conversationOrders: {},
   };
 
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
@@ -78,6 +80,7 @@ test("custom assignment overrides favorite auto categories and pinned order wins
     customCategories: [{ id: "custom-1", name: "重点项目", assignedDirs: [favorite.path] }],
     pinned: [TASK_LIST_AUTO_STANDALONE_KEY, customCategoryKey("custom-1")],
     hidden: [],
+    conversationOrders: {},
   };
 
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
@@ -98,6 +101,7 @@ test("custom category groups repeated conversations without mutating settings", 
     }],
     pinned: [],
     hidden: [],
+    conversationOrders: {},
   };
   const originalSettings = structuredClone(settings);
   Object.freeze(settings.customCategories[0].assignedDirs);
@@ -129,6 +133,7 @@ test("search filtering keeps category structure and counts only matching tasks",
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: ["/tmp/temporary-a"] }],
     pinned: [],
     hidden: [],
+    conversationOrders: {},
   };
   const filtered = [conversations[1]];
   const views = buildTaskCategoryViews(filtered, [], settings);
@@ -147,6 +152,7 @@ test("directory assignments report the current auto or custom bucket", () => {
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: ["/tmp/custom-a"] }],
     pinned: [],
     hidden: [],
+    conversationOrders: {},
   };
   const assignments = buildDirectoryAssignments(conversations, [favorite], settings);
   assert.equal(assignments.length, 4);
@@ -175,6 +181,7 @@ test("hidden categories are omitted from views but remain restorable", () => {
     customCategories: [],
     pinned: [],
     hidden: [TASK_LIST_AUTO_STANDALONE_KEY, autoDirCategoryKey(favorite.path)],
+    conversationOrders: {},
   };
 
   const views = buildTaskCategoryViews(conversations, [favorite], settings);
@@ -185,7 +192,11 @@ test("hidden categories are omitted from views but remain restorable", () => {
   assert.equal(infos[0].name, "独立工作区");
   assert.equal(infos[1].name, favorite.label);
   assert.deepEqual(
-    buildHiddenCategoryInfos({ customCategories: [], pinned: [], hidden: [autoDirCategoryKey("/tmp/temporary-a")] }, [], ["/tmp/temporary-a"]),
+    buildHiddenCategoryInfos(
+      { customCategories: [], pinned: [], hidden: [autoDirCategoryKey("/tmp/temporary-a")], conversationOrders: {} },
+      [],
+      ["/tmp/temporary-a"],
+    ),
     [{ key: autoDirCategoryKey("/tmp/temporary-a"), kind: "auto", name: "temporary-a", detail: "/tmp/temporary-a" }],
   );
 });
@@ -195,6 +206,7 @@ test("hidden keys validation keeps only known categories and hides stale keys fr
     customCategories: [{ id: "custom-1", name: "归档项目", assignedDirs: [] }],
     pinned: [],
     hidden: [customCategoryKey("custom-1"), customCategoryKey("deleted"), autoDirCategoryKey("/tmp/active"), "auto:dir:/gone", "unknown:key"],
+    conversationOrders: {},
   };
 
   assert.deepEqual(
@@ -247,4 +259,49 @@ test("countRunningConversations counts only executing tasks in a category", () =
   assert.equal(countRunningConversations([idle, runningOne]), 1);
   assert.equal(countRunningConversations([runningOne, runningTwo, idle]), 2);
   assert.equal(countRunningConversations([]), 0);
+});
+
+test("applyCategoryConversationOrder honors the saved order and keeps new tasks on top", () => {
+  const oldest = conversation("oldest", favorite.path, "2026-01-01T00:00:00.000Z");
+  const middle = conversation("middle", favorite.path, "2026-01-02T00:00:00.000Z");
+  const newest = conversation("newest", favorite.path, "2026-01-03T00:00:00.000Z");
+  assert.deepEqual(
+    applyCategoryConversationOrder([oldest, middle, newest], undefined).map((item) => item.id),
+    ["newest", "middle", "oldest"],
+  );
+  assert.deepEqual(
+    applyCategoryConversationOrder([oldest, middle, newest], []).map((item) => item.id),
+    ["newest", "middle", "oldest"],
+  );
+  assert.deepEqual(
+    applyCategoryConversationOrder([oldest, middle, newest], ["oldest", "newest", "middle"]).map((item) => item.id),
+    ["oldest", "newest", "middle"],
+  );
+  // 已保存顺序里没有的新任务排在顶部，保持可见；过期 id 被忽略。
+  const fresh = conversation("fresh", favorite.path, "2026-01-04T00:00:00.000Z");
+  assert.deepEqual(
+    applyCategoryConversationOrder([oldest, middle, newest, fresh], ["oldest", "middle", "newest", "gone"]).map((item) => item.id),
+    ["fresh", "oldest", "middle", "newest"],
+  );
+});
+
+test("buildTaskCategoryViews applies per-category conversation order", () => {
+  const conversations = [
+    conversation("newest", favorite.path, "2026-01-05T00:00:00.000Z"),
+    conversation("middle", favorite.path, "2026-01-04T00:00:00.000Z"),
+    conversation("oldest", favorite.path, "2026-01-03T00:00:00.000Z"),
+    conversation("standalone", null, "2026-01-02T00:00:00.000Z"),
+  ];
+  const settings: TaskListCategorySettings = {
+    customCategories: [],
+    pinned: [],
+    hidden: [],
+    conversationOrders: {
+      [autoDirCategoryKey(favorite.path)]: ["oldest", "middle", "newest"],
+    },
+  };
+
+  const views = buildTaskCategoryViews(conversations, [favorite], settings);
+  const favoriteView = views.find((view) => view.key === autoDirCategoryKey(favorite.path))!;
+  assert.deepEqual(favoriteView.conversations.map((item) => item.id), ["oldest", "middle", "newest"]);
 });

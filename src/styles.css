@@ -304,6 +304,16 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .conversation-row:hover { background: rgba(255, 255, 255, .065); }
 .conversation-row.active { border-color: rgba(240, 170, 60, .24); background: linear-gradient(90deg, rgba(240, 170, 60, .15), rgba(255, 255, 255, .045)); }
 .conversation-row.active::before { background: var(--amber); }
+.task-category .conversation-row.category-draggable { cursor: grab; touch-action: none; }
+.task-category .conversation-row.category-draggable:active { cursor: grabbing; }
+.task-category .conversation-row.dragging {
+  position: relative;
+  z-index: 2;
+  border-color: rgba(240, 170, 60, .55);
+  background: linear-gradient(90deg, rgba(240, 170, 60, .22), rgba(255, 255, 255, .08));
+}
+.task-category .conversation-row.dragging::before { background: var(--amber); }
+.task-category .conversation-row.dragging .conversation-select > svg { color: var(--amber); }
 .conversation-select { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 10px 10px 10px 11px; border: 0; color: #e4e6ef; background: transparent; cursor: pointer; text-align: left; }
 .conversation-select > svg { flex: 0 0 auto; color: #b9bdcc; }
 .conversation-select > svg.conversation-waiting { color: #9399ad; }
