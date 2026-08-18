@@ -30,7 +30,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - A durable live work journal with retained stage feedback and grouped command steps
 - Running work journals expand inline with the page instead of creating a nested vertical scroller
 - Unread-result markers for completed conversations until their detail is viewed
-- Distinct running and queued indicators, a skip-queue action while waiting, plus a stable overflow menu for task actions
+- Distinct running and queued indicators with a visible queue position (how many jobs are ahead in the shared working directory), a skip-queue action while waiting, plus a stable overflow menu for task actions
 - A 500 MiB Codex rollout warning that suggests archiving very long conversations
 - Light, dark, and system-following appearance modes
 - Select message text and attach it as a removable, server-persisted reference to a new Agent question

@@ -1587,12 +1587,24 @@ export class AppDatabase {
     const job = this.getJob(jobId);
     if (!job || !["queued", "running"].includes(job.status)) return undefined;
     if (job.status === "running") return 0;
-    const row = this.sqlite.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM jobs WHERE conversation_id=? AND status='running') +
-        (SELECT COUNT(*) FROM jobs WHERE conversation_id=? AND status='queued' AND queue_seq<=?) AS position
-    `).get(job.conversation_id, job.conversation_id, job.queue_seq) as { position: number };
-    return row.position;
+    const conversation = this.getConversation(job.conversation_id);
+    if (!conversation) return undefined;
+    // Shared working directories serialize jobs across conversations, so the
+    // visible queue position must count every active job in that directory,
+    // not only the jobs of the current conversation. Standalone workspaces
+    // stay scoped to their own conversation.
+    const active = conversation.working_dir
+      ? this.listActiveJobsForWorkingDir(conversation.working_dir)
+      : this.listActiveJobsForConversation(conversation.id);
+    const runningAhead = active.filter((candidate) => candidate.status === "running").length;
+    const queuedAhead = active
+      .filter((candidate) => candidate.status === "queued" && candidate.id !== job.id)
+      .sort((left, right) => Number(right.skip_queue) - Number(left.skip_queue) || left.queue_seq - right.queue_seq)
+      .filter((candidate) => {
+        if (candidate.skip_queue === 1) return job.skip_queue === 1 ? candidate.queue_seq < job.queue_seq : true;
+        return job.skip_queue === 1 ? false : candidate.queue_seq < job.queue_seq;
+      }).length;
+    return runningAhead + queuedAhead + 1;
   }
 
   updateJob(id: string, status: JobStatus, error: string | null = null): void {

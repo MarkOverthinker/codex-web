@@ -61,6 +61,11 @@ The dispatcher gives promoted jobs priority on restart, and the promotion API
 atomically moves the job into the running state so the immediate start works
 even while the regular queue pump is busy.
 
+Queue positions are computed per shared working directory: every running job
+and every queued job that precedes the current one in that directory counts as
+work ahead, so the UI can show both the remaining jobs and the current place
+in line. Standalone workspaces stay scoped to their own conversation.
+
 On graceful shutdown, dispatch stops first and the process waits for active Codex executions to finish; queued work remains durable. If the process disappears while a job is running, startup marks that job interrupted and appends a visible message/event. It does not automatically retry a possibly side-effecting turn.
 
 Conversation detail checks the current Codex rollout file size without loading the file. The UI warns at 500 MiB and points the user toward archiving the completed conversation and starting a fresh task.
