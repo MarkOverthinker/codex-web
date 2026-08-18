@@ -1947,7 +1947,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const target = event.currentTarget;
     target.setPointerCapture?.(event.pointerId);
     const move = (moveEvent: PointerEvent) => {
-      const deltaY = startY - moveEvent.clientY;
+      // 向下拖动（手指下移）展开更多条，向上拖动收起更少条。
+      const deltaY = moveEvent.clientY - startY;
       if (Math.abs(deltaY) >= TASK_CATEGORY_DRAG_THRESHOLD_PX) dragState.moved = true;
       if (!dragState.moved) return;
       const next = normalizeTaskCategoryVisibleCount(
