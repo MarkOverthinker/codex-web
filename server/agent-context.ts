@@ -25,6 +25,7 @@ const EXCEL_ATTACHMENT_RULES = [
 type TurnPromptOptions = {
   userPrompt: string;
   attachments: AgentAttachmentContext[];
+  presetPrompts?: Array<{ name: string; content: string }>;
   interruptedContext?: string;
   isolationReason?: string;
   runtimeWarning?: string;
@@ -33,6 +34,9 @@ type TurnPromptOptions = {
 
 export function buildAgentTurnPrompt(options: TurnPromptOptions): string {
   const parts = [options.userPrompt.trim() || "请根据本轮附件完成用户要求，并说明结果。"];
+  if (options.presetPrompts && options.presetPrompts.length > 0) {
+    parts.push(buildPresetPromptsBlock(options.presetPrompts));
+  }
   if (options.workingDirContext) {
     parts.push(
       `本任务使用宿主项目目录 ${options.workingDirContext.path} 作为工作目录，请优先遵循该项目自身的 AGENTS.md 与仓库约定。`
@@ -54,14 +58,26 @@ export function buildAgentTurnPrompt(options: TurnPromptOptions): string {
   return parts.join("\n\n");
 }
 
-export function buildAgentSteerPrompt(userPrompt: string, attachments: AgentAttachmentContext[]): string {
+export function buildAgentSteerPrompt(
+  userPrompt: string,
+  attachments: AgentAttachmentContext[],
+  presetPrompts: Array<{ name: string; content: string }> = [],
+): string {
   const instruction = userPrompt.trim() || "优先查看补充附件并据此调整当前工作。";
   const parts = [`实时调整当前任务：${instruction}`];
+  if (presetPrompts.length > 0) parts.push(buildPresetPromptsBlock(presetPrompts));
   if (attachments.length > 0) {
     parts.push(`补充附件：\n${attachments.map((file) => `- ${file.name}: ${file.path}`).join("\n")}`);
   }
   if (attachments.some(isExcelAttachment)) parts.push(EXCEL_ATTACHMENT_RULES);
   return parts.join("\n\n");
+}
+
+export function buildPresetPromptsBlock(presetPrompts: Array<{ name: string; content: string }>): string {
+  return [
+    "用户启用了以下预设规则，请遵守：",
+    ...presetPrompts.map((preset) => `【预设：${preset.name}】\n${preset.content}`),
+  ].join("\n\n");
 }
 
 function isExcelAttachment(file: AgentAttachmentContext): boolean {

@@ -118,9 +118,11 @@ export class CodexRunner {
       const hostTenant = hostTenantFor(this.config, this.db, conversation.user_id);
       if (hostTenant) chownTenantStorageIfNeeded(workspace, hostTenant.uid, hostTenant.gid);
     }
+    const presetPrompts = this.db.listEnabledPresetPrompts(conversation.id);
     const effectivePrompt = buildAgentSteerPrompt(
       prompt,
       this.attachmentContext(uploads, workspace),
+      presetPrompts,
     );
     const imagePaths = uploads
       .filter((file) => /^image\/(png|jpeg|webp)$/i.test(file.mime_type))
@@ -165,6 +167,7 @@ export class CodexRunner {
       const taskPolicy = assessTaskPolicy(prompt, uploads);
       const conversationMessages = this.db.listMessages(conversationId);
       const interruptedContext = latestUserCancellationContext(conversationMessages);
+      const presetPrompts = this.db.listEnabledPresetPrompts(conversationId);
       const optionalCapabilities = detectOptionalAgentCapabilities([
         ...conversationMessages.filter((message) => message.role === "user").map((message) => message.content),
         prompt,
@@ -176,6 +179,7 @@ export class CodexRunner {
       const effectivePrompt = buildAgentTurnPrompt({
         userPrompt: prompt,
         attachments: this.attachmentContext(uploads, workspace),
+        presetPrompts,
         interruptedContext,
         runtimeWarning: !pythonRuntime.ready
           ? "共享 Python 尚未初始化；如本轮需要 Python 或第三方包，请说明需要管理员先初始化，勿修改系统 Python。"
