@@ -11,9 +11,9 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - A responsive React chat interface for Codex CLI
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions; queued jobs can also be promoted to start immediately
 - Persistent attachments and generated deliverables
-- Side-by-side in-page previews for Markdown, text, CSV, PDF, and image outputs, with a per-conversation output-file strip; every attachment and output shows its real server path with a copy button, including referenced local files that were not registered as attachments
+- Side-by-side in-page previews for Markdown, text, CSV, PDF, and image outputs, with a per-conversation output-file strip; uploaded `.md` attachments are recognized by extension and rendered as Markdown in the same panel; every attachment and output shows its real server path with a copy button, including referenced local files that were not registered as attachments
 - Clickable `file:line` references in assistant replies open a lazy-loading code preview centered on the referenced line
-- Local code file paths without a line number are also clickable and open the same preview from the top of the file with downward lazy loading
+- Local code file paths without a line number are also clickable and open the same preview from the top of the file with downward lazy loading; `.md`/`.markdown` files render as a Markdown preview instead
 - Previous/next “my message” jump controls anchor to the viewport and auto-load older pages until the target user message is located
 - Temporary unauthenticated share links for previewable output files (HMAC-signed, 7-day expiry, outputs only)
 - Server-persistent unsent text, quotes, and attachments, restored across conversations, browsers, and devices

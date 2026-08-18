@@ -178,6 +178,7 @@ export type CodeSnippetWindow = {
   end: number;
   line: number;
   lines: string[];
+  content?: string;
 };
 export type ImportableSession = {
   threadId: string;
@@ -309,8 +310,8 @@ export const api = {
   conversationMessages: (id: string, before: string) => request<ConversationMessagesPage>(
     `/conversations/${id}/messages?before=${encodeURIComponent(before)}`,
   ),
-  codeSnippet: (conversationId: string, params: { path: string; line: number; before?: number; after?: number }, signal?: AbortSignal) => request<CodeSnippetWindow>(
-    `/conversations/${conversationId}/code-snippet?path=${encodeURIComponent(params.path)}&line=${params.line}${params.before ? `&before=${params.before}` : ""}${params.after ? `&after=${params.after}` : ""}`,
+  codeSnippet: (conversationId: string, params: { path: string; line: number; before?: number; after?: number; full?: boolean }, signal?: AbortSignal) => request<CodeSnippetWindow>(
+    `/conversations/${conversationId}/code-snippet?path=${encodeURIComponent(params.path)}&line=${params.line}${params.full ? "&full=1" : ""}${params.before ? `&before=${params.before}` : ""}${params.after ? `&after=${params.after}` : ""}`,
     { signal },
   ),
   createFileShare: (id: string) => request<{ url: string; expiresAt: string }>(`/files/${id}/share`, { method: "POST" }),

@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
+import { normalizeMathDelimiters } from "../src/markdown-math";
 
 function renderMarkdown(markdown: string): string {
   return renderToStaticMarkup(React.createElement(
@@ -15,7 +16,7 @@ function renderMarkdown(markdown: string): string {
       remarkPlugins: [remarkGfm, remarkMath],
       rehypePlugins: [[rehypeKatex, { throwOnError: false }], rehypeHighlight],
     },
-    markdown,
+    normalizeMathDelimiters(markdown),
   ));
 }
 
@@ -36,6 +37,30 @@ test("plain text and GFM content keep rendering without KaTeX interference", () 
   assert.match(html, /<strong>加粗<\/strong>/);
   assert.match(html, /<table>/);
   assert.match(html, /价格 \$5 和/);
+});
+
+test("LaTeX bracket math delimiters render as KaTeX", () => {
+  const escapedDisplay = renderMarkdown("公式如下：\n\n\\[\nq_t=\\frac{v_t}{A_d}.\n\\]\n\n结束。");
+  assert.match(escapedDisplay, /katex-display/);
+  assert.match(escapedDisplay, /mfrac/);
+
+  const escapedInline = renderMarkdown("由公式 \\(\\lambda=\\frac{k_2}{k_1}\\) 可得");
+  assert.match(escapedInline, /class="katex"/);
+  assert.match(escapedInline, /mfrac/);
+
+  const bareBrackets = renderMarkdown("流量公式：\n\n[\nq_t=\\frac{v_t}{A_d}.\n]\n\n结束。");
+  assert.match(bareBrackets, /katex-display/);
+  assert.match(bareBrackets, /mfrac/);
+});
+
+test("math normalization leaves code blocks and inline code untouched", () => {
+  const fenced = renderMarkdown("```tex\n\\[\nx^2\n\\]\n```");
+  assert.ok(!fenced.includes("katex-display"));
+  assert.match(fenced, /x\^2/);
+
+  const inlineCode = renderMarkdown("行内代码 `\\(x^2\\)` 不渲染公式");
+  assert.ok(!inlineCode.includes('class="katex"'));
+  assert.match(inlineCode, /<code>/);
 });
 
 test("code blocks get syntax highlighting while unknown languages stay readable", () => {

@@ -814,8 +814,10 @@ test("path confinement rejects traversal", () => {
   const root = path.join(os.tmpdir(), "cww-root");
   assert.equal(resolveInside(root, "outputs/result.txt"), path.join(root, "outputs", "result.txt"));
   assert.equal(resolveInside(root, "outputs\\legacy.txt"), path.join(root, "outputs", "legacy.txt"));
+  assert.equal(resolveInside(root, path.join(root, "outputs", "result.txt")), path.join(root, "outputs", "result.txt"));
   assert.equal(normalizeStoredRelativePath("outputs\\legacy.txt"), "outputs/legacy.txt");
   assert.throws(() => resolveInside(root, "../secret.txt"), /escapes workspace/);
+  assert.throws(() => resolveInside(root, path.join(os.tmpdir(), "outside.txt")), /escapes workspace/);
   const safe = safeUploadName("../../bad:name?.pptx");
   assert.match(safe.diskName, /^[0-9a-f-]{36}\.pptx$/);
   assert.equal(safe.displayName, "bad_name_.pptx");
@@ -1796,6 +1798,35 @@ test("code snippet API returns bounded line windows and rejects unsafe paths", a
 
   await agent.post(`/codex-web/api/conversations/${conversationId}/archive`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   await agent.get(`${base}?path=${encodeURIComponent("src/demo.py")}&line=50`).expect(200);
+});
+
+test("code snippet API resolves absolute paths inside the host working directory", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-code-snippet-absolute-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const workingDir = path.join(root, "project");
+  fs.mkdirSync(path.join(workingDir, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workingDir, "src", "demo.py"), Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n") + "\n");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    hostMode: true, codexHome: path.join(root, "codex-home"),
+    username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id;
+  instance.db.updateConversation(conversationId, { workingDir });
+  const base = `/codex-web/api/conversations/${conversationId}/code-snippet`;
+
+  const inside = await agent.get(`${base}?path=${encodeURIComponent(path.join(workingDir, "src", "demo.py"))}&line=20&before=2&after=2`).expect(200);
+  assert.equal(inside.body.totalLines, 40);
+  assert.equal(inside.body.lines[2], "line 20");
+
+  const outside = path.join(root, "outside.py");
+  fs.writeFileSync(outside, "x = 1\n");
+  await agent.get(`${base}?path=${encodeURIComponent(outside)}&line=1`).expect(404);
 });
 
 test("output files can be shared as temporary unauthenticated preview links", async (context) => {

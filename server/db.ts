@@ -832,6 +832,10 @@ export class AppDatabase {
     this.sqlite.prepare("UPDATE files SET relative_path=? WHERE id=?").run(normalizeStoredRelativePath(relativePath), id);
   }
 
+  updateFileMime(id: string, mimeType: string): void {
+    this.sqlite.prepare("UPDATE files SET mime_type=? WHERE id=?").run(mimeType, id);
+  }
+
   ensureComposerDraft(conversationId: string): ComposerDraftWithFiles {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
