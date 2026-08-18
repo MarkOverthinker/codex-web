@@ -170,6 +170,23 @@ export type ProviderModelRow = {
   updated_at: string;
 };
 
+export type PresetPromptRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  content: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnabledPresetPrompt = {
+  id: string;
+  name: string;
+  content: string;
+  position: number;
+};
+
 export type WorkingDirectoryFavorite = {
   path: string;
   label: string;
@@ -177,6 +194,12 @@ export type WorkingDirectoryFavorite = {
 };
 
 type LegacyUserSeed = { username: string; passwordHash: string; displayName?: string };
+
+export const MAX_PRESET_PROMPTS_PER_USER = 100;
+export const MAX_CONVERSATION_PRESET_PROMPTS = 20;
+export const PRESET_PROMPT_NAME_MAX = 50;
+export const PRESET_PROMPT_CONTENT_MAX = 10_000;
+export const PRESET_PROMPT_TOTAL_MAX = 50_000;
 
 const conversationSelect = `
   conversations.*,
@@ -335,6 +358,23 @@ export class AppDatabase {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(user_id, key)
       );
+      CREATE TABLE IF NOT EXISTS preset_prompts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(user_id, id)
+      );
+      CREATE TABLE IF NOT EXISTS conversation_preset_prompts (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        preset_prompt_id TEXT NOT NULL REFERENCES preset_prompts(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(conversation_id, preset_prompt_id)
+      );
       CREATE TABLE IF NOT EXISTS providers (
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         id TEXT NOT NULL,
@@ -449,6 +489,8 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
       CREATE INDEX IF NOT EXISTS providers_enabled_idx ON providers(user_id, enabled, created_at);
       CREATE INDEX IF NOT EXISTS provider_models_provider_idx ON provider_models(user_id, provider_id, priority, created_at);
+      CREATE INDEX IF NOT EXISTS preset_prompts_user_idx ON preset_prompts(user_id, position);
+      CREATE INDEX IF NOT EXISTS conversation_preset_prompts_conversation_idx ON conversation_preset_prompts(conversation_id, position);
     `);
 
     const uploadedFiles = this.sqlite.prepare("SELECT id,original_name FROM files WHERE kind='upload'").all() as Array<{ id: string; original_name: string }>;
@@ -1363,6 +1405,87 @@ export class AppDatabase {
       INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'task_list_categories',?,?)
       ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
     `).run(userId, JSON.stringify(safe), new Date().toISOString());
+  }
+
+  listPresetPrompts(userId = LEGACY_USER_ID): PresetPromptRow[] {
+    return this.sqlite.prepare("SELECT * FROM preset_prompts WHERE user_id=? ORDER BY position,created_at,id").all(userId) as PresetPromptRow[];
+  }
+
+  getPresetPrompt(userId: string, id: string): PresetPromptRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM preset_prompts WHERE user_id=? AND id=?").get(userId, id) as PresetPromptRow | undefined;
+  }
+
+  createPresetPrompt(userId: string, id: string, name: string, content: string): PresetPromptRow {
+    const now = new Date().toISOString();
+    const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),-1)+1 AS value FROM preset_prompts WHERE user_id=?").get(userId) as { value: number };
+    this.sqlite.prepare("INSERT INTO preset_prompts(id,user_id,name,content,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?)")
+      .run(id, userId, name, content, next.value, now, now);
+    return this.getPresetPrompt(userId, id)!;
+  }
+
+  updatePresetPrompt(userId: string, id: string, fields: { name?: string; content?: string; position?: number }): PresetPromptRow | undefined {
+    const current = this.getPresetPrompt(userId, id);
+    if (!current) return undefined;
+    const now = new Date().toISOString();
+    this.sqlite.prepare("UPDATE preset_prompts SET name=?,content=?,position=?,updated_at=? WHERE user_id=? AND id=?")
+      .run(
+        fields.name ?? current.name,
+        fields.content ?? current.content,
+        fields.position ?? current.position,
+        now,
+        userId,
+        id,
+      );
+    return this.getPresetPrompt(userId, id);
+  }
+
+  deletePresetPrompt(userId: string, id: string): boolean {
+    return this.sqlite.prepare("DELETE FROM preset_prompts WHERE user_id=? AND id=?").run(userId, id).changes > 0;
+  }
+
+  getConversationPresetPromptIds(conversationId: string): string[] {
+    const rows = this.sqlite.prepare(`
+      SELECT link.preset_prompt_id AS id
+      FROM conversation_preset_prompts link
+      JOIN preset_prompts preset ON preset.id=link.preset_prompt_id
+      WHERE link.conversation_id=?
+      ORDER BY link.position,preset.position,link.preset_prompt_id
+    `).all(conversationId) as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
+  setConversationPresetPrompts(conversationId: string, userId: string, presetPromptIds: string[]): string[] | null {
+    const conversation = this.getConversationForUser(conversationId, userId);
+    if (!conversation) return null;
+    const uniqueIds = [...new Set(presetPromptIds)];
+    if (uniqueIds.length > MAX_CONVERSATION_PRESET_PROMPTS) return null;
+    const validIds: string[] = [];
+    for (const id of uniqueIds) {
+      if (!this.getPresetPrompt(userId, id)) return null;
+      validIds.push(id);
+    }
+    const now = new Date().toISOString();
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      this.sqlite.prepare("DELETE FROM conversation_preset_prompts WHERE conversation_id=?").run(conversationId);
+      const insert = this.sqlite.prepare("INSERT INTO conversation_preset_prompts(conversation_id,preset_prompt_id,position,created_at) VALUES(?,?,?,?)");
+      validIds.forEach((id, index) => insert.run(conversationId, id, index, now));
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return validIds;
+  }
+
+  listEnabledPresetPrompts(conversationId: string): EnabledPresetPrompt[] {
+    return this.sqlite.prepare(`
+      SELECT preset.id,preset.name,preset.content,link.position
+      FROM conversation_preset_prompts link
+      JOIN preset_prompts preset ON preset.id=link.preset_prompt_id
+      WHERE link.conversation_id=?
+      ORDER BY link.position,preset.position,preset.id
+    `).all(conversationId) as EnabledPresetPrompt[];
   }
 
   createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection): JobRow {
