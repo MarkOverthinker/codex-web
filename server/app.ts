@@ -497,7 +497,7 @@ export function createApp(overrides: AppOverrides = {}) {
         status: "queued",
         queuePosition,
         jobsAhead,
-        label: jobsAhead === 0 ? "任务即将开始" : `正在等待本会话前面的 ${jobsAhead} 个任务运行完毕`,
+        label: jobsAhead === 0 ? "任务即将开始" : `正在等待前面的 ${jobsAhead} 个任务运行完毕`,
       });
     }
   }

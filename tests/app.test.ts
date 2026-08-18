@@ -543,6 +543,8 @@ test("queued jobs expose a skip-queue action in the process panel", () => {
   assert.match(apiSource, /skipQueuedJob: \(id: string\) => request<\{ ok: true; job\?: Job \}\>\(`\/jobs\/\$\{id\}\/skip-queue`/);
   assert.match(appSource, /跳过排队直接执行/);
   assert.match(appSource, /window\.confirm\("跳过排队将立即启动该任务/);
+  assert.match(appSource, /前方还有 \$\{queueStatus\.jobsAhead\} 个任务 · 当前排在第 \$\{queueStatus\.queuePosition\} 位/);
+  assert.match(appSource, /前方无任务，即将自动开始/);
   assert.match(appSource, /activity-skip-queue/);
   assert.match(styles, /\.activity-skip-queue \{/);
 });
@@ -1191,8 +1193,10 @@ test("shared host working dirs serialize queued jobs across conversations", (con
   db.updateJob(runningJob, "running");
   db.createJob(queuedJob, second);
   assert.equal(db.getNextRunnableQueuedJob()?.id, undefined);
+  assert.equal(db.getQueuePosition(queuedJob), 2);
   db.finishJob(runningJob, first, "completed");
   assert.equal(db.getNextRunnableQueuedJob()?.id, queuedJob);
+  assert.equal(db.getQueuePosition(queuedJob), 1);
   db.finishJob(queuedJob, second, "completed");
   assert.equal(db.getNextRunnableQueuedJob(), undefined);
 });
@@ -3067,6 +3071,7 @@ test("a queued job can skip the shared-directory queue and start immediately", a
     .set("X-CSRF-Token", csrf).send({ message: "second" }).expect(202);
   const firstId = first.body.job.id as string;
   const secondId = second.body.job.id as string;
+  assert.equal(second.body.job.queuePosition, 2);
 
   const started: string[] = [];
   const release = new Map<string, () => void>();
