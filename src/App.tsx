@@ -51,7 +51,7 @@ const SIDEBAR_WIDTH_MIN = 220;
 const SIDEBAR_WIDTH_MAX = 460;
 const PREVIEW_WIDTH_MIN = 320;
 const PREVIEW_WIDTH_MAX = 960;
-const COMPOSER_TEXT_HEIGHT_MIN = 56;
+const COMPOSER_TEXT_HEIGHT_MIN = 72;
 const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
@@ -3073,7 +3073,6 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   const pasteTimer = useRef<number | undefined>(undefined);
   const [pasteNotice, setPasteNotice] = useState("");
   const [composerTextHeight, setComposerTextHeight] = useState<number | null>(null);
-  const [presetsOpen, setPresetsOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [voiceElapsed, setVoiceElapsed] = useState(0);
   const [voiceError, setVoiceError] = useState("");
@@ -3342,6 +3341,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
       {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
     </div>}
     <div className="composer-actions"><div className="composer-primary-actions"><button className="attach-button" onClick={() => fileInput.current?.click()} disabled={submitting}><Paperclip size={17} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
+      <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <SettingMenu className="model" label="模型" value={selectedModel} options={modelOptions} placeholder="加载中" title={selectedModelOption?.description || "选择任务使用的模型"} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
     </div>
@@ -3352,28 +3352,50 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
           : <button type="button" className="send-button" onClick={() => voiceState === "recording" ? finishRecording(true) : onSend()} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceState === "transcribing" || (voiceState !== "recording" && !input.trim() && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title={voiceState === "recording" ? "识别语音并发送" : "发送"} aria-label={voiceState === "recording" ? "识别语音并发送" : "发送"}>{submitting || voiceState === "transcribing" ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
       </div>
     </div>
-  </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p>
-  <div className="composer-presets">
-    <button type="button" className="composer-presets-toggle" aria-expanded={presetsOpen} onClick={() => setPresetsOpen((open) => !open)}>
-      <ListChecks size={14} /><span>预设 Prompt</span>
-      <small>{presetPrompts.length === 0 ? "未添加" : `${enabledPresetPromptIds.length}/${presetPrompts.length} 已启用`}</small>
-      {presetsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+  </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p></div>;
+}
+
+function PresetMenu({ conversationId, presetPrompts, enabledPresetPromptIds, disabled, saving, onToggle, onOpenManager }: {
+  conversationId: string | null;
+  presetPrompts: PresetPrompt[];
+  enabledPresetPromptIds: string[];
+  disabled: boolean;
+  saving: boolean;
+  onToggle: (id: string, enabled: boolean) => void;
+  onOpenManager: () => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const enabledCount = enabledPresetPromptIds.length;
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+  useEffect(() => {
+    if (!open) return;
+    function closeFromOutside(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    window.addEventListener("pointerdown", closeFromOutside);
+    return () => window.removeEventListener("pointerdown", closeFromOutside);
+  }, [open]);
+
+  return <div ref={rootRef} className="preset-menu">
+    <button type="button" className="setting-select preset-select" aria-label="预设 Prompt" aria-haspopup="true" aria-expanded={open} disabled={disabled} title="选择随任务附加的预设 Prompt" onClick={() => setOpen((current) => !current)}>
+      <ListChecks size={14} /><span>预设</span><strong className="setting-value">{presetPrompts.length === 0 ? "未添加" : `${enabledCount}/${presetPrompts.length}`}</strong><ChevronDown size={13} />
     </button>
-    {presetsOpen && <div className="composer-presets-list">
+    {open && <div className="preset-menu-panel" role="group" aria-label="预设 Prompt">
       {presetPrompts.length === 0
-        ? <div className="composer-presets-empty">还没有预设 Prompt，可以点击“管理预设”创建。</div>
+        ? <div className="preset-menu-empty">还没有预设 Prompt，先点击“管理预设”创建。</div>
         : presetPrompts.map((preset) => (
-          <label key={preset.id} className={`composer-preset-item ${enabledPresetPromptIds.includes(preset.id) ? "enabled" : ""}`}>
-            <input type="checkbox" checked={enabledPresetPromptIds.includes(preset.id)} disabled={presetSaving || submitting || !conversationId} onChange={(event) => onTogglePresetPrompt(preset.id, event.currentTarget.checked)} />
-            <span className="composer-preset-copy">
-              <strong>{preset.name}</strong>
-              <small title={preset.content}>{preset.content.length > 90 ? `${preset.content.slice(0, 90)}…` : preset.content}</small>
-            </span>
+          <label key={preset.id} className={`preset-menu-item ${enabledPresetPromptIds.includes(preset.id) ? "enabled" : ""}`}>
+            <input type="checkbox" checked={enabledPresetPromptIds.includes(preset.id)} disabled={disabled || saving} onChange={(event) => onToggle(preset.id, event.currentTarget.checked)} />
+            <span className="preset-menu-copy"><strong>{preset.name}</strong><small title={preset.content}>{preset.content.length > 90 ? `${preset.content.slice(0, 90)}…` : preset.content}</small></span>
           </label>
         ))}
-      <button type="button" className="composer-presets-manage" onClick={onOpenPresetManager}><Settings2 size={13} />管理预设</button>
+      <button type="button" className="preset-menu-manage" onClick={() => { setOpen(false); onOpenManager(); }}><Settings2 size={13} />管理预设</button>
     </div>}
-  </div></div>;
+  </div>;
 }
 
 type SettingMenuOption = { id: string; label: string; description?: string };
