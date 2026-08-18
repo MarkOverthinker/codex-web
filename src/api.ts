@@ -379,6 +379,7 @@ export const api = {
   steerPendingPrompt: (conversationId: string, promptId: string) => request<{ ok: true; turnId: string }>(
     `/conversations/${conversationId}/pending-prompts/${promptId}/steer`, { method: "POST" },
   ),
+  skipQueuedJob: (id: string) => request<{ ok: true; job?: Job }>(`/jobs/${id}/skip-queue`, { method: "POST" }),
   cancelJob: (id: string) => request<{ ok: true }>(`/jobs/${id}/cancel`, { method: "POST" }),
   reportClientError: (report: { message: string; stack?: string; componentStack?: string; source: string; href: string }) =>
     request<{ ok: true }>("/client-errors", { method: "POST", body: JSON.stringify(report) }),

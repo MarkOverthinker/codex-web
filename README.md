@@ -1,6 +1,6 @@
 # Codex Web
 
-An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, user-managed preset prompts with per-conversation toggles, and optional voice transcription.
+An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues with an optional skip-the-queue immediate start, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, user-managed preset prompts with per-conversation toggles, and optional voice transcription.
 
 > Codex Web is an independent community project. It is not affiliated with, endorsed by, or supported by OpenAI.
 
@@ -9,7 +9,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 ## What it includes
 
 - A responsive React chat interface for Codex CLI
-- Server-persistent queued prompts with reorder, edit, delete, and steer actions
+- Server-persistent queued prompts with reorder, edit, delete, and steer actions; queued jobs can also be promoted to start immediately
 - Persistent attachments and generated deliverables
 - Side-by-side in-page previews for Markdown, text, CSV, PDF, and image outputs, with a per-conversation output-file strip; every attachment and output shows its real server path with a copy button, including referenced local files that were not registered as attachments
 - Clickable `file:line` references in assistant replies open a lazy-loading code preview centered on the referenced line
@@ -30,7 +30,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - A durable live work journal with retained stage feedback and grouped command steps
 - Running work journals expand inline with the page instead of creating a nested vertical scroller
 - Unread-result markers for completed conversations until their detail is viewed
-- Distinct running and queued indicators, plus a stable overflow menu for task actions
+- Distinct running and queued indicators, a skip-queue action while waiting, plus a stable overflow menu for task actions
 - A 500 MiB Codex rollout warning that suggests archiving very long conversations
 - Light, dark, and system-following appearance modes
 - Select message text and attach it as a removable, server-persisted reference to a new Agent question

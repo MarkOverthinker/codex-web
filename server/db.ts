@@ -110,6 +110,7 @@ export type JobRow = {
   reasoning_effort: string | null;
   agent_provider: string | null;
   queue_seq: number;
+  skip_queue: number;
   status: JobStatus;
   error: string | null;
   created_at: string;
@@ -325,6 +326,7 @@ export class AppDatabase {
         message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
         agent_model TEXT,
         reasoning_effort TEXT,
+        skip_queue INTEGER NOT NULL DEFAULT 0,
         queue_seq INTEGER,
         status TEXT NOT NULL,
         error TEXT,
@@ -440,6 +442,7 @@ export class AppDatabase {
     if (!pendingPromptColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN agent_provider TEXT");
     const jobColumnsAfter = this.columnNames("jobs");
     if (!jobColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN agent_provider TEXT");
+    if (!jobColumnsAfter.has("skip_queue")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN skip_queue INTEGER NOT NULL DEFAULT 0");
     const providerColumns = this.columnNames("providers");
     if (!providerColumns.has("models_file")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN models_file TEXT");
     if (!providerColumns.has("extra_config")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN extra_config TEXT");
@@ -1518,6 +1521,15 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT j.* FROM jobs j JOIN conversations c ON c.id=j.conversation_id WHERE j.status='queued' AND c.deleted_at IS NULL ORDER BY j.queue_seq LIMIT 1").get() as JobRow | undefined;
   }
 
+  getNextSkipQueueJob(): JobRow | undefined {
+    return this.sqlite.prepare(`
+      SELECT j.* FROM jobs j JOIN conversations c ON c.id=j.conversation_id
+      WHERE j.status='queued' AND j.skip_queue=1 AND c.deleted_at IS NULL
+      ORDER BY j.queue_seq
+      LIMIT 1
+    `).get() as JobRow | undefined;
+  }
+
   getNextRunnableQueuedJob(): JobRow | undefined {
     return this.sqlite.prepare(`
       SELECT queued.* FROM jobs queued JOIN conversations conversation ON conversation.id=queued.conversation_id
@@ -1585,6 +1597,31 @@ export class AppDatabase {
 
   updateJob(id: string, status: JobStatus, error: string | null = null): void {
     this.sqlite.prepare("UPDATE jobs SET status=?, error=?, updated_at=? WHERE id=?").run(status, error, new Date().toISOString(), id);
+  }
+
+  markJobSkipQueue(id: string): boolean {
+    const result = this.sqlite.prepare("UPDATE jobs SET skip_queue=1,updated_at=? WHERE id=? AND status='queued'").run(new Date().toISOString(), id);
+    return result.changes > 0;
+  }
+
+  startJobImmediately(id: string): JobRow | undefined {
+    const job = this.getJob(id);
+    if (!job || job.status !== "queued") return undefined;
+    const now = new Date().toISOString();
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.sqlite.prepare("UPDATE jobs SET status='running',skip_queue=1,updated_at=? WHERE id=? AND status='queued'").run(now, id);
+      if (result.changes === 0) {
+        this.sqlite.exec("ROLLBACK");
+        return undefined;
+      }
+      this.sqlite.prepare("UPDATE conversations SET status='running',updated_at=? WHERE id=?").run(now, job.conversation_id);
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getJob(id);
   }
 
   cancelQueuedJob(id: string): boolean {

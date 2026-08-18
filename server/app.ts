@@ -527,7 +527,9 @@ export function createApp(overrides: AppOverrides = {}) {
     try {
       for (;;) {
         if (shuttingDown) break;
-        let job = db.getNextRunnableQueuedJob();
+        // Jobs explicitly promoted past the queue must start first, even when
+        // another session is already running in the same working directory.
+        let job = db.getNextSkipQueueJob() ?? db.getNextRunnableQueuedJob();
         if (!job) {
           const pending = db.getNextDispatchablePendingPrompt();
           if (pending) {
@@ -2078,6 +2080,25 @@ export function createApp(overrides: AppOverrides = {}) {
       set.delete(res);
       if (set.size === 0) subscribers.delete(job.id);
     });
+  });
+
+  api.post("/jobs/:id/skip-queue", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const job = db.getJobForUser(String(req.params.id), session.user_id);
+    if (!job) return res.status(404).json({ error: "任务不存在。" });
+    if (shuttingDown) return res.status(503).json({ error: "服务正在停止，无法启动新任务。" });
+    if (job.status !== "queued" || !db.markJobSkipQueue(job.id)) {
+      return res.status(409).json({ error: "任务已经不在排队状态。" });
+    }
+    publishQueuePositions();
+    const started = db.startJobImmediately(job.id);
+    if (!started) {
+      // The queue pump may have already promoted this job; the client refresh
+      // will observe the running state either way.
+      return res.json({ ok: true, job: db.getJob(job.id) });
+    }
+    void runQueuedJob(started);
+    return res.json({ ok: true, job: { ...started, queuePosition: 0 } });
   });
 
   api.post("/jobs/:id/cancel", async (req, res) => {

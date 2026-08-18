@@ -536,6 +536,17 @@ test("pending queue stays translucent and vertically compact in both themes", ()
   assert.match(styles, /:root\[data-theme="dark"\] \.pending-queue \{[^}]*background: rgba\(40, 41, 46, \.72\);/);
 });
 
+test("queued jobs expose a skip-queue action in the process panel", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(apiSource, /skipQueuedJob: \(id: string\) => request<\{ ok: true; job\?: Job \}\>\(`\/jobs\/\$\{id\}\/skip-queue`/);
+  assert.match(appSource, /跳过排队直接执行/);
+  assert.match(appSource, /window\.confirm\("跳过排队将立即启动该任务/);
+  assert.match(appSource, /activity-skip-queue/);
+  assert.match(styles, /\.activity-skip-queue \{/);
+});
+
 test("live updates pause while reading older paged messages", () => {
   assert.equal(resolveScrollFollow({ previousScrollTop: 500, scrollTop: 496, scrollHeight: 1000, clientHeight: 500, following: true }), false);
   assert.equal(resolveScrollFollow({ previousScrollTop: 420, scrollTop: 420, scrollHeight: 1080, clientHeight: 500, following: true }), true);
@@ -1183,6 +1194,33 @@ test("shared host working dirs serialize queued jobs across conversations", (con
   db.finishJob(runningJob, first, "completed");
   assert.equal(db.getNextRunnableQueuedJob()?.id, queuedJob);
   db.finishJob(queuedJob, second, "completed");
+  assert.equal(db.getNextRunnableQueuedJob(), undefined);
+});
+
+test("a job marked skip-queue can start while the shared working dir is busy", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-skip-queue-db-test-"));
+  const db = new AppDatabase(root);
+  context.after(() => { db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const shared = path.join(root, "shared-project");
+  fs.mkdirSync(shared, { recursive: true });
+  const first = crypto.randomUUID();
+  const second = crypto.randomUUID();
+  db.createConversation(first, "first", undefined, LEGACY_USER_ID, shared);
+  db.createConversation(second, "second", undefined, LEGACY_USER_ID, shared);
+  const runningJob = crypto.randomUUID();
+  const queuedJob = crypto.randomUUID();
+  db.createJob(runningJob, first);
+  db.updateJob(runningJob, "running");
+  db.createJob(queuedJob, second);
+  assert.equal(db.getNextRunnableQueuedJob()?.id, undefined);
+  assert.equal(db.markJobSkipQueue(queuedJob), true);
+  assert.equal(db.getNextSkipQueueJob()?.id, queuedJob);
+  const started = db.startJobImmediately(queuedJob);
+  assert.equal(started?.id, queuedJob);
+  assert.equal(started?.status, "running");
+  assert.equal(started?.skip_queue, 1);
+  assert.equal(db.getJob(runningJob)?.status, "running");
   assert.equal(db.getNextRunnableQueuedJob(), undefined);
 });
 
@@ -3004,6 +3042,62 @@ test("different conversations start concurrently without global or per-user limi
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   assert.deepEqual(jobIds.map((id) => instance.db.getJob(id)?.status), ["completed", "completed", "completed"]);
+});
+
+test("a queued job can skip the shared-directory queue and start immediately", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-skip-queue-api-test-"));
+  const shared = path.join(root, "shared-project");
+  fs.mkdirSync(shared, { recursive: true });
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Skip-Queue-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Skip-Queue-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const firstCreated = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const secondCreated = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  instance.db.updateConversation(firstCreated.body.conversation.id, { workingDir: shared });
+  instance.db.updateConversation(secondCreated.body.conversation.id, { workingDir: shared });
+  const first = await agent.post(`/codex-web/api/conversations/${firstCreated.body.conversation.id}/messages`)
+    .set("X-CSRF-Token", csrf).send({ message: "first" }).expect(202);
+  const second = await agent.post(`/codex-web/api/conversations/${secondCreated.body.conversation.id}/messages`)
+    .set("X-CSRF-Token", csrf).send({ message: "second" }).expect(202);
+  const firstId = first.body.job.id as string;
+  const secondId = second.body.job.id as string;
+
+  const started: string[] = [];
+  const release = new Map<string, () => void>();
+  instance.runner.run = async (jobId, conversationId) => {
+    started.push(jobId);
+    await new Promise<void>((resolve) => release.set(jobId, resolve));
+    instance.db.finishJob(jobId, conversationId, "completed");
+  };
+  await instance.pumpQueue();
+  for (let attempt = 0; attempt < 20 && started.length < 1; attempt += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(started, [firstId]);
+  assert.equal(instance.db.getJob(secondId)?.status, "queued");
+
+  await agent.post(`/codex-web/api/jobs/${secondId}/skip-queue`).set("X-CSRF-Token", csrf).expect(200);
+  for (let attempt = 0; attempt < 20 && !started.includes(secondId); attempt += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.ok(started.includes(secondId));
+  assert.equal(instance.db.getJob(secondId)?.status, "running");
+  assert.equal(instance.db.getJob(secondId)?.skip_queue, 1);
+  assert.equal(instance.db.getJob(firstId)?.status, "running");
+
+  release.get(firstId)!();
+  release.get(secondId)!();
+  for (let attempt = 0; attempt < 20 && [firstId, secondId].some((id) => instance.db.getJob(id)?.status !== "completed"); attempt += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual([firstId, secondId].map((id) => instance.db.getJob(id)?.status), ["completed", "completed"]);
+  assert.equal(instance.db.listQueuedJobs().length, 0);
 });
 
 test("database restart keeps queued work but interrupts a previously running job", (context) => {
