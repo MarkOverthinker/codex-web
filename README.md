@@ -252,7 +252,9 @@ category's working directory; custom categories with several directories ask
 you to pick one first. Hidden categories can be restored from the category
 manager. The sidebar offers both a vertical list and a grid view; in grid view
 each card is a category with its tasks, and “N more” expands the card to show
-all tasks. Cards are laid out
+all tasks. The expand/collapse control can also be pressed and dragged up or
+down to pick how many tasks each category shows; the per-category count is
+remembered in the browser. Cards are laid out
 in priority order from top-left to bottom-right: the first row fills left to
 right, then each card joins the column with the smallest current height (ties
 go to the leftmost column), so cards with different heights no longer leave
