@@ -473,9 +473,11 @@ test("provider management stays vertically scrollable on mobile web", () => {
   assert.match(providerMobileBlock, /\.provider-manager-list,[\s\S]*?\.provider-form-fields \{ overflow-y: scroll; \}/);
 });
 
-test("offscreen message cards stay out of scroll painting", () => {
+test("offscreen user messages stay out of scroll painting", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
-  assert.match(styles, /\.message \{[^}]*content-visibility: auto;[^}]*contain-intrinsic-size: auto 320px;/);
+  assert.match(styles, /\.message\.user \{[^}]*content-visibility: auto;[^}]*contain-intrinsic-size: auto 320px;/);
+  const baseMessage = styles.match(/\.message \{[^}]*\}/)?.[0] ?? "";
+  assert.doesNotMatch(baseMessage, /content-visibility/);
 });
 
 test("rollout capacity warning uses a 500 MiB threshold and readable binary units", () => {

@@ -29,9 +29,13 @@ The browser keeps the long-running task view responsive by batching SSE
 progress events into short render frames and by memoizing the message list,
 individual Markdown messages, and conversation rows. Conversation polling
 compares list fields before replacing state, search uses a deferred value, and
-off-screen sidebar rows and message cards use `content-visibility` so idle
-tasks do not repaint the whole sidebar on every progress event and long chat
-threads stay cheap to scroll on slower devices.
+off-screen sidebar rows and user message cards use `content-visibility` so
+idle tasks do not repaint the whole sidebar on every progress event and long
+chat threads stay cheap to scroll on slower devices. Assistant replies stay
+fully laid out: their real height can be far larger than the 320px off-screen
+placeholder, and reserving less than the real height collapses `scrollHeight`
+and makes the browser clamp the viewport back to an earlier message while
+scrolling toward the top of a reply.
 
 Markdown rendering uses GFM, KaTeX for `$...$`/`$$...$$` math, and static
 highlight.js token styling for fenced code blocks; malformed math falls back
