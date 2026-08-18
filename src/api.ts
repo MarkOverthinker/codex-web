@@ -12,6 +12,20 @@ export type Conversation = {
 };
 export type WorkingDirFavorite = { path: string; label: string; added_at: string };
 export type WorkingDirSettings = { enabled: boolean; favorites: WorkingDirFavorite[]; defaultWorkingDir: string | null };
+export type HostPathEntryType = "dir" | "file" | "link" | "other";
+export type HostPathEntry = {
+  name: string;
+  path: string;
+  type: HostPathEntryType;
+  size: number | null;
+  mtime: string | null;
+};
+export type HostDirectoryListing = {
+  path: string;
+  parent: string | null;
+  entries: HostPathEntry[];
+  truncated: boolean;
+};
 export type ReloadStatus = {
   available: boolean;
   state?: string;
@@ -260,6 +274,9 @@ export const api = {
     method: "PUT", body: JSON.stringify({ chatColumnWidth }),
   }),
   workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
+  browsePath: (path?: string) => request<{ listing: HostDirectoryListing }>(
+    `/path-browser${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+  ),
   reloadStatus: () => request<ReloadStatus>("/reload-status"),
   updateFavoriteWorkingDir: (payload: { action: "add" | "remove" | "rename" | "move"; path?: string; label?: string; direction?: "up" | "down" }) =>
     request<{ settings: WorkingDirSettings }>("/working-dirs/favorites", { method: "PUT", body: JSON.stringify(payload) }),
@@ -311,6 +328,11 @@ export const api = {
     files.forEach((file) => body.append("files", file));
     return request<{ composerDraft: ComposerDraft }>(`/conversations/${id}/draft/files`, { method: "POST", body });
   },
+  addHostDraftFiles: (id: string, paths: string[]) =>
+    request<{ composerDraft: ComposerDraft }>(`/conversations/${id}/draft/files/from-host`, {
+      method: "POST",
+      body: JSON.stringify({ paths }),
+    }),
   deleteConversationDraftFile: (id: string, fileId: string) => request<{ composerDraft: ComposerDraft | null }>(
     `/conversations/${id}/draft/files/${fileId}`, { method: "DELETE" },
   ),
