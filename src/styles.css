@@ -552,8 +552,15 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
   grid-template-columns: 32px minmax(0, 1fr);
   gap: 12px;
   margin-bottom: 26px;
-  /* Keep offscreen Markdown cards out of layout and paint while scrolling a
-     long thread. The remembered size keeps the scrollbar stable. */
+}
+.message.user {
+  /* Keep offscreen user messages out of layout and paint while scrolling a
+     long thread. User messages are short and size-predictable, so the
+     remembered size keeps the scrollbar stable. Assistant replies can be
+     thousands of pixels tall; skipping them with a 320px placeholder makes
+     scrollHeight under-report their real height, and the browser clamps
+     scrollTop when they are laid out, flinging the viewport to the previous
+     message. */
   content-visibility: auto;
   contain-intrinsic-size: auto 320px;
 }
