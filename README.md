@@ -1,6 +1,6 @@
 # Codex Web
 
-An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, and optional voice transcription.
+An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, user-managed preset prompts with per-conversation toggles, and optional voice transcription.
 
 > Codex Web is an independent community project. It is not affiliated with, endorsed by, or supported by OpenAI.
 
@@ -20,6 +20,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Codex thread persistence across browser restarts
 - Import existing local Codex CLI sessions (rollout files in the executor's `sessions/` and `archived_sessions/`) as web conversations, then continue them from the browser
 - Multi-provider management with a "source · model" picker: enable/disable API sources, control per-model visibility, and switch providers per task through the app-server protocol (`modelProvider`) without touching live configuration or isolating session history (see [docs/PROVIDER_MANAGEMENT.md](docs/PROVIDER_MANAGEMENT.md))
+- User-managed preset prompts: create, edit, and delete named rules from account settings, then enable them per conversation in a collapsible panel below the composer; enabled prompts are appended to every task automatically
 - Soft-deleted conversation audit records while workspace files are removed
 - Archive and restore completed conversations without deleting their history or files
 - Cancellation that retains a concise history of completed work so the next turn can resume from it
