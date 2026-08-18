@@ -297,6 +297,11 @@ export const api = {
     request<{ settings: TaskListCategorySettings }>("/task-categories/pins", { method: "PUT", body: JSON.stringify({ keys }) }),
   updateTaskCategoryHidden: (keys: string[]) =>
     request<{ settings: TaskListCategorySettings }>("/task-categories/hidden", { method: "PUT", body: JSON.stringify({ keys }) }),
+  updateTaskCategoryConversationOrder: (categoryKey: string, conversationIds: string[]) =>
+    request<{ settings: TaskListCategorySettings }>("/task-categories/conversation-order", {
+      method: "PUT",
+      body: JSON.stringify({ categoryKey, conversationIds }),
+    }),
   createConversation: (workingDir?: string | null) =>
     request<{ conversation: Conversation; agentSelection: AgentSelection }>("/conversations", { method: "POST", body: JSON.stringify({ workingDir }) }),
   createConversationFromSource: (sourceConversationId: string, sourceMessageId: string, excerpt: string) =>

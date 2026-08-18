@@ -2357,7 +2357,7 @@ test("task list categories persist custom grouping, directory assignment, and pi
     .send({ workingDir: project }).expect(201);
 
   const initial = await agent.get("/codex-web/api/task-categories").expect(200);
-  assert.deepEqual(initial.body.settings, { customCategories: [], pinned: [], hidden: [] });
+  assert.deepEqual(initial.body.settings, { customCategories: [], pinned: [], hidden: [], conversationOrders: {} });
 
   const created = await agent.post("/codex-web/api/task-categories/custom")
     .set("X-CSRF-Token", csrf)
@@ -2402,12 +2402,16 @@ test("task list categories persist custom grouping, directory assignment, and pi
   await agent.put("/codex-web/api/task-categories/hidden")
     .set("X-CSRF-Token", csrf)
     .send({ keys: [`custom:${customId}`] }).expect(200);
+  await agent.put("/codex-web/api/task-categories/conversation-order")
+    .set("X-CSRF-Token", csrf)
+    .send({ categoryKey: `custom:${customId}`, conversationIds: ["fake-conversation"] }).expect(200);
   const deleted = await agent.delete(`/codex-web/api/task-categories/custom/${customId}`)
     .set("X-CSRF-Token", csrf)
     .expect(200);
   assert.equal(deleted.body.settings.customCategories.length, 0);
   assert.deepEqual(deleted.body.settings.pinned, ["auto:standalone"]);
   assert.deepEqual(deleted.body.settings.hidden, []);
+  assert.equal(deleted.body.settings.conversationOrders[`custom:${customId}`], undefined);
 
   const hiddenDirKey = `auto:dir:${encodeURIComponent(canonicalProject)}`;
   const hiddenDir = await agent.put("/codex-web/api/task-categories/hidden")
@@ -2419,6 +2423,28 @@ test("task list categories persist custom grouping, directory assignment, and pi
     .send({ action: "remove", path: project }).expect(200);
   const afterFavoriteRemoved = await agent.get("/codex-web/api/task-categories").expect(200);
   assert.deepEqual(afterFavoriteRemoved.body.settings.hidden, []);
+
+  await agent.put("/codex-web/api/working-dirs/favorites")
+    .set("X-CSRF-Token", csrf)
+    .send({ action: "add", path: project, label: "Categorized" }).expect(200);
+  const conversationId = (await agent.get("/codex-web/api/conversations").expect(200)).body.conversations[0].id as string;
+  const ordered = await agent.put("/codex-web/api/task-categories/conversation-order")
+    .set("X-CSRF-Token", csrf)
+    .send({ categoryKey: hiddenDirKey, conversationIds: [conversationId, conversationId, "unknown"] }).expect(200);
+  // 未知 id 会保留在设置中（前端渲染时忽略），重复 id 去重。
+  assert.deepEqual(ordered.body.settings.conversationOrders[hiddenDirKey], [conversationId, "unknown"]);
+
+  const cleared = await agent.put("/codex-web/api/task-categories/conversation-order")
+    .set("X-CSRF-Token", csrf)
+    .send({ categoryKey: hiddenDirKey, conversationIds: [] }).expect(200);
+  assert.equal(cleared.body.settings.conversationOrders[hiddenDirKey], undefined);
+
+  await agent.put("/codex-web/api/task-categories/conversation-order")
+    .set("X-CSRF-Token", csrf)
+    .send({ categoryKey: "not:a:key", conversationIds: [] }).expect(400);
+  await agent.put("/codex-web/api/task-categories/conversation-order")
+    .set("X-CSRF-Token", csrf)
+    .send({ categoryKey: hiddenDirKey, conversationIds: "nope" }).expect(400);
 });
 
 test("quoted selections stay outside the visible message body and survive the pending queue", async (context) => {

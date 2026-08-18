@@ -1374,10 +1374,10 @@ export class AppDatabase {
 
   getTaskListCategorySettings(userId = LEGACY_USER_ID): TaskListCategorySettings {
     const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='task_list_categories'").get(userId) as { value: string } | undefined;
-    if (!row) return { customCategories: [], pinned: [], hidden: [] };
+    if (!row) return { customCategories: [], pinned: [], hidden: [], conversationOrders: {} };
     try {
       const parsed = JSON.parse(row.value) as Partial<TaskListCategorySettings> | null;
-      if (!parsed || typeof parsed !== "object") return { customCategories: [], pinned: [], hidden: [] };
+      if (!parsed || typeof parsed !== "object") return { customCategories: [], pinned: [], hidden: [], conversationOrders: {} };
       const customCategories: TaskListCustomCategory[] = [];
       if (Array.isArray(parsed.customCategories)) {
         for (const item of parsed.customCategories.slice(0, 100)) {
@@ -1396,9 +1396,18 @@ export class AppDatabase {
       const hidden = Array.isArray(parsed.hidden)
         ? [...new Set(parsed.hidden.filter((key): key is string => typeof key === "string" && key.length > 0))].slice(0, 100)
         : [];
-      return { customCategories, pinned, hidden };
+      const conversationOrders: Record<string, string[]> = {};
+      if (parsed.conversationOrders && typeof parsed.conversationOrders === "object" && !Array.isArray(parsed.conversationOrders)) {
+        const entries = Object.entries(parsed.conversationOrders as Record<string, unknown>);
+        for (const [categoryKey, rawIds] of entries.slice(0, 200)) {
+          if (!categoryKey || !Array.isArray(rawIds)) continue;
+          const ids = [...new Set(rawIds.filter((id): id is string => typeof id === "string" && id.length > 0))].slice(0, 2000);
+          if (ids.length) conversationOrders[categoryKey] = ids;
+        }
+      }
+      return { customCategories, pinned, hidden, conversationOrders };
     } catch {
-      return { customCategories: [], pinned: [], hidden: [] };
+      return { customCategories: [], pinned: [], hidden: [], conversationOrders: {} };
     }
   }
 
@@ -1411,6 +1420,15 @@ export class AppDatabase {
       })),
       pinned: [...new Set(settings.pinned.filter((key) => key.length > 0))].slice(0, 100),
       hidden: [...new Set(settings.hidden.filter((key) => key.length > 0))].slice(0, 100),
+      conversationOrders: Object.fromEntries(
+        Object.entries(settings.conversationOrders ?? {})
+          .slice(0, 200)
+          .map(([categoryKey, ids]) => [
+            categoryKey,
+            [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))].slice(0, 2000),
+          ])
+          .filter(([, ids]) => (ids as string[]).length > 0),
+      ),
     };
     this.sqlite.prepare(`
       INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'task_list_categories',?,?)

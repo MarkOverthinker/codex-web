@@ -59,6 +59,7 @@ import {
   customCategoryKey,
   listValidHiddenCategoryKeys,
   listValidPinnedCategoryKeys,
+  parseCategoryKey,
   type TaskListCategorySettings,
 } from "../src/task-categories.js";
 
@@ -1172,6 +1173,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (settings.customCategories.length === before) return res.status(404).json({ error: "自定义分类不存在。" });
     settings.pinned = settings.pinned.filter((key) => key !== customCategoryKey(id));
     settings.hidden = settings.hidden.filter((key) => key !== customCategoryKey(id));
+    delete settings.conversationOrders[customCategoryKey(id)];
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 
@@ -1237,6 +1239,24 @@ export function createApp(overrides: AppOverrides = {}) {
       favoritePaths,
       activeDirs,
     );
+    return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
+  });
+
+  api.put("/task-categories/conversation-order", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (!requireHostWorkingTenant(session)) {
+      return res.status(403).json({ error: "任务列表分类仅支持已映射系统账户的 host 模式。" });
+    }
+    const rawCategoryKey = req.body?.categoryKey;
+    const rawIds = req.body?.conversationIds;
+    if (typeof rawCategoryKey !== "string" || !parseCategoryKey(rawCategoryKey)) {
+      return res.status(400).json({ error: "分类标识无效。" });
+    }
+    if (!Array.isArray(rawIds)) return res.status(400).json({ error: "任务顺序无效。" });
+    const settings = taskListCategorySettingsFor(session.user_id);
+    const ids = [...new Set(rawIds.filter((id): id is string => typeof id === "string" && id.length > 0))].slice(0, 2000);
+    if (ids.length) settings.conversationOrders[rawCategoryKey] = ids;
+    else delete settings.conversationOrders[rawCategoryKey];
     return res.json({ settings: saveTaskListCategorySettings(session.user_id, settings) });
   });
 

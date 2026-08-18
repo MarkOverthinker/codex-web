@@ -14,6 +14,9 @@ export type TaskListCategorySettings = {
   customCategories: TaskListCustomCategory[];
   pinned: string[];
   hidden: string[];
+  /** Per-category conversation id order chosen by the user. Keys not present
+   * fall back to the default newest-first ordering. */
+  conversationOrders: Record<string, string[]>;
 };
 
 export type TaskListCategoryView = {
@@ -41,6 +44,7 @@ export const EMPTY_TASK_LIST_CATEGORY_SETTINGS: TaskListCategorySettings = {
   customCategories: [],
   pinned: [],
   hidden: [],
+  conversationOrders: {},
 };
 
 export function customCategoryKey(id: string): string {
@@ -120,6 +124,32 @@ function sortedByUpdatedAt(conversations: Conversation[]): Conversation[] {
   );
 }
 
+/**
+ * Apply a user-chosen conversation order inside a category. Conversations
+ * that were added after the order was saved (and therefore are not listed)
+ * stay visible at the top, newest first, so freshly created tasks never get
+ * hidden behind a stale drag order. Stale ids in the saved order are ignored.
+ */
+export function applyCategoryConversationOrder(
+  conversations: Conversation[],
+  order: readonly string[] | undefined,
+): Conversation[] {
+  if (!order || order.length === 0) return sortedByUpdatedAt(conversations);
+  const position = new Map<string, number>();
+  for (let index = 0; index < order.length; index += 1) {
+    const id = order[index];
+    if (id && !position.has(id)) position.set(id, index);
+  }
+  const known: Conversation[] = [];
+  const unknown: Conversation[] = [];
+  for (const item of sortedByUpdatedAt(conversations)) {
+    if (position.has(item.id)) known.push(item);
+    else unknown.push(item);
+  }
+  known.sort((left, right) => position.get(left.id)! - position.get(right.id)!);
+  return [...unknown, ...known];
+}
+
 type PendingView = {
   key: string;
   kind: "auto" | "custom";
@@ -155,6 +185,8 @@ function addPendingView(groups: Map<string, PendingView>, view: PendingView): vo
  * favorite working directories, and server-persisted category settings.
  * Empty and hidden categories are omitted; categories are ordered by pinned
  * order first and then by the newest conversation inside each category.
+ * Inside a category, conversations honor the user-chosen order from
+ * `settings.conversationOrders` when present and otherwise stay newest first.
  */
 export function buildTaskCategoryViews(
   conversations: Conversation[],
@@ -230,7 +262,7 @@ export function buildTaskCategoryViews(
     views.push({
       ...group,
       assignedDirs: [...new Set(group.assignedDirs)],
-      conversations: sortedByUpdatedAt(group.conversations),
+      conversations: applyCategoryConversationOrder(group.conversations, settings.conversationOrders[group.key]),
       pinned: pinIndex >= 0,
       pinIndex,
     });
