@@ -7,10 +7,11 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  ChevronUp, ListChecks,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -33,6 +34,7 @@ import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { ProviderManagerDialog } from "./provider-manager-dialog";
+import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
@@ -57,6 +59,8 @@ const ACTIVITY_FLUSH_DELAY_MS = 60;
 const JUMP_LOAD_PAGE_LIMIT = 50;
 const EMPTY_WORK_FILES: WorkFile[] = [];
 const EMPTY_PENDING_PROMPTS: PendingPrompt[] = [];
+const EMPTY_PRESET_PROMPT_IDS: string[] = [];
+const MAX_CONVERSATION_PRESET_PROMPTS = 20;
 const EMPTY_REASONING_STEPS: ReasoningStep[] = [];
 const MESSAGE_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -370,6 +374,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
+  const [presetPromptManagerOpen, setPresetPromptManagerOpen] = useState(false);
+  const [presetPrompts, setPresetPrompts] = useState<PresetPrompt[]>([]);
+  const [presetSaving, setPresetSaving] = useState(false);
   const [accountUsername, setAccountUsername] = useState(session.username ?? "");
   const [accountCurrentPassword, setAccountCurrentPassword] = useState("");
   const [accountNewPassword, setAccountNewPassword] = useState("");
@@ -701,6 +708,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       .catch(() => setWorkingDirSettings(null));
     void api.taskCategories().then(({ settings }) => setTaskCategorySettings(settings))
       .catch(() => setTaskCategorySettings(null));
+    void api.presetPrompts().then(({ presetPrompts: next }) => setPresetPrompts(next))
+      .catch(() => setPresetPrompts([]));
   }, []);
   useEffect(() => {
     let cancelled = false;
@@ -1490,6 +1499,40 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     }
   }
 
+  async function togglePresetPrompt(id: string, enabled: boolean) {
+    const conversationId = selectedIdRef.current;
+    const currentDetailValue = detailRef.current;
+    if (!conversationId || !currentDetailValue || presetSaving) return;
+    const current = currentDetailValue.enabledPresetPromptIds;
+    const next = enabled ? [...current, id] : current.filter((candidate) => candidate !== id);
+    if (next.length > MAX_CONVERSATION_PRESET_PROMPTS) {
+      setError(`每个对话最多启用 ${MAX_CONVERSATION_PRESET_PROMPTS} 条预设。`);
+      return;
+    }
+    setDetail((value) => value && value.conversation.id === conversationId ? { ...value, enabledPresetPromptIds: next } : value);
+    setPresetSaving(true); setError("");
+    try {
+      const result = await api.setConversationPresetPrompts(conversationId, next);
+      setDetail((value) => value && value.conversation.id === conversationId ? { ...value, enabledPresetPromptIds: result.enabledPresetPromptIds } : value);
+    } catch (reason) {
+      setDetail((value) => value && value.conversation.id === conversationId ? { ...value, enabledPresetPromptIds: current } : value);
+      setError(reason instanceof Error ? reason.message : "保存预设启用状态失败");
+    } finally {
+      setPresetSaving(false);
+    }
+  }
+
+  async function refreshPresetPrompts() {
+    try {
+      const { presetPrompts: next } = await api.presetPrompts();
+      setPresetPrompts(next);
+      const conversationId = selectedIdRef.current;
+      if (conversationId) await reconcile(conversationId);
+    } catch {
+      setError("刷新预设 Prompt 失败，请稍后重试。");
+    }
+  }
+
   function toggleImportSession(threadId: string) {
     setSelectedSessionThreadIds((current) => {
       const next = new Set(current);
@@ -2001,6 +2044,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     voiceEnabled={Boolean(session.voiceEnabled)}
     conversationId={selectedId}
     pendingPrompts={composerPendingPrompts} editingPending={editingPending} removedEditingFileIds={removedEditingFileIds}
+    presetPrompts={presetPrompts} enabledPresetPromptIds={currentDetail?.enabledPresetPromptIds ?? EMPTY_PRESET_PROMPT_IDS}
+    onTogglePresetPrompt={(id, enabled) => void togglePresetPrompt(id, enabled)} presetSaving={presetSaving}
+    onOpenPresetManager={() => setPresetPromptManagerOpen(true)}
     agentOptions={agentOptions} selectedModel={selectedModel} reasoningEffort={reasoningEffort}
     onModelChange={changeModel} onReasoningChange={changeReasoning}
     onReorderPending={(ordered) => void reorderPendingPrompts(ordered)} onEditPending={(prompt) => void beginPendingEdit(prompt)}
@@ -2013,7 +2059,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
     currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort,
-    removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
+    presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
   return <div className="shell">
@@ -2103,6 +2149,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           </div>
           <button type="button" className="account-settings-archive" onClick={() => void openArchivedConversations()}><Archive size={15} /><span>已归档任务</span></button>
           <button type="button" className="account-settings-archive" onClick={() => { setProviderManagerOpen(true); setAccountSettingsOpen(false); }}><Settings2 size={15} /><span>API 源管理</span></button>
+          <button type="button" className="account-settings-archive" onClick={() => { setPresetPromptManagerOpen(true); setAccountSettingsOpen(false); }}><ListChecks size={15} /><span>预设 Prompt 管理</span></button>
         </section>}
         <div className="account-row">
           <button className="account-profile" type="button" aria-expanded={accountSettingsOpen} onClick={() => setAccountSettingsOpen((open) => !open)}>
@@ -2390,6 +2437,12 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         void api.agentOptions().then(setAgentOptions).catch(() => undefined);
         if (selectedIdRef.current) void reconcile(selectedIdRef.current);
       }}
+    />
+
+    <PresetPromptManagerDialog
+      open={presetPromptManagerOpen}
+      onClose={() => setPresetPromptManagerOpen(false)}
+      onChanged={() => void refreshPresetPrompts()}
     />
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
@@ -2970,7 +3023,7 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, onSend, onCancel }: {
+function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
   setInput: (value: string) => void;
@@ -2992,6 +3045,11 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   pendingPrompts: PendingPrompt[];
   editingPending: PendingPrompt | null;
   removedEditingFileIds: string[];
+  presetPrompts: PresetPrompt[];
+  enabledPresetPromptIds: string[];
+  onTogglePresetPrompt: (id: string, enabled: boolean) => void;
+  presetSaving: boolean;
+  onOpenPresetManager: () => void;
   agentOptions: AgentOptions | null;
   selectedModel: string;
   reasoningEffort: ReasoningEffort | "";
@@ -3015,6 +3073,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   const pasteTimer = useRef<number | undefined>(undefined);
   const [pasteNotice, setPasteNotice] = useState("");
   const [composerTextHeight, setComposerTextHeight] = useState<number | null>(null);
+  const [presetsOpen, setPresetsOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [voiceElapsed, setVoiceElapsed] = useState(0);
   const [voiceError, setVoiceError] = useState("");
@@ -3293,7 +3352,28 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
           : <button type="button" className="send-button" onClick={() => voiceState === "recording" ? finishRecording(true) : onSend()} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceState === "transcribing" || (voiceState !== "recording" && !input.trim() && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title={voiceState === "recording" ? "识别语音并发送" : "发送"} aria-label={voiceState === "recording" ? "识别语音并发送" : "发送"}>{submitting || voiceState === "transcribing" ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
       </div>
     </div>
-  </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p></div>;
+  </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p>
+  <div className="composer-presets">
+    <button type="button" className="composer-presets-toggle" aria-expanded={presetsOpen} onClick={() => setPresetsOpen((open) => !open)}>
+      <ListChecks size={14} /><span>预设 Prompt</span>
+      <small>{presetPrompts.length === 0 ? "未添加" : `${enabledPresetPromptIds.length}/${presetPrompts.length} 已启用`}</small>
+      {presetsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+    </button>
+    {presetsOpen && <div className="composer-presets-list">
+      {presetPrompts.length === 0
+        ? <div className="composer-presets-empty">还没有预设 Prompt，可以点击“管理预设”创建。</div>
+        : presetPrompts.map((preset) => (
+          <label key={preset.id} className={`composer-preset-item ${enabledPresetPromptIds.includes(preset.id) ? "enabled" : ""}`}>
+            <input type="checkbox" checked={enabledPresetPromptIds.includes(preset.id)} disabled={presetSaving || submitting || !conversationId} onChange={(event) => onTogglePresetPrompt(preset.id, event.currentTarget.checked)} />
+            <span className="composer-preset-copy">
+              <strong>{preset.name}</strong>
+              <small title={preset.content}>{preset.content.length > 90 ? `${preset.content.slice(0, 90)}…` : preset.content}</small>
+            </span>
+          </label>
+        ))}
+      <button type="button" className="composer-presets-manage" onClick={onOpenPresetManager}><Settings2 size={13} />管理预设</button>
+    </div>}
+  </div></div>;
 }
 
 type SettingMenuOption = { id: string; label: string; description?: string };
