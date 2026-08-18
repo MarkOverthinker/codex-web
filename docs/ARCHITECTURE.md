@@ -14,6 +14,9 @@ temporary runtime area remain in the conversation's own workspace, and
 deliverable persistence is unchanged. Deleting a conversation never touches
 the selected host directory. Tasks sharing the same directory are serialized
 so concurrent Codex sessions cannot write the same project repository at once.
+While a job is queued, the UI can promote it to start immediately with an
+explicit confirmation; this intentionally bypasses the serialization guard,
+so the user accepts that two sessions may write the same directory at once.
 Task-list categories are also persisted per user in `user_settings`: custom
 category names, which directories they contain, the pinned-category order, and
 hidden-category keys. The browser derives the grouped sidebar view from
@@ -52,6 +55,11 @@ managed storage, the conversation is imported without a working directory
 instead of failing.
 
 Queued prompts and their attachments are stored by the server. The browser is only a view of that state. A queued prompt can be reordered, edited, deleted, or converted into a live steering instruction for the currently running Codex turn. Running and queued states are derived independently so an idle-but-queued conversation is not presented as actively executing.
+
+Already-created queued jobs carry a durable `skip_queue` flag when promoted.
+The dispatcher gives promoted jobs priority on restart, and the promotion API
+atomically moves the job into the running state so the immediate start works
+even while the regular queue pump is busy.
 
 On graceful shutdown, dispatch stops first and the process waits for active Codex executions to finish; queued work remains durable. If the process disappears while a job is running, startup marks that job interrupted and appends a visible message/event. It does not automatically retry a possibly side-effecting turn.
 

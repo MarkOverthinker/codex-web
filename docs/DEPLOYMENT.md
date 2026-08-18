@@ -188,6 +188,9 @@ Behavior and limits:
 - Tasks that share the same working directory run one at a time; the next task
   waits until the current one finishes, avoiding concurrent writes to the
   same repository.
+- While a task is queued, its detail panel offers a skip-queue action that
+  starts it immediately after an explicit confirmation, even if another
+  session is already running in the same directory.
 - The feature is unavailable in the isolated tenant deployment (non-host
   mode); there each conversation keeps its own workspace.
 

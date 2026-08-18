@@ -364,6 +364,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [removedEditingFileIds, setRemovedEditingFileIds] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [skippingQueue, setSkippingQueue] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [activities, setActivities] = useState<JobEvent[]>([]);
   const [error, setError] = useState("");
@@ -1390,6 +1391,19 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     try { await api.steerPendingPrompt(selectedId, prompt.id); await reconcile(selectedId); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "引导当前任务失败"); }
     finally { setSubmitting(false); }
+  }
+
+  async function skipQueuedJob(jobId: string) {
+    if (!selectedId || submitting || skippingQueue) return;
+    if (!window.confirm("跳过排队将立即启动该任务。若同一工作目录已有其他任务正在运行，两个 Codex 会话可能同时读写该目录，是否继续？")) return;
+    setError(""); setNotice(""); setSkippingQueue(true);
+    try {
+      await api.skipQueuedJob(jobId);
+      setNotice("已跳过排队，任务开始直接执行。");
+      await reconcile(selectedId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "跳过排队失败");
+    } finally { setSkippingQueue(false); }
   }
 
   async function reorderPendingPrompts(ordered: PendingPrompt[]) {
@@ -2496,7 +2510,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -2656,16 +2670,20 @@ type MessageListProps = {
   chatFontSize: number;
   citationFiles: WorkFile[];
   onPreview: (file: WorkFile) => void;
+  onSkipQueue?: (jobId: string) => void;
+  skipQueueBusy?: boolean;
 };
 
 const LiveActivitiesContext = createContext<JobEvent[]>([]);
 
-function LiveProcessPanel({ detail }: { detail: ConversationDetail }) {
+function LiveProcessPanel({ detail, onSkipQueue, skipQueueBusy }: { detail: ConversationDetail; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean }) {
   const activities = useContext(LiveActivitiesContext);
-  return <ProcessPanel key={detail.conversation.id} activities={activities} startedAt={detail.activeJob?.startedAt ?? null} />;
+  const activeJobId = detail.activeJob?.id ?? null;
+  return <ProcessPanel key={detail.conversation.id} activities={activities} startedAt={detail.activeJob?.startedAt ?? null}
+    activeJobId={activeJobId} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
@@ -2676,7 +2694,7 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
         <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} />
       </Fragment>;
     })}
-    {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} /></div></article>}
+    {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} /></div></article>}
     {!sending && reasoningMessageIndex === -1 && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
     {messages.some((message) => message.role === "user") && <div className="message-jump-nav" aria-label="我的消息导航">
       <button type="button" title="上一条我的消息" aria-label="上一条我的消息" onClick={() => onJumpToUserMessage("previous")}><ArrowUp size={15} /></button>
@@ -2709,9 +2727,9 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview }: {
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
   detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
-  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void;
+  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail]);
   const chatRef = useRef<HTMLElement>(null);
@@ -2826,6 +2844,8 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       chatFontSize={chatFontSize}
       citationFiles={citationFiles}
       onPreview={onPreview}
+      onSkipQueue={onSkipQueue}
+      skipQueueBusy={skipQueueBusy}
     />{askSelection && <div className={`ask-agent-selection selection-actions ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }}>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedTextAsNewTask(); }} onClick={(event) => { if (event.detail === 0) useSelectedTextAsNewTask(); }}><Plus size={14} /><span>引用并新建任务</span></button>
@@ -2848,7 +2868,13 @@ function useElapsedTimer(startedAt: string | null): number {
   return elapsedSeconds;
 }
 
-function ProcessPanel({ activities, startedAt: jobStartedAt }: { activities: JobEvent[]; startedAt?: string | null }) {
+function ProcessPanel({ activities, startedAt: jobStartedAt, activeJobId, onSkipQueue, skipQueueBusy }: {
+  activities: JobEvent[];
+  startedAt?: string | null;
+  activeJobId?: string | null;
+  onSkipQueue?: (jobId: string) => void;
+  skipQueueBusy?: boolean;
+}) {
   const latestStatus = activities.findLast((item) => item.type === "status" || item.kind === "status");
   const queueStatus = activities.findLast((activity) => activity.status === "queued");
   const queued = Boolean(queueStatus) && !activities.some((activity) => activity.status === "running");
@@ -2862,7 +2888,7 @@ function ProcessPanel({ activities, startedAt: jobStartedAt }: { activities: Job
   const elapsedSeconds = useElapsedTimer(startedAt);
 
   return <div className="activity-card" role="status" aria-live="polite">
-    <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong><span>{queued ? (queueStatus?.jobsAhead ? `前面还有 ${queueStatus.jobsAhead} 个任务，完成后自动开始` : "即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span></div>
+    <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong><span>{queued ? (queueStatus?.jobsAhead ? `前面还有 ${queueStatus.jobsAhead} 个任务，完成后自动开始` : "即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span>{queued && activeJobId && onSkipQueue && <button type="button" className="activity-skip-queue" disabled={skipQueueBusy} onClick={() => onSkipQueue(activeJobId)}><Zap size={13} /><span>跳过排队直接执行</span></button>}</div>
     {plan?.items && <div className="process-plan"><div className="process-section-title"><strong>执行计划</strong><span>{completedPlanItems}/{plan.items.length}</span></div><ul>
       {plan.items.map((item, index) => <li className={item.completed ? "completed" : index === completedPlanItems ? "current" : ""} key={`${item.text}-${index}`}><span>{item.completed ? <Check size={12} /> : index === completedPlanItems ? <LoaderCircle className="spin" size={12} /> : index + 1}</span><p>{item.text}</p></li>)}
     </ul></div>}
