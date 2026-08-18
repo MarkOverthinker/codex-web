@@ -306,6 +306,7 @@ export function createApp(overrides: AppOverrides = {}) {
       name: preset.name,
       content: preset.content,
       position: preset.position,
+      defaultEnabled: preset.default_enabled === 1,
       createdAt: preset.created_at,
       updatedAt: preset.updated_at,
     };
@@ -325,6 +326,15 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!content) throw new Error("预设内容不能为空。");
     if (content.length > PRESET_PROMPT_CONTENT_MAX) throw new Error(`预设内容不能超过 ${PRESET_PROMPT_CONTENT_MAX} 个字符。`);
     return content;
+  }
+
+  function normalizePresetPromptDefaultEnabled(value: unknown): boolean {
+    if (typeof value !== "boolean") throw new Error("默认启用状态无效。");
+    return value;
+  }
+
+  function countDefaultEnabledPresetPrompts(userId: string): number {
+    return db.listPresetPrompts(userId).filter((preset) => preset.default_enabled).length;
   }
 
   function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow, rawProvider?: unknown): AgentSelection {
@@ -1252,24 +1262,30 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     let name: string;
     let content: string;
+    let defaultEnabled = false;
     try {
       name = normalizePresetPromptName(req.body?.name);
       content = normalizePresetPromptContent(req.body?.content);
+      if (req.body?.defaultEnabled !== undefined) defaultEnabled = normalizePresetPromptDefaultEnabled(req.body.defaultEnabled);
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "预设内容无效。" });
     }
     if (db.listPresetPrompts(session.user_id).length >= MAX_PRESET_PROMPTS_PER_USER) {
       return res.status(400).json({ error: `最多创建 ${MAX_PRESET_PROMPTS_PER_USER} 条预设。` });
     }
-    const preset = db.createPresetPrompt(session.user_id, newId(), name, content);
+    if (defaultEnabled && countDefaultEnabledPresetPrompts(session.user_id) >= MAX_CONVERSATION_PRESET_PROMPTS) {
+      return res.status(400).json({ error: `默认打开的预设最多 ${MAX_CONVERSATION_PRESET_PROMPTS} 条。` });
+    }
+    const preset = db.createPresetPrompt(session.user_id, newId(), name, content, defaultEnabled);
     return res.status(201).json({ presetPrompt: presetPromptForClient(preset) });
   });
 
   api.put("/preset-prompts/:id", (req, res) => {
     const session = res.locals.session as SessionRow;
     const id = String(req.params.id);
-    if (!db.getPresetPrompt(session.user_id, id)) return res.status(404).json({ error: "预设不存在。" });
-    const fields: { name?: string; content?: string; position?: number } = {};
+    const current = db.getPresetPrompt(session.user_id, id);
+    if (!current) return res.status(404).json({ error: "预设不存在。" });
+    const fields: { name?: string; content?: string; position?: number; defaultEnabled?: boolean } = {};
     if (req.body?.name !== undefined) {
       try { fields.name = normalizePresetPromptName(req.body.name); }
       catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "预设名称无效。" }); }
@@ -1283,7 +1299,15 @@ export function createApp(overrides: AppOverrides = {}) {
       if (!Number.isInteger(position) || position < 0) return res.status(400).json({ error: "预设排序位置无效。" });
       fields.position = position;
     }
-    if (fields.name === undefined && fields.content === undefined && fields.position === undefined) {
+    if (req.body?.defaultEnabled !== undefined) {
+      try { fields.defaultEnabled = normalizePresetPromptDefaultEnabled(req.body.defaultEnabled); }
+      catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "默认启用状态无效。" }); }
+    }
+    if (fields.defaultEnabled === true && !current.default_enabled
+      && countDefaultEnabledPresetPrompts(session.user_id) >= MAX_CONVERSATION_PRESET_PROMPTS) {
+      return res.status(400).json({ error: `默认打开的预设最多 ${MAX_CONVERSATION_PRESET_PROMPTS} 条。` });
+    }
+    if (fields.name === undefined && fields.content === undefined && fields.position === undefined && fields.defaultEnabled === undefined) {
       return res.status(400).json({ error: "没有需要更新的内容。" });
     }
     const updated = db.updatePresetPrompt(session.user_id, id, fields);
@@ -1358,6 +1382,7 @@ export function createApp(overrides: AppOverrides = {}) {
     workspaceFor(session.user_id, id);
     const agentSelection = userAgentSelection(session.user_id);
     const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
+    db.applyDefaultPresetPrompts(conversation.id, session.user_id);
     const composerDraft = db.saveComposerDraft(id, "", excerpt, JSON.stringify(reference));
     return res.status(201).json({ conversation, agentSelection, composerDraft: composerDraftForClient(composerDraft, session.user_id) });
   });
@@ -1385,7 +1410,9 @@ export function createApp(overrides: AppOverrides = {}) {
     }
     workspaceFor(session.user_id, id);
     const agentSelection = userAgentSelection(session.user_id);
-    res.status(201).json({ conversation: db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir), agentSelection });
+    const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
+    db.applyDefaultPresetPrompts(conversation.id, session.user_id);
+    res.status(201).json({ conversation, agentSelection });
   });
 
   api.put("/conversations/:id/working-dir", (req, res) => {

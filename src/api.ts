@@ -124,6 +124,7 @@ export type PresetPrompt = {
   name: string;
   content: string;
   position: number;
+  defaultEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -257,9 +258,9 @@ export const api = {
     `/providers/${providerId}/models/${modelId}`, { method: "DELETE" },
   ),
   presetPrompts: () => request<{ presetPrompts: PresetPrompt[] }>("/preset-prompts"),
-  createPresetPrompt: (name: string, content: string) =>
-    request<{ presetPrompt: PresetPrompt }>("/preset-prompts", { method: "POST", body: JSON.stringify({ name, content }) }),
-  updatePresetPrompt: (id: string, payload: { name?: string; content?: string; position?: number }) =>
+  createPresetPrompt: (name: string, content: string, defaultEnabled = false) =>
+    request<{ presetPrompt: PresetPrompt }>("/preset-prompts", { method: "POST", body: JSON.stringify({ name, content, defaultEnabled }) }),
+  updatePresetPrompt: (id: string, payload: { name?: string; content?: string; position?: number; defaultEnabled?: boolean }) =>
     request<{ presetPrompt: PresetPrompt }>(`/preset-prompts/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deletePresetPrompt: (id: string) => request<void>(`/preset-prompts/${id}`, { method: "DELETE" }),
   setConversationPresetPrompts: (conversationId: string, presetPromptIds: string[]) =>

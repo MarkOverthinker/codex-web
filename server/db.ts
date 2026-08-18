@@ -177,6 +177,7 @@ export type PresetPromptRow = {
   name: string;
   content: string;
   position: number;
+  default_enabled: number;
   created_at: string;
   updated_at: string;
 };
@@ -366,6 +367,7 @@ export class AppDatabase {
         name TEXT NOT NULL,
         content TEXT NOT NULL,
         position INTEGER NOT NULL DEFAULT 0,
+        default_enabled INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(user_id, id)
@@ -449,6 +451,8 @@ export class AppDatabase {
     const fileColumns = this.columnNames("files");
     if (!fileColumns.has("pending_prompt_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN pending_prompt_id TEXT REFERENCES pending_prompts(id) ON DELETE CASCADE");
     if (!fileColumns.has("composer_draft_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN composer_draft_id TEXT REFERENCES composer_drafts(conversation_id) ON DELETE CASCADE");
+    const presetPromptColumns = this.columnNames("preset_prompts");
+    if (!presetPromptColumns.has("default_enabled")) this.sqlite.exec("ALTER TABLE preset_prompts ADD COLUMN default_enabled INTEGER NOT NULL DEFAULT 0");
     this.sqlite.prepare("UPDATE jobs SET queue_seq=rowid WHERE queue_seq IS NULL").run();
 
     const now = new Date().toISOString();
@@ -1418,23 +1422,24 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT * FROM preset_prompts WHERE user_id=? AND id=?").get(userId, id) as PresetPromptRow | undefined;
   }
 
-  createPresetPrompt(userId: string, id: string, name: string, content: string): PresetPromptRow {
+  createPresetPrompt(userId: string, id: string, name: string, content: string, defaultEnabled = false): PresetPromptRow {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),-1)+1 AS value FROM preset_prompts WHERE user_id=?").get(userId) as { value: number };
-    this.sqlite.prepare("INSERT INTO preset_prompts(id,user_id,name,content,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?)")
-      .run(id, userId, name, content, next.value, now, now);
+    this.sqlite.prepare("INSERT INTO preset_prompts(id,user_id,name,content,position,default_enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)")
+      .run(id, userId, name, content, next.value, defaultEnabled ? 1 : 0, now, now);
     return this.getPresetPrompt(userId, id)!;
   }
 
-  updatePresetPrompt(userId: string, id: string, fields: { name?: string; content?: string; position?: number }): PresetPromptRow | undefined {
+  updatePresetPrompt(userId: string, id: string, fields: { name?: string; content?: string; position?: number; defaultEnabled?: boolean }): PresetPromptRow | undefined {
     const current = this.getPresetPrompt(userId, id);
     if (!current) return undefined;
     const now = new Date().toISOString();
-    this.sqlite.prepare("UPDATE preset_prompts SET name=?,content=?,position=?,updated_at=? WHERE user_id=? AND id=?")
+    this.sqlite.prepare("UPDATE preset_prompts SET name=?,content=?,position=?,default_enabled=?,updated_at=? WHERE user_id=? AND id=?")
       .run(
         fields.name ?? current.name,
         fields.content ?? current.content,
         fields.position ?? current.position,
+        fields.defaultEnabled === undefined ? current.default_enabled : (fields.defaultEnabled ? 1 : 0),
         now,
         userId,
         id,
@@ -1479,6 +1484,15 @@ export class AppDatabase {
       throw error;
     }
     return validIds;
+  }
+
+  applyDefaultPresetPrompts(conversationId: string, userId: string): string[] {
+    const defaultIds = this.listPresetPrompts(userId)
+      .filter((preset) => preset.default_enabled)
+      .slice(0, MAX_CONVERSATION_PRESET_PROMPTS)
+      .map((preset) => preset.id);
+    if (defaultIds.length === 0) return [];
+    return this.setConversationPresetPrompts(conversationId, userId, defaultIds) ?? [];
   }
 
   listEnabledPresetPrompts(conversationId: string): EnabledPresetPrompt[] {
