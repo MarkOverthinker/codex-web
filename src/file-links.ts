@@ -1,4 +1,5 @@
 import { fileUrl, type WorkFile } from "./api";
+import { isTextPreviewMime } from "./text-preview";
 
 export type ResolvedMessageLink =
   | { kind: "download"; href: string }
@@ -50,7 +51,7 @@ export function localPathText(href: string | undefined): string {
 export function isBrowserPreviewable(file: WorkFile): boolean {
   return file.mime_type.startsWith("image/")
     || file.mime_type === "application/pdf"
-    || /^text\/(?:plain|markdown|csv)/.test(file.mime_type);
+    || isTextPreviewMime(file.mime_type);
 }
 
 export type FilePreviewKind = "image" | "pdf" | "markdown" | "text";
@@ -61,7 +62,7 @@ export function filePreviewKind(file: WorkFile): FilePreviewKind | null {
   if (file.mime_type.startsWith("image/")) return "image";
   if (file.mime_type === "application/pdf") return "pdf";
   if (file.mime_type === "text/markdown") return "markdown";
-  if (file.mime_type === "text/plain" || file.mime_type === "text/csv") return "text";
+  if (isTextPreviewMime(file.mime_type)) return "text";
   return null;
 }
 

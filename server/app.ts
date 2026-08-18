@@ -14,6 +14,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { loadConfig, type AppConfig } from "./config.js";
 import { CodexRunner, extractLeakedAutoTitleAnswer } from "./codex-runner.js";
+import { isTextPreviewMime } from "../src/text-preview.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
@@ -50,6 +51,7 @@ import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode
 import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
+import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
 import {
@@ -65,22 +67,6 @@ const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
 const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例如“把图片背景改为白色”或“汇总这些表格”。收到明确指令后才会开始处理。";
 const USERNAME_PATTERN = /^[a-z_][a-z0-9._-]{0,31}$/i;
 const MIN_PASSWORD_LENGTH = 12;
-const HOST_ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
-  ".txt": "text/plain", ".md": "text/markdown", ".markdown": "text/markdown", ".csv": "text/csv",
-  ".json": "application/json", ".toml": "application/toml", ".yaml": "application/yaml", ".yml": "application/yaml",
-  ".py": "text/x-python", ".js": "text/javascript", ".mjs": "text/javascript", ".cjs": "text/javascript",
-  ".ts": "text/x-typescript", ".tsx": "text/x-typescript", ".jsx": "text/x-javascript", ".html": "text/html",
-  ".css": "text/css", ".sh": "text/x-shellscript", ".xml": "application/xml", ".svg": "image/svg+xml",
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
-  ".bmp": "image/bmp", ".ico": "image/x-icon", ".pdf": "application/pdf",
-  ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  ".zip": "application/zip", ".tar": "application/x-tar", ".gz": "application/gzip", ".7z": "application/x-7z-compressed",
-};
-function mimeTypeForHostPath(filePath: string): string {
-  return HOST_ATTACHMENT_MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
-}
 type AuthenticatedRequest = Request & { appSession?: SessionRow };
 
 export type AppOverrides = Partial<AppConfig> & { logger?: Logger };
@@ -204,7 +190,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   function isSharePreviewable(file: FileRow): boolean {
     const mime = file.mime_type.toLowerCase();
-    return mime.startsWith("image/") || mime === "application/pdf" || /^text\/(?:plain|markdown|csv)$/.test(mime);
+    return mime.startsWith("image/") || mime === "application/pdf" || isTextPreviewMime(mime);
   }
 
   function fileAbsolutePath(file: FileRow, userId: string): string | null {
@@ -1747,7 +1733,7 @@ export function createApp(overrides: AppOverrides = {}) {
         registered.push({
           originalName: safe.displayName,
           diskName: safe.diskName,
-          mimeType: mimeTypeForHostPath(source),
+          mimeType: mimeTypeForPath(source),
           size: fs.statSync(destination).size,
         });
       }
@@ -2172,7 +2158,7 @@ export function createApp(overrides: AppOverrides = {}) {
     try { absolute = resolveInside(storageRoot, file.relative_path); }
     catch { return res.status(400).json({ error: "文件路径无效。" }); }
     if (!fs.existsSync(absolute)) return res.status(404).json({ error: "文件已不存在。" });
-    const inline = req.query.download !== "1" && (/^image\//.test(file.mime_type) || file.mime_type === "application/pdf" || /^text\/(plain|markdown|csv)/.test(file.mime_type));
+    const inline = req.query.download !== "1" && (file.mime_type.startsWith("image/") || file.mime_type === "application/pdf" || isTextPreviewMime(file.mime_type));
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Type", file.mime_type);
@@ -2357,7 +2343,7 @@ export function migrateExistingOutputFiles(config: AppConfig, db: AppDatabase): 
 
 function normalizeUploadMime(file: Express.Multer.File): string {
   const reported = file.mimetype || "application/octet-stream";
-  const byExtension = HOST_ATTACHMENT_MIME_BY_EXTENSION[path.extname(file.originalname).toLowerCase()];
+  const byExtension = MIME_BY_EXTENSION[path.extname(file.originalname).toLowerCase()];
   if (!byExtension || (reported !== "application/octet-stream" && reported !== "text/plain")) return reported;
   return byExtension;
 }
@@ -2366,7 +2352,7 @@ export function migrateUploadFileMimes(db: AppDatabase): number {
   let migrated = 0;
   for (const file of db.listFiles()) {
     if (file.kind !== "upload") continue;
-    const expected = HOST_ATTACHMENT_MIME_BY_EXTENSION[path.extname(file.original_name).toLowerCase()];
+    const expected = MIME_BY_EXTENSION[path.extname(file.original_name).toLowerCase()];
     if (!expected || file.mime_type === expected) continue;
     if (file.mime_type !== "application/octet-stream" && file.mime_type !== "text/plain") continue;
     db.updateFileMime(file.id, expected);

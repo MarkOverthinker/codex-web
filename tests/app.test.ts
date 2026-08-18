@@ -16,6 +16,7 @@ import { AppDatabase, LEGACY_USER_ID } from "../server/db.js";
 import { resolveSystemUser } from "../server/host-mode.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "../server/share-link.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection } from "../server/model-options.js";
+import { mimeTypeForPath } from "../server/mime.js";
 import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, ensureWorkspace, isDeliverablePath, isPersistedDeliverablePath, listHostDirectory, normalizeStoredRelativePath, normalizeUploadFileName, persistDeliverable, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName } from "../server/paths.js";
 import { buildShellEnvironment, cleanupJobRuntime, prepareJobRuntime } from "../server/python-runtime.js";
 import { assessTaskPolicy } from "../server/task-policy.js";
@@ -1273,7 +1274,14 @@ test("browser preview is limited to formats browsers can display directly", () =
   assert.equal(isBrowserPreviewable(file("image/png")), true);
   assert.equal(isBrowserPreviewable(file("application/pdf")), true);
   assert.equal(isBrowserPreviewable(file("text/plain")), true);
+  assert.equal(isBrowserPreviewable(file("text/x-python")), true);
+  assert.equal(isBrowserPreviewable(file("text/x-typescript")), true);
+  assert.equal(isBrowserPreviewable(file("application/json")), true);
+  assert.equal(isBrowserPreviewable(file("application/yaml")), true);
+  assert.equal(isBrowserPreviewable(file("application/xml")), true);
+  assert.equal(isBrowserPreviewable(file("application/toml")), true);
   assert.equal(isBrowserPreviewable(file("application/vnd.openxmlformats-officedocument.presentationml.presentation")), false);
+  assert.equal(isBrowserPreviewable(file("application/octet-stream")), false);
 });
 
 test("in-page preview distinguishes Markdown, text, images, and PDFs with a text size cap", () => {
@@ -1281,12 +1289,35 @@ test("in-page preview distinguishes Markdown, text, images, and PDFs with a text
   assert.equal(filePreviewKind(file("text/markdown")), "markdown");
   assert.equal(filePreviewKind(file("text/plain")), "text");
   assert.equal(filePreviewKind(file("text/csv")), "text");
+  assert.equal(filePreviewKind(file("text/x-python")), "text");
+  assert.equal(filePreviewKind(file("text/x-shellscript")), "text");
+  assert.equal(filePreviewKind(file("application/json")), "text");
+  assert.equal(filePreviewKind(file("application/yaml")), "text");
+  assert.equal(filePreviewKind(file("application/toml")), "text");
   assert.equal(filePreviewKind(file("image/png")), "image");
   assert.equal(filePreviewKind(file("application/pdf")), "pdf");
   assert.equal(filePreviewKind(file("application/vnd.openxmlformats-officedocument.presentationml.presentation")), null);
   assert.equal(canPreviewInline(file("text/markdown")), true);
+  assert.equal(canPreviewInline(file("text/x-python")), true);
   assert.equal(canPreviewInline(file("text/plain", FILE_PREVIEW_TEXT_LIMIT_BYTES + 1)), false);
   assert.equal(canPreviewInline(file("image/png", 100 * 1024 * 1024)), true);
+});
+
+test("deliverable mime detection covers code and config files", () => {
+  assert.equal(mimeTypeForPath("outputs/script.py"), "text/x-python");
+  assert.equal(mimeTypeForPath("outputs/app.ts"), "text/x-typescript");
+  assert.equal(mimeTypeForPath("outputs/main.go"), "text/x-go");
+  assert.equal(mimeTypeForPath("outputs/schema.yaml"), "application/yaml");
+  assert.equal(mimeTypeForPath("outputs/config.toml"), "application/toml");
+  assert.equal(mimeTypeForPath("outputs/package.json"), "application/json");
+  assert.equal(mimeTypeForPath("outputs/settings.xml"), "application/xml");
+  assert.equal(mimeTypeForPath("outputs/deploy.sh"), "text/x-shellscript");
+  assert.equal(mimeTypeForPath("outputs/.env"), "text/plain");
+  assert.equal(mimeTypeForPath("outputs/.env.local"), "text/plain");
+  assert.equal(mimeTypeForPath("outputs/Dockerfile"), "text/x-dockerfile");
+  assert.equal(mimeTypeForPath("outputs/Makefile"), "text/x-makefile");
+  assert.equal(mimeTypeForPath("outputs/data.xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.equal(mimeTypeForPath("outputs/unknown.bin"), "application/octet-stream");
 });
 
 test("output files are maintained in conversation details and open in a side-by-side preview", () => {
@@ -1890,6 +1921,20 @@ test("output files can be shared as temporary unauthenticated preview links", as
     original_name: "binary.txt", relative_path: "outputs/binary.txt",
     mime_type: "text/plain", size: 4, kind: "output", created_at: now,
   });
+  const pythonId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "script.py"), "def main():\n    print('hi')\n");
+  instance.db.addFile({
+    id: pythonId, conversation_id: conversationId, message_id: null,
+    original_name: "script.py", relative_path: "outputs/script.py",
+    mime_type: "text/x-python", size: 29, kind: "output", created_at: now,
+  });
+  const yamlId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "config.yaml"), "name: demo\nversion: 1\n");
+  instance.db.addFile({
+    id: yamlId, conversation_id: conversationId, message_id: null,
+    original_name: "config.yaml", relative_path: "outputs/config.yaml",
+    mime_type: "application/yaml", size: 21, kind: "output", created_at: now,
+  });
 
   const share = await agent.post(`/codex-web/api/files/${markdownId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   assert.match(share.body.url, /^\/codex-web\/share\/[A-Za-z0-9_-]+$/);
@@ -1917,6 +1962,16 @@ test("output files can be shared as temporary unauthenticated preview links", as
   assert.match(binaryPage.text, /文件包含二进制数据/);
   assert.doesNotMatch(binaryPage.text, /<pre class="text">/);
 
+  const pythonShare = await agent.post(`/codex-web/api/files/${pythonId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  const pythonPage = await guest.get(pythonShare.body.url).expect(200);
+  assert.match(pythonPage.text, /<pre class="text">/);
+  assert.match(pythonPage.text, /def main\(\)/);
+  assert.match(pythonPage.text, /print\(&#39;hi&#39;\)/);
+  const yamlShare = await agent.post(`/codex-web/api/files/${yamlId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
+  const yamlPage = await guest.get(yamlShare.body.url).expect(200);
+  assert.match(yamlPage.text, /<pre class="text">/);
+  assert.match(yamlPage.text, /name: demo/);
+
   const imageShare = await agent.post(`/codex-web/api/files/${imageId}/share`).set("X-CSRF-Token", login.body.csrfToken).expect(200);
   const imageContent = await guest.get(`${imageShare.body.url}/content`).expect(200);
   assert.equal(imageContent.headers["content-type"], "image/png");
@@ -1935,6 +1990,57 @@ test("output files can be shared as temporary unauthenticated preview links", as
   const expiredToken = createShareToken(secret, markdownId, Math.floor(Date.now() / 1000) - 60);
   await guest.get(`/codex-web/share/${expiredToken}`).expect(404);
   await guest.get(`/codex-web/share/${expiredToken}/download`).expect(404);
+});
+
+test("output file download endpoint inlines text-based code and config files", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-inline-mime-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id;
+  const userId = instance.db.getConversation(conversationId)?.user_id ?? LEGACY_USER_ID;
+  const workspace = ensureTenantWorkspace(tenantRoot, userId, conversationId);
+  const now = new Date().toISOString();
+
+  const pythonId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "script.py"), "print('hi')\n");
+  instance.db.addFile({
+    id: pythonId, conversation_id: conversationId, message_id: null,
+    original_name: "script.py", relative_path: "outputs/script.py",
+    mime_type: "text/x-python", size: 12, kind: "output", created_at: now,
+  });
+  const jsonId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "config.json"), "{\"a\": 1}\n");
+  instance.db.addFile({
+    id: jsonId, conversation_id: conversationId, message_id: null,
+    original_name: "config.json", relative_path: "outputs/config.json",
+    mime_type: "application/json", size: 9, kind: "output", created_at: now,
+  });
+  const xlsxId = crypto.randomUUID();
+  fs.writeFileSync(path.join(workspace, "outputs", "data.xlsx"), "xlsx-bytes");
+  instance.db.addFile({
+    id: xlsxId, conversation_id: conversationId, message_id: null,
+    original_name: "data.xlsx", relative_path: "outputs/data.xlsx",
+    mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 10, kind: "output", created_at: now,
+  });
+
+  const python = await agent.get(`/codex-web/api/files/${pythonId}`).expect(200);
+  assert.equal(python.headers["content-type"], "text/x-python");
+  assert.match(python.headers["content-disposition"] ?? "", /inline/);
+  const json = await agent.get(`/codex-web/api/files/${jsonId}`).expect(200);
+  assert.equal(json.headers["content-type"], "application/json");
+  assert.match(json.headers["content-disposition"] ?? "", /inline/);
+  const xlsx = await agent.get(`/codex-web/api/files/${xlsxId}`).expect(200);
+  assert.match(xlsx.headers["content-disposition"] ?? "", /attachment/);
+  const pythonDownload = await agent.get(`/codex-web/api/files/${pythonId}?download=1`).expect(200);
+  assert.match(pythonDownload.headers["content-disposition"] ?? "", /attachment/);
 });
 
 test("host mode reports unconfigured tenants and blocks task sends until ~/.codex exists", async (context) => {

@@ -18,6 +18,7 @@ import { detectOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { latestUserCancellationContext } from "./cancellation-summary.js";
 import { hostTenantFor } from "./host-mode.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
+import { mimeTypeForPath } from "./mime.js";
 
 type Publish = (jobId: string, eventType: string, payload: unknown) => void;
 
@@ -273,7 +274,7 @@ export class CodexRunner {
         const file: FileRow = {
           id: fileId, conversation_id: conversationId, message_id: messageId,
           original_name: path.basename(portablePath), relative_path: storedPath,
-          mime_type: guessMime(relativePath), size: stat.size, kind: "output", created_at: createdAt,
+          mime_type: mimeTypeForPath(relativePath), size: stat.size, kind: "output", created_at: createdAt,
         };
         this.db.addFile(file);
       }
@@ -389,16 +390,4 @@ function commandProgressLabel(command: string, status: "in_progress" | "complete
     return running ? "正在检查文件与工作区" : "文件与工作区检查完成";
   }
   return running ? "正在执行本机处理步骤" : "本机处理步骤完成";
-}
-
-function guessMime(filePath: string): string {
-  const extension = path.extname(filePath).toLowerCase();
-  return ({
-    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
-    ".gif": "image/gif", ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
-    ".csv": "text/csv", ".json": "application/json", ".html": "text/html",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  } as Record<string, string>)[extension] ?? "application/octet-stream";
 }
