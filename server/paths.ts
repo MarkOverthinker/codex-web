@@ -197,7 +197,9 @@ export function normalizeUploadFileName(originalName: string): string {
 export function resolveInside(root: string, relativePath: string): string {
   const resolvedRoot = path.resolve(root);
   const normalized = normalizeStoredRelativePath(relativePath);
-  const resolved = path.resolve(resolvedRoot, ...normalized.split("/"));
+  const resolved = path.isAbsolute(normalized)
+    ? path.resolve(normalized)
+    : path.resolve(resolvedRoot, ...normalized.split("/"));
   if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
     throw new Error("Path escapes workspace");
   }

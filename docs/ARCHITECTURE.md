@@ -37,8 +37,10 @@ placeholder, and reserving less than the real height collapses `scrollHeight`
 and makes the browser clamp the viewport back to an earlier message while
 scrolling toward the top of a reply.
 
-Markdown rendering uses GFM, KaTeX for `$...$`/`$$...$$` math, and static
-highlight.js token styling for fenced code blocks; malformed math falls back
+Markdown rendering uses GFM, KaTeX for math, and static highlight.js token
+styling for fenced code blocks. Math accepts `$...$`/`$$...$$` as well as
+LaTeX `\(...\)`/`\[...\]` and bare `[`/`]` display-math lines, which are
+normalized to the `$`/`$$` forms before rendering; malformed math falls back
 to readable text instead of breaking the message.
 
 Assistant replies that mention `file:line` references are rendered as

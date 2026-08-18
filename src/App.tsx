@@ -21,6 +21,7 @@ import { parseCodexSnippetUrl, parseFileRef, parseSnippetHref, type FileLineRef 
 import { CopyPathButton, copyText } from "./copy-path";
 import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
+import { normalizeMathDelimiters } from "./markdown-math";
 import { chooseComposerPrimaryAction } from "./composer-action";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
 import { resolveAccountIdentity } from "./account-identity";
@@ -73,6 +74,14 @@ const ACTIVITY_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", { hour: "2-digi
 
 type DraftSaveState = "idle" | "unsaved" | "saving" | "saved" | "error";
 type DraftUpload = { id: string; name: string };
+
+function newUploadId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
 type CachedComposerDraft = { content: string; quoteExcerpt: string; sourceReference: MessageSourceReference | null; composerDraft: ComposerDraft | null };
 
 function conversationFieldsEqual(left: Conversation, right: Conversation): boolean {
@@ -1222,17 +1231,20 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const available = Math.max(0, 12 - (composerDraftRef.current?.files.length ?? 0) - draftUploadsRef.current.length);
     const accepted = incoming.slice(0, available);
     if (accepted.length === 0) { setNotice("单个会话草稿最多包含 12 个附件。"); return; }
-    const uploads = accepted.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
-    setDraftUploads((current) => [...current, ...uploads]);
+    let uploads: DraftUpload[] = [];
     setError("");
     try {
+      uploads = accepted.map((file) => ({ id: newUploadId(), name: file.name }));
+      setDraftUploads((current) => [...current, ...uploads]);
       const result = await api.uploadConversationDraftFiles(conversationId, accepted);
       applyComposerDraftUploadResult(result, conversationId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "草稿附件上传失败");
     } finally {
-      const ids = new Set<string>(uploads.map((upload) => upload.id));
-      setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
+      if (uploads.length > 0) {
+        const ids = new Set<string>(uploads.map((upload) => upload.id));
+        setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
+      }
     }
   }
 
@@ -1246,17 +1258,20 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const available = Math.max(0, 12 - (composerDraftRef.current?.files.length ?? 0) - draftUploadsRef.current.length);
     const accepted = paths.slice(0, available);
     if (accepted.length === 0) { setNotice("单个会话草稿最多包含 12 个附件。"); return; }
-    const uploads = accepted.map((filePath) => ({ id: crypto.randomUUID(), name: filePath.split(/[\\/]/).at(-1) ?? filePath }));
-    setDraftUploads((current) => [...current, ...uploads]);
+    let uploads: DraftUpload[] = [];
     setError("");
     try {
+      uploads = accepted.map((filePath) => ({ id: newUploadId(), name: filePath.split(/[\\/]/).at(-1) ?? filePath }));
+      setDraftUploads((current) => [...current, ...uploads]);
       const result = await api.addHostDraftFiles(conversationId, accepted);
       applyComposerDraftUploadResult(result, conversationId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "从服务器添加附件失败");
     } finally {
-      const ids = new Set<string>(uploads.map((upload) => upload.id));
-      setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
+      if (uploads.length > 0) {
+        const ids = new Set<string>(uploads.map((upload) => upload.id));
+        setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
+      }
     }
   }
 
@@ -2634,7 +2649,7 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
           if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
           return <code className={className}>{children}</code>;
         } }}
-      >{sanitizeAgentMarkdown(message.content, citationFiles)}</ReactMarkdown></div> : <>
+      >{normalizeMathDelimiters(sanitizeAgentMarkdown(message.content, citationFiles))}</ReactMarkdown></div> : <>
         {message.source_reference
           ? <div className="message-source-reference">
               <div className="message-source-reference-copy">
@@ -2716,7 +2731,7 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
             <li key={step.id ?? `${step.title ?? index}-${index}`}>
               <details className={`reasoning-step${step.id?.startsWith("approval:") ? " approval-reasoning-step" : ""}`}>
                 <summary><span className="reasoning-step-index">{index + 1}</span><span className="reasoning-step-title">{step.title || "思考步骤"}</span><ChevronDown size={13} /></summary>
-                <div className="markdown reasoning-step-detail"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{step.detail || step.title}</ReactMarkdown></div>
+                <div className="markdown reasoning-step-detail"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{normalizeMathDelimiters(step.detail || step.title || "")}</ReactMarkdown></div>
               </details>
             </li>
           ))}
@@ -2903,7 +2918,7 @@ function ProcessPanel({ activities, startedAt: jobStartedAt, activeJobId, onSkip
             {activity.kind === "file" && activity.files?.length ? <small title={activity.files.join("、")}>{activity.files.map((file) => file.split(/[\\/]/).at(-1)).join("、")}</small> : null}
             {["search", "tool"].includes(activity.kind ?? "") && activity.detail ? <small>{activity.detail}</small> : null}
             {activity.kind === "command" && activity.detail ? <details className="technical-detail"><summary>{activity.actionCount && activity.actionCount > 1 ? `查看 ${activity.actionCount} 个技术步骤` : "查看技术细节"}</summary><code>{activity.groupedDetails?.join("\n\n") || activity.detail}</code></details> : null}
-            {activity.kind === "approval" && activity.detail ? <details className={`approval-detail ${activity.reviewStatus ?? ""}`}><summary>查看审核内容</summary><div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{activity.detail}</ReactMarkdown></div></details> : null}
+            {activity.kind === "approval" && activity.detail ? <details className={`approval-detail ${activity.reviewStatus ?? ""}`}><summary>查看审核内容</summary><div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{normalizeMathDelimiters(activity.detail)}</ReactMarkdown></div></details> : null}
           </div>
         </div>) : <p className="process-journal-empty">正在建立执行方向…</p>}</div>
     {startedAt && !queued && <div className="process-timer-row"><Timer size={13} />已用时 {formatElapsed(elapsedSeconds)}</div>}
@@ -2913,7 +2928,7 @@ function ProcessPanel({ activities, startedAt: jobStartedAt, activeJobId, onSkip
 const ProcessJournalNote = memo(function ProcessJournalNote({ activity }: { activity: JobEvent }) {
   return <section className="process-journal-note">
     <header><Bot size={14} /><strong>{activity.kind === "reasoning" ? "重要思路" : "阶段反馈"}</strong>{activity.created_at && <time dateTime={activity.created_at}>{formatActivityTime(activity.created_at)}</time>}</header>
-    <div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{activity.detail ?? ""}</ReactMarkdown></div>
+    <div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{normalizeMathDelimiters(activity.detail ?? "")}</ReactMarkdown></div>
   </section>;
 });
 
@@ -3043,7 +3058,7 @@ function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose 
       <div className={`file-preview-body ${kind === "image" || kind === "pdf" ? "fit" : ""}`}>
         {kind === "image" && <img className="file-preview-image" src={source} alt={file.original_name} />}
         {kind === "pdf" && <iframe className="file-preview-frame" src={source} title={file.original_name} />}
-        {kind === "markdown" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <div className="markdown file-preview-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{text}</ReactMarkdown></div>)}
+        {kind === "markdown" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <div className="markdown file-preview-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{normalizeMathDelimiters(text)}</ReactMarkdown></div>)}
         {kind === "text" && (error ? <FilePreviewError error={error} /> : text === null ? <FilePreviewLoading /> : <pre className="file-preview-plain">{text}</pre>)}
         {!kind && <FilePreviewError error="该文件格式暂不支持页内预览，请下载后查看。" />}
       </div>

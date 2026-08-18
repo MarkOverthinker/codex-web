@@ -96,6 +96,7 @@ export function createApp(overrides: AppOverrides = {}) {
     ensureProviderConfig(config, codexHomeFor(user.id), db, user.id, providerConfigOwner(user.id));
   }
   migrateExistingOutputFiles(config, db);
+  migrateUploadFileMimes(db);
   const subscribers = new Map<string, Set<Response>>();
 
   function optionsForUser(userId: string): AgentOptions {
@@ -406,7 +407,7 @@ export function createApp(overrides: AppOverrides = {}) {
     return uploaded.map((file) => ({
       originalName: file.originalname,
       diskName: file.filename,
-      mimeType: file.mimetype || "application/octet-stream",
+      mimeType: normalizeUploadMime(file),
       size: file.size,
     }));
   }
@@ -1552,9 +1553,10 @@ export function createApp(overrides: AppOverrides = {}) {
     const line = Number(req.query.line);
     const before = Number(req.query.before ?? 80);
     const after = Number(req.query.after ?? 80);
+    const full = req.query.full === "1";
     if (!rawPath) return res.status(400).json({ error: "缺少文件路径。" });
     if (!Number.isInteger(line) || line < 1) return res.status(400).json({ error: "行号无效。" });
-    if (![before, after].every((value) => Number.isInteger(value) && value >= 0 && value <= CODE_SNIPPET_MAX_WINDOW)) {
+    if (!full && ![before, after].every((value) => Number.isInteger(value) && value >= 0 && value <= CODE_SNIPPET_MAX_WINDOW)) {
       return res.status(400).json({ error: "行窗口无效。" });
     }
     const target = snippetTargetFor(conversation, session.user_id, rawPath);
@@ -1569,6 +1571,18 @@ export function createApp(overrides: AppOverrides = {}) {
     const lines = content.split("\n");
     if (lines.at(-1) === "") lines.pop();
     const totalLines = lines.length;
+    if (full) {
+      return res.json({
+        path: target.displayPath,
+        originalName: target.originalName ?? path.basename(target.absolute),
+        totalLines,
+        start: 1,
+        end: totalLines,
+        line: 1,
+        lines: [],
+        content,
+      });
+    }
     const start = Math.max(1, line - before);
     const end = Math.min(totalLines, line + after);
     return res.json({
@@ -2336,6 +2350,26 @@ export function migrateExistingOutputFiles(config: AppConfig, db: AppDatabase): 
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
     const storedPath = persistDeliverableSync(config.dataRoot, workspace, file.relative_path, file.id);
     db.updateFilePath(file.id, storedPath);
+    migrated += 1;
+  }
+  return migrated;
+}
+
+function normalizeUploadMime(file: Express.Multer.File): string {
+  const reported = file.mimetype || "application/octet-stream";
+  const byExtension = HOST_ATTACHMENT_MIME_BY_EXTENSION[path.extname(file.originalname).toLowerCase()];
+  if (!byExtension || (reported !== "application/octet-stream" && reported !== "text/plain")) return reported;
+  return byExtension;
+}
+
+export function migrateUploadFileMimes(db: AppDatabase): number {
+  let migrated = 0;
+  for (const file of db.listFiles()) {
+    if (file.kind !== "upload") continue;
+    const expected = HOST_ATTACHMENT_MIME_BY_EXTENSION[path.extname(file.original_name).toLowerCase()];
+    if (!expected || file.mime_type === expected) continue;
+    if (file.mime_type !== "application/octet-stream" && file.mime_type !== "text/plain") continue;
+    db.updateFileMime(file.id, expected);
     migrated += 1;
   }
   return migrated;

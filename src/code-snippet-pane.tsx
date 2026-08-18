@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { FileCode, LoaderCircle, TriangleAlert, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
 import { api, type CodeSnippetWindow } from "./api";
-import type { FileLineRef } from "./code-snippet";
+import { isMarkdownSnippetPath, type FileLineRef } from "./code-snippet";
 import { CopyPathButton } from "./copy-path";
+import { normalizeMathDelimiters } from "./markdown-math";
 
 const INITIAL_BEFORE = 80;
 const INITIAL_AFTER = 80;
@@ -31,6 +37,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
   snippetRef.current = snippet;
   const hasLine = Boolean(target.line);
   const line = target.line ?? 1;
+  const markdownPreview = isMarkdownSnippetPath(target.path, target.line);
 
   useEffect(() => {
     const seq = ++seqRef.current;
@@ -45,7 +52,8 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
       path: target.path,
       line,
       before: hasLine ? INITIAL_BEFORE : 0,
-      after: hasLine ? INITIAL_AFTER : INITIAL_FROM_START_LINES,
+      after: hasLine ? INITIAL_AFTER : markdownPreview ? 0 : INITIAL_FROM_START_LINES,
+      full: markdownPreview,
     })
       .then((data) => {
         if (seq !== seqRef.current) return;
@@ -65,7 +73,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
         if (seq !== seqRef.current) return;
         setError(reason instanceof Error ? reason.message : "代码预览加载失败");
       });
-  }, [conversationId, target.path, hasLine, line, retry]);
+  }, [conversationId, target.path, hasLine, line, markdownPreview, retry]);
 
   function loadMore(direction: "above" | "below") {
     const current = snippetRef.current;
@@ -140,7 +148,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
 
   const title = snippet?.path ?? target.path;
   const fileName = snippet?.originalName ?? title.split(/[\\/]/).at(-1) ?? title;
-  return <aside className="file-preview-pane code-snippet-pane" style={{ width }} aria-label={`代码预览 ${title}${hasLine ? `:${target.line}` : ""}`}>
+  return <aside className="file-preview-pane code-snippet-pane" style={{ width }} aria-label={`${markdownPreview ? "Markdown 预览" : "代码预览"} ${title}${hasLine ? `:${target.line}` : ""}`}>
     <div
       className="file-preview-resizer"
       role="separator"
@@ -157,7 +165,7 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
       <FileCode size={19} />
       <span className="file-preview-title">
         <strong>{fileName}</strong>
-        <small title={title}>{title}{hasLine ? ` · 第 ${target.line} 行` : " · 从头预览"}</small>
+        <small title={title}>{title}{markdownPreview ? " · Markdown 渲染预览" : hasLine ? ` · 第 ${target.line} 行` : " · 从头预览"}</small>
       </span>
       <span className="file-preview-actions">
         <CopyPathButton value={title} className="file-preview-copy" />
@@ -167,7 +175,12 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
     {error
       ? <div className="file-preview-error"><TriangleAlert size={20} /><span>{error}</span><button type="button" className="code-snippet-retry" onClick={() => setRetry((value) => value + 1)}>重试</button></div>
       : !snippet
-        ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>正在加载代码…</span></div>
+        ? <div className="file-preview-loading"><LoaderCircle className="spin" size={20} /><span>{markdownPreview ? "正在加载 Markdown…" : "正在加载代码…"}</span></div>
+        : markdownPreview && snippet.content !== undefined
+          ? <div className="file-preview-body"><div className="markdown file-preview-markdown"><ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
+            >{normalizeMathDelimiters(snippet.content)}</ReactMarkdown></div></div>
         : <div className="code-snippet-scroll" ref={bodyRef} onScroll={handleScroll}>
             {snippet.start > 1 && <div className="code-snippet-more">{loadingMore === "above" ? <><LoaderCircle className="spin" size={13} /><span>正在加载上方代码…</span></> : <span>继续向上滚动加载更多</span>}</div>}
             <ol className="code-snippet-lines">
@@ -182,6 +195,6 @@ export function CodeSnippetPane({ conversationId, target, width, onResizeStart, 
             {snippet.end < snippet.totalLines && <div className="code-snippet-more">{loadingMore === "below" ? <><LoaderCircle className="spin" size={13} /><span>正在加载下方代码…</span></> : <span>继续向下滚动加载更多</span>}</div>}
             {moreError && <p className="code-snippet-more-error"><TriangleAlert size={12} />{moreError}</p>}
           </div>}
-    {snippet && <footer className="code-snippet-status">第 {snippet.start}–{snippet.end} 行 · 共 {snippet.totalLines} 行{hasLine && target.line! >= snippet.start && target.line! <= snippet.end ? ` · 定位 ${target.line} 行` : ""}</footer>}
+    {snippet && <footer className="code-snippet-status">{markdownPreview && snippet.content !== undefined ? `Markdown 预览 · 共 ${snippet.totalLines} 行` : `第 ${snippet.start}–${snippet.end} 行 · 共 ${snippet.totalLines} 行${hasLine && target.line! >= snippet.start && target.line! <= snippet.end ? ` · 定位 ${target.line} 行` : ""}`}</footer>}
   </aside>;
 }
