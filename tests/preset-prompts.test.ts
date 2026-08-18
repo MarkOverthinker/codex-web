@@ -78,6 +78,30 @@ test("preset prompts persist per user and cascade on deletion", () => {
   }
 });
 
+test("default-enabled preset prompts are applied to new conversations", () => {
+  const root = tempRoot("db-default");
+  const db = new AppDatabase(root, { username: "owner", passwordHash: "$2b$10$invalid", displayName: "Owner" }, false);
+  try {
+    const ownerId = LEGACY_USER_ID;
+    const first = "11111111-1111-4111-8111-111111111111";
+    const second = "22222222-2222-4222-8222-222222222222";
+    const off = "33333333-3333-4333-8333-333333333333";
+    db.createPresetPrompt(ownerId, first, "默认一", "内容一", true);
+    db.createPresetPrompt(ownerId, second, "默认二", "内容二", true);
+    db.createPresetPrompt(ownerId, off, "不默认", "内容三");
+
+    const conversationId = "44444444-4444-4444-8444-444444444444";
+    db.createConversation(conversationId, "新任务", undefined, ownerId);
+    const enabled = db.applyDefaultPresetPrompts(conversationId, ownerId);
+    assert.deepEqual(enabled, [first, second]);
+    assert.deepEqual(db.getConversationPresetPromptIds(conversationId), [first, second]);
+    assert.deepEqual(db.listEnabledPresetPrompts(conversationId).map((preset) => preset.name), ["默认一", "默认二"]);
+  } finally {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("preset prompt API enforces auth, validation, conversation binding and user isolation", async (context) => {
   const root = tempRoot("api");
   const ownerPassword = "Preset-Owner-2026!";
@@ -117,13 +141,15 @@ test("preset prompt API enforces auth, validation, conversation binding and user
   await owner.post("/codex-web/api/preset-prompts").set("X-CSRF-Token", ownerCsrf).send({ name: "规则", content: "x".repeat(10_001) }).expect(400);
 
   const created = await owner.post("/codex-web/api/preset-prompts").set("X-CSRF-Token", ownerCsrf)
-    .send({ name: "中文回复", content: "始终使用中文回答" }).expect(201);
+    .send({ name: "中文回复", content: "始终使用中文回答", defaultEnabled: true }).expect(201);
   const presetId = created.body.presetPrompt.id as string;
   assert.equal(created.body.presetPrompt.name, "中文回复");
+  assert.equal(created.body.presetPrompt.defaultEnabled, true);
 
   const updated = await owner.put(`/codex-web/api/preset-prompts/${presetId}`).set("X-CSRF-Token", ownerCsrf)
-    .send({ content: "始终使用中文回答，并给出完整步骤" }).expect(200);
+    .send({ content: "始终使用中文回答，并给出完整步骤", defaultEnabled: false }).expect(200);
   assert.match(updated.body.presetPrompt.content, /完整步骤/);
+  assert.equal(updated.body.presetPrompt.defaultEnabled, false);
   await owner.put("/codex-web/api/preset-prompts/missing").set("X-CSRF-Token", ownerCsrf)
     .send({ name: "新名字" }).expect(404);
 
@@ -137,8 +163,13 @@ test("preset prompt API enforces auth, validation, conversation binding and user
   const memberList = await member.get("/codex-web/api/preset-prompts").expect(200);
   assert.deepEqual(memberList.body.presetPrompts.map((preset: { id: string }) => preset.id), [memberPresetId]);
 
+  const defaultPreset = await owner.post("/codex-web/api/preset-prompts").set("X-CSRF-Token", ownerCsrf)
+    .send({ name: "新对话默认", content: "新对话自动启用", defaultEnabled: true }).expect(201);
+  const defaultPresetId = defaultPreset.body.presetPrompt.id as string;
   const conversation = await owner.post("/codex-web/api/conversations").set("X-CSRF-Token", ownerCsrf).send({}).expect(201);
   const conversationId = conversation.body.conversation.id as string;
+  const newDetail = await owner.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  assert.deepEqual(newDetail.body.enabledPresetPromptIds, [defaultPresetId]);
   const bound = await owner.put(`/codex-web/api/conversations/${conversationId}/preset-prompts`).set("X-CSRF-Token", ownerCsrf)
     .send({ presetPromptIds: [presetId] }).expect(200);
   assert.deepEqual(bound.body.enabledPresetPromptIds, [presetId]);
@@ -155,6 +186,9 @@ test("preset prompt API enforces auth, validation, conversation binding and user
   await owner.delete(`/codex-web/api/preset-prompts/${presetId}`).set("X-CSRF-Token", ownerCsrf).expect(204);
   const detailAfterDelete = await owner.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
   assert.deepEqual(detailAfterDelete.body.enabledPresetPromptIds, []);
+  await owner.delete(`/codex-web/api/preset-prompts/${defaultPresetId}`).set("X-CSRF-Token", ownerCsrf).expect(204);
+  const detailAfterAllDeletes = await owner.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  assert.deepEqual(detailAfterAllDeletes.body.enabledPresetPromptIds, []);
   await owner.delete(`/codex-web/api/preset-prompts/${presetId}`).set("X-CSRF-Token", ownerCsrf).expect(404);
 });
 

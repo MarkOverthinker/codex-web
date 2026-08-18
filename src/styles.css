@@ -1506,6 +1506,9 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .preset-manager-copy { min-width: 0; flex: 1 1 auto; display: grid; gap: 2px; }
 .preset-manager-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .preset-manager-copy small { overflow: hidden; color: #858a9b; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.preset-manager-default-toggle { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: #5b6074; font-size: 11px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.preset-manager-default-toggle input { accent-color: var(--indigo); }
+.preset-manager-default-toggle:has(input:disabled) { opacity: .45; cursor: default; }
 .preset-manager-actions { display: flex; align-items: center; gap: 3px; }
 .preset-manager-actions button { width: 29px; height: 29px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; color: #74798a; background: transparent; cursor: pointer; }
 .preset-manager-actions button:hover:not(:disabled) { color: #303b79; background: #eef0f7; }
@@ -1515,6 +1518,9 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .preset-editor-heading { display: flex; align-items: center; gap: 6px; color: #4d5265; font-size: 12px; }
 .preset-editor-heading svg { color: var(--indigo); }
 .preset-editor label { display: grid; gap: 5px; color: #4d5265; font-size: 11px; font-weight: 700; }
+.preset-editor label.preset-editor-default { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.preset-editor label.preset-editor-default input { width: auto; accent-color: var(--indigo); }
+.preset-editor label.preset-editor-default:has(input:disabled) { opacity: .5; cursor: default; }
 .preset-editor input,
 .preset-editor textarea { width: 100%; padding: 8px 10px; border: 1px solid #d8dbe7; border-radius: 9px; color: #34384b; background: #fff; font: inherit; font-size: 12px; resize: vertical; }
 .preset-editor input:focus,
@@ -1591,6 +1597,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .preset-manager-footer { border-color: #3a3c43; }
 :root[data-theme="dark"] .preset-manager-row { border-color: #3d3f46; background: #222328; }
 :root[data-theme="dark"] .preset-manager-copy small { color: #999ba3; }
+:root[data-theme="dark"] .preset-manager-default-toggle { color: #b0b2ba; }
 :root[data-theme="dark"] .preset-manager-actions button { color: #b0b2ba; }
 :root[data-theme="dark"] .preset-manager-actions button:hover:not(:disabled) { color: #e0e4ff; background: #383b49; }
 :root[data-theme="dark"] .preset-manager-actions button.danger:hover:not(:disabled) { color: #ffadb5; background: #3a2226; }
