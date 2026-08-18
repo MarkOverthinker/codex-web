@@ -229,10 +229,13 @@ normal login. See [Host mode](docs/DEPLOYMENT.md#host-mode-machine-users-as-tena
 for setup and the security trade-offs.
 
 In host mode, a new task can choose its Codex working directory: pick one of
-your saved favorite directories or type any absolute path the machine user can
-access. Favorites and a per-user default are stored in the web database, and
-each conversation remembers its own directory. Attachments, generated outputs
-and temporary runtime files still live in the conversation's own workspace;
+your saved favorite directories, browse the machine's filesystem from the
+dialog, or type any absolute path the machine user can access. The same path
+browser is available when adding attachments: files on the machine can be
+selected directly and are copied into the conversation's isolated workspace.
+Favorites and a per-user default are stored in the web database, and each
+conversation remembers its own directory. Attachments, generated outputs and
+temporary runtime files still live in the conversation's own workspace;
 deleting a conversation never removes the selected host directory. Tasks that
 share one directory run one at a time to avoid conflicting writes. Switching an
 existing conversation into a directory where other sessions have queued or

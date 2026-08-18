@@ -47,7 +47,7 @@ import {
   writeProviderConfig,
 } from "./provider-manager.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
-import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
+import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
@@ -65,6 +65,22 @@ const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
 const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例如“把图片背景改为白色”或“汇总这些表格”。收到明确指令后才会开始处理。";
 const USERNAME_PATTERN = /^[a-z_][a-z0-9._-]{0,31}$/i;
 const MIN_PASSWORD_LENGTH = 12;
+const HOST_ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  ".txt": "text/plain", ".md": "text/markdown", ".markdown": "text/markdown", ".csv": "text/csv",
+  ".json": "application/json", ".toml": "application/toml", ".yaml": "application/yaml", ".yml": "application/yaml",
+  ".py": "text/x-python", ".js": "text/javascript", ".mjs": "text/javascript", ".cjs": "text/javascript",
+  ".ts": "text/x-typescript", ".tsx": "text/x-typescript", ".jsx": "text/x-javascript", ".html": "text/html",
+  ".css": "text/css", ".sh": "text/x-shellscript", ".xml": "application/xml", ".svg": "image/svg+xml",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+  ".bmp": "image/bmp", ".ico": "image/x-icon", ".pdf": "application/pdf",
+  ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".zip": "application/zip", ".tar": "application/x-tar", ".gz": "application/gzip", ".7z": "application/x-7z-compressed",
+};
+function mimeTypeForHostPath(filePath: string): string {
+  return HOST_ATTACHMENT_MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
+}
 type AuthenticatedRequest = Request & { appSession?: SessionRow };
 
 export type AppOverrides = Partial<AppConfig> & { logger?: Logger };
@@ -374,13 +390,24 @@ export function createApp(overrides: AppOverrides = {}) {
     }
   }
 
-  function registerPendingUploads(conversationId: string, pendingPromptId: string, uploaded: Express.Multer.File[]): FileRow[] {
+  type StoredUpload = { originalName: string; diskName: string; mimeType: string; size: number };
+
+  function storedUploads(uploaded: Express.Multer.File[]): StoredUpload[] {
+    return uploaded.map((file) => ({
+      originalName: file.originalname,
+      diskName: file.filename,
+      mimeType: file.mimetype || "application/octet-stream",
+      size: file.size,
+    }));
+  }
+
+  function registerPendingUploads(conversationId: string, pendingPromptId: string, uploaded: StoredUpload[]): FileRow[] {
     const createdAt = new Date().toISOString();
     return uploaded.map((file) => {
       const row: FileRow = {
         id: newId(), conversation_id: conversationId, message_id: null, pending_prompt_id: pendingPromptId,
-        original_name: safeUploadName(file.originalname).displayName,
-        relative_path: path.posix.join("uploads", file.filename), mime_type: file.mimetype || "application/octet-stream",
+        original_name: safeUploadName(file.originalName).displayName,
+        relative_path: path.posix.join("uploads", file.diskName), mime_type: file.mimeType,
         size: file.size, kind: "upload", created_at: createdAt,
       };
       db.addFile(row);
@@ -388,14 +415,14 @@ export function createApp(overrides: AppOverrides = {}) {
     });
   }
 
-  function registerComposerUploads(conversationId: string, uploaded: Express.Multer.File[]): FileRow[] {
+  function registerComposerUploads(conversationId: string, uploaded: StoredUpload[]): FileRow[] {
     db.ensureComposerDraft(conversationId);
     const createdAt = new Date().toISOString();
     const rows = uploaded.map((file) => {
       const row: FileRow = {
         id: newId(), conversation_id: conversationId, message_id: null, pending_prompt_id: null, composer_draft_id: conversationId,
-        original_name: safeUploadName(file.originalname).displayName,
-        relative_path: path.posix.join("uploads", file.filename), mime_type: file.mimetype || "application/octet-stream",
+        original_name: safeUploadName(file.originalName).displayName,
+        relative_path: path.posix.join("uploads", file.diskName), mime_type: file.mimeType,
         size: file.size, kind: "upload", created_at: createdAt,
       };
       db.addFile(row);
@@ -991,6 +1018,28 @@ export function createApp(overrides: AppOverrides = {}) {
   api.get("/working-dirs", (req, res) => {
     const session = res.locals.session as SessionRow;
     return res.json({ settings: workingDirSettingsFor(session.user_id) });
+  });
+
+  api.get("/path-browser", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const host = requireHostWorkingTenant(session);
+    if (!host) {
+      return res.status(403).json({ error: "路径浏览仅支持已映射系统账户的 host 模式。" });
+    }
+    const raw = typeof req.query?.path === "string" ? req.query.path : undefined;
+    try {
+      return res.json({
+        listing: listHostDirectory(raw, {
+          dataRoot: config.dataRoot,
+          tenantRoot: config.tenantRoot,
+          workspaceRoot: config.workspaceRoot,
+          home: host.home,
+          username: host.username,
+        }),
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "无法浏览该目录。" });
+    }
   });
 
   api.put("/working-dirs/favorites", (req, res) => {
@@ -1613,7 +1662,59 @@ export function createApp(overrides: AppOverrides = {}) {
       removeUnregisteredUploads(uploaded);
       return res.status(400).json({ error: "单个会话草稿最多包含 12 个附件。" });
     }
-    registerComposerUploads(conversation.id, uploaded);
+    registerComposerUploads(conversation.id, storedUploads(uploaded));
+    return res.status(201).json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id), session.user_id)! });
+  });
+
+  api.post("/conversations/:id/draft/files/from-host", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const host = requireHostWorkingTenant(session);
+    if (!host) {
+      return res.status(403).json({ error: "从宿主路径添加附件仅支持已映射系统账户的 host 模式。" });
+    }
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    if (conversation.archived_at) return res.status(409).json({ error: "会话已归档，请恢复后再继续编辑。" });
+    if (deletingConversations.has(conversation.id)) return res.status(409).json({ error: "会话正在删除。" });
+    const rawPaths = Array.isArray(req.body?.paths) ? req.body.paths.filter((value: unknown): value is string => typeof value === "string") : [];
+    if (rawPaths.length === 0) return res.status(400).json({ error: "没有选择文件。" });
+    const existing = db.getComposerDraft(conversation.id);
+    if ((existing?.files.length ?? 0) + rawPaths.length > 12) {
+      return res.status(400).json({ error: "单个会话草稿最多包含 12 个附件。" });
+    }
+    const workspace = workspaceFor(session.user_id, conversation.id);
+    const uploadsDir = path.join(workspace, "uploads");
+    const registered: StoredUpload[] = [];
+    const copied: string[] = [];
+    try {
+      for (const raw of rawPaths) {
+        const source = resolveHostReadableFile(raw, {
+          dataRoot: config.dataRoot,
+          tenantRoot: config.tenantRoot,
+          workspaceRoot: config.workspaceRoot,
+          username: host.username,
+        });
+        const safe = safeUploadName(path.basename(source));
+        const destination = path.join(uploadsDir, safe.diskName);
+        fs.copyFileSync(source, destination);
+        if (process.getuid?.() === 0) {
+          try { fs.chownSync(destination, host.uid, host.gid); } catch { /* The web service can still manage draft cleanup as root. */ }
+        }
+        copied.push(destination);
+        registered.push({
+          originalName: safe.displayName,
+          diskName: safe.diskName,
+          mimeType: mimeTypeForHostPath(source),
+          size: fs.statSync(destination).size,
+        });
+      }
+    } catch (error) {
+      for (const file of copied) {
+        try { fs.rmSync(file, { force: true }); } catch {}
+      }
+      return res.status(400).json({ error: error instanceof Error ? error.message : "从宿主路径添加附件失败。" });
+    }
+    registerComposerUploads(conversation.id, registered);
     return res.status(201).json({ composerDraft: composerDraftForClient(db.getComposerDraft(conversation.id), session.user_id)! });
   });
 
@@ -1777,7 +1878,7 @@ export function createApp(overrides: AppOverrides = {}) {
       }
       const awaiting = editingPrompt ?? db.createPendingPrompt(newId(), conversation.id, "", selection);
       if (!editingPrompt) db.beginEditingPendingPrompt(awaiting.id);
-      registerPendingUploads(conversation.id, awaiting.id, uploaded);
+      registerPendingUploads(conversation.id, awaiting.id, storedUploads(uploaded));
       const persisted = db.updateEditingPendingPrompt(awaiting.id, "", selection);
       return res.status(202).json({ pendingPrompt: persisted, editingPrompt: persisted, queued: false, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
     }
@@ -1791,7 +1892,7 @@ export function createApp(overrides: AppOverrides = {}) {
         removeUnregisteredUploads(uploaded);
         return res.status(400).json({ error: "单条任务最多包含 12 个附件。" });
       }
-      registerPendingUploads(conversation.id, editingPrompt.id, uploaded);
+      registerPendingUploads(conversation.id, editingPrompt.id, storedUploads(uploaded));
       const updated = db.updatePendingPrompt(editingPrompt.id, prompt, selection, quoteExcerpt);
       if (!updated) return res.status(409).json({ error: "等待指令的文件状态已经变化，请刷新后重试。" });
       if (config.queueAutoStart) await pumpQueue();
@@ -1804,7 +1905,7 @@ export function createApp(overrides: AppOverrides = {}) {
         return res.status(202).json({ pendingPrompt, queued: true });
       }
       const pendingPrompt = db.createPendingPrompt(newId(), conversation.id, prompt, selection, quoteExcerpt);
-      registerPendingUploads(conversation.id, pendingPrompt.id, uploaded);
+      registerPendingUploads(conversation.id, pendingPrompt.id, storedUploads(uploaded));
       return res.status(202).json({ pendingPrompt: db.getPendingPrompt(pendingPrompt.id), queued: true });
     }
 
@@ -1899,7 +2000,7 @@ export function createApp(overrides: AppOverrides = {}) {
       try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); } catch {}
       db.removeFile(file.id);
     }
-    registerPendingUploads(conversation.id, pending.id, uploaded);
+    registerPendingUploads(conversation.id, pending.id, storedUploads(uploaded));
     const selection = conversationAgentSelection(conversation);
     const updated = prompt || quoteExcerpt
       ? db.updatePendingPrompt(pending.id, prompt, selection, quoteExcerpt)

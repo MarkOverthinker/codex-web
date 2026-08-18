@@ -16,7 +16,7 @@ import { AppDatabase, LEGACY_USER_ID } from "../server/db.js";
 import { resolveSystemUser } from "../server/host-mode.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "../server/share-link.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentSelection } from "../server/model-options.js";
-import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, ensureWorkspace, isDeliverablePath, isPersistedDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName, persistDeliverable, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName } from "../server/paths.js";
+import { codexThreadRolloutBytes, ensureTenant, ensureTenantWorkspace, ensureWorkspace, isDeliverablePath, isPersistedDeliverablePath, listHostDirectory, normalizeStoredRelativePath, normalizeUploadFileName, persistDeliverable, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName } from "../server/paths.js";
 import { buildShellEnvironment, cleanupJobRuntime, prepareJobRuntime } from "../server/python-runtime.js";
 import { assessTaskPolicy } from "../server/task-policy.js";
 import { listTenantIdentities, tenantIdentityForUser } from "../server/tenant-identities.js";
@@ -399,6 +399,13 @@ test("host working directory picker exposes favorites, manual paths, and per-con
   assert.match(styles, /\.working-dir-manager \{/);
   assert.match(styles, /\.chat-working-dir \{/);
   assert.match(styles, /:root\[data-theme="dark"\] \.working-dir-manager/);
+  assert.match(apiSource, /browsePath: \(path\?: string\)/);
+  assert.match(apiSource, /addHostDraftFiles:/);
+  assert.match(appSource, /PathBrowserDialog/);
+  assert.match(appSource, /服务器文件/);
+  assert.match(appSource, /浏览其他目录…/);
+  assert.match(appSource, /onBrowseHostFiles/);
+  assert.match(styles, /\.path-browser-backdrop \{/);
 });
 test("offline bundle packaging ships the in-place upgrade script", () => {
   const packageScript = fs.readFileSync(path.join(process.cwd(), "scripts", "package-offline.sh"), "utf8");
@@ -822,6 +829,43 @@ test("host working directory validation canonicalizes and rejects managed roots"
   const stale = path.join(root, "deleted-project");
   assert.equal(resolveStoredWorkingDirInput(stale), stale);
   assert.throws(() => resolveStoredWorkingDirInput("relative"), /绝对路径/);
+});
+
+test("host path browser lists readable directories and rejects managed roots", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-path-browser-unit-test-"));
+  const dataRoot = path.join(root, "data");
+  const tenantRoot = path.join(root, "tenants");
+  const workspaceRoot = path.join(root, "workspaces");
+  const home = path.join(root, "home");
+  const project = path.join(home, "project");
+  fs.mkdirSync(dataRoot, { recursive: true });
+  fs.mkdirSync(tenantRoot, { recursive: true });
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, "notes.md"), "# 输入\n", "utf8");
+  fs.writeFileSync(path.join(dataRoot, "secret.txt"), "secret", "utf8");
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const username = process.env.USER || process.env.LOGNAME || "root";
+  const options = { dataRoot, tenantRoot, workspaceRoot, home, username };
+  const homeListing = listHostDirectory(undefined, options);
+  assert.equal(homeListing.path, fs.realpathSync(home));
+  assert.ok(homeListing.entries.some((entry) => entry.name === "project" && entry.type === "dir"));
+
+  const projectListing = listHostDirectory(project, options);
+  assert.equal(projectListing.path, fs.realpathSync(project));
+  assert.ok(projectListing.entries.some((entry) => entry.name === "notes.md" && entry.type === "file" && entry.size === Buffer.byteLength("# 输入\n")));
+
+  assert.throws(() => listHostDirectory("relative/path", options), /绝对路径/);
+  assert.throws(() => listHostDirectory(dataRoot, options), /租户或数据目录/);
+  assert.throws(() => listHostDirectory(tenantRoot, options), /租户或数据目录/);
+  assert.throws(() => listHostDirectory(workspaceRoot, options), /租户或数据目录/);
+  assert.throws(() => listHostDirectory(path.join(project, "notes.md"), options), /不是目录/);
+
+  assert.equal(resolveHostReadableFile(path.join(project, "notes.md"), options), fs.realpathSync(path.join(project, "notes.md")));
+  assert.throws(() => resolveHostReadableFile(project, options), /普通文件/);
+  assert.throws(() => resolveHostReadableFile(path.join(project, "missing.txt"), options), /不存在/);
+  assert.throws(() => resolveHostReadableFile(path.join(dataRoot, "secret.txt"), options), /租户或数据目录/);
 });
 
 test("the owner tenant has a dedicated Unix identity and workers reject cross-tenant paths", () => {
@@ -1958,6 +2002,88 @@ test("host mode persists favorite working directories and applies them to new co
     .send({ path: null }).expect(200);
   const clearedDefault = await agent.get("/codex-web/api/working-dirs").expect(200);
   assert.equal(clearedDefault.body.settings.defaultWorkingDir, null);
+});
+
+test("host mode exposes the path browser and attaches files selected by host path", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-path-browser-api-test-"));
+  const username = process.env.USER || process.env.LOGNAME || "root";
+  assert.ok(resolveSystemUser(username), `expected the current machine user ${username} to resolve`);
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username,
+    passwordHash: bcrypt.hashSync("HostPath-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: true,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username, password: "HostPath-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const project = path.join(root, "projects", "host-files");
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, "input.md"), "# 输入\n", "utf8");
+  const source = fs.realpathSync(path.join(project, "input.md"));
+
+  const browsing = await agent.get(`/codex-web/api/path-browser?path=${encodeURIComponent(project)}`).expect(200);
+  assert.equal(browsing.body.listing.path, fs.realpathSync(project));
+  assert.ok(browsing.body.listing.entries.some((entry: { name: string; type: string }) => entry.name === "input.md" && entry.type === "file"));
+
+  await agent.get(`/codex-web/api/path-browser?path=${encodeURIComponent(path.join(root, "data"))}`).expect(400);
+  await agent.get("/codex-web/api/path-browser?path=relative/path").expect(400);
+
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const conversationId = created.body.conversation.id;
+  const attached = await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files/from-host`)
+    .set("X-CSRF-Token", csrf)
+    .send({ paths: [source] }).expect(201);
+  assert.equal(attached.body.composerDraft.files.length, 1);
+  assert.equal(attached.body.composerDraft.files[0].original_name, "input.md");
+
+  const detail = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  const row = detail.body.composerDraft.files[0];
+  const userId = instance.db.getConversation(conversationId)?.user_id;
+  assert.ok(userId);
+  const workspace = ensureTenantWorkspace(instance.config.tenantRoot, userId, conversationId);
+  assert.equal(fs.existsSync(resolveInside(workspace, row.relative_path)), true);
+  assert.equal(fs.readFileSync(resolveInside(workspace, row.relative_path), "utf8"), "# 输入\n");
+
+  await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files/from-host`)
+    .set("X-CSRF-Token", csrf)
+    .send({ paths: [path.join(project, "missing.txt")] }).expect(400);
+  await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files/from-host`)
+    .set("X-CSRF-Token", csrf)
+    .send({ paths: [project] }).expect(400);
+  await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files/from-host`)
+    .set("X-CSRF-Token", csrf)
+    .send({ paths: [path.join(root, "data", "secret.txt")] }).expect(400);
+});
+
+test("path browsing and host-path attachments stay disabled outside host mode", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-path-browser-gated-test-"));
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username: "owner",
+    passwordHash: bcrypt.hashSync("PathBrowser-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    hostMode: false,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "PathBrowser-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  await agent.get("/codex-web/api/path-browser").expect(403);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  await agent.post(`/codex-web/api/conversations/${created.body.conversation.id}/draft/files/from-host`)
+    .set("X-CSRF-Token", csrf)
+    .send({ paths: ["/tmp/whatever.txt"] }).expect(403);
 });
 
 test("host mode reorders favorite working directories from the manage dialog", async (context) => {

@@ -234,6 +234,18 @@ export function resolveHostWorkingDir(input: string, options: { dataRoot: string
     throw new Error("工作目录不存在或当前无法访问。");
   }
   if (!stat.isDirectory()) throw new Error("工作目录必须是一个目录。");
+  if (isManagedHostPath(canonical, options)) {
+    throw new Error("不能选择 Codex Web 自身的租户或数据目录作为工作目录。");
+  }
+  return canonical;
+}
+
+/**
+ * Reject paths inside the application's own managed storage. Used by both
+ * working-directory validation and the host path browser so a web user cannot
+ * inspect or attach another tenant's conversation data.
+ */
+export function isManagedHostPath(canonical: string, options: { dataRoot: string; tenantRoot: string; workspaceRoot?: string }): boolean {
   const forbiddenRoots = [options.dataRoot, options.tenantRoot, options.workspaceRoot].filter((root): root is string => Boolean(root));
   for (const candidateRoot of forbiddenRoots) {
     const resolvedRoot = path.resolve(candidateRoot);
@@ -245,10 +257,10 @@ export function resolveHostWorkingDir(input: string, options: { dataRoot: string
       }
     })();
     if (canonical === forbiddenRoot || canonical.startsWith(`${forbiddenRoot}${path.sep}`)) {
-      throw new Error("不能选择 Codex Web 自身的租户或数据目录作为工作目录。");
+      return true;
     }
   }
-  return canonical;
+  return false;
 }
 
 /**
@@ -294,6 +306,144 @@ export function assertHostWorkingDirAccessible(workingDir: string, username?: st
     }
   }
   throw new Error("无法验证工作目录对当前系统用户可读写，请检查目录权限。");
+}
+
+/**
+ * Verify the mapped tenant user can read a path without relying on a root web
+ * process's privileges. Directories additionally need execute permission so
+ * the browser can actually list their contents as that user.
+ */
+export function assertHostPathReadable(target: string, username: string | undefined, isDirectory: boolean): void {
+  if (process.platform === "win32" || process.getuid?.() !== 0) {
+    fs.accessSync(target, isDirectory ? fs.constants.R_OK | fs.constants.X_OK : fs.constants.R_OK);
+    return;
+  }
+  if (username) {
+    try {
+      const probe = isDirectory ? 'test -r "$1" && test -x "$1"' : 'test -r "$1"';
+      execFileSync("runuser", ["-u", username, "--", "sh", "-c", probe, "sh", target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      return;
+    } catch (error) {
+      const stderr = error instanceof Error && "stderr" in error ? String((error as { stderr?: unknown }).stderr ?? "").trim() : "";
+      const detail = stderr ? `（${stderr}）` : "";
+      throw new Error(`当前系统用户无法访问该路径。${detail}`.trim());
+    }
+  }
+  throw new Error("当前系统用户无法访问该路径。");
+}
+
+export type HostPathEntryType = "dir" | "file" | "link" | "other";
+export type HostPathEntry = {
+  name: string;
+  path: string;
+  type: HostPathEntryType;
+  size: number | null;
+  mtime: string | null;
+};
+export type HostDirectoryListing = {
+  path: string;
+  parent: string | null;
+  entries: HostPathEntry[];
+  truncated: boolean;
+};
+
+export const MAX_HOST_BROWSE_ENTRIES = 1000;
+
+/**
+ * List a host directory for the path browser. Paths are canonicalized, kept
+ * outside the application's managed roots, and checked against the mapped
+ * tenant user's read/execute permissions before any entry is returned.
+ */
+export function listHostDirectory(raw: string | undefined, options: { dataRoot: string; tenantRoot: string; workspaceRoot?: string; home?: string; username?: string }): HostDirectoryListing {
+  const input = raw && raw.trim() ? raw.trim() : options.home;
+  if (!input) throw new Error("无法确定起始目录。");
+  if (!path.isAbsolute(input)) throw new Error("请输入绝对路径。");
+  let canonical: string;
+  try {
+    canonical = fs.realpathSync(input);
+  } catch {
+    throw new Error("目录不存在或当前无法访问。");
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(canonical);
+  } catch {
+    throw new Error("目录不存在或当前无法访问。");
+  }
+  if (!stat.isDirectory()) throw new Error("所选路径不是目录。");
+  if (isManagedHostPath(canonical, options)) throw new Error("不能浏览 Codex Web 自身的租户或数据目录。");
+  assertHostPathReadable(canonical, options.username, true);
+
+  let names: string[];
+  try {
+    names = fs.readdirSync(canonical);
+  } catch {
+    throw new Error("无法读取该目录。");
+  }
+  const truncated = names.length > MAX_HOST_BROWSE_ENTRIES;
+  const entries: HostPathEntry[] = [];
+  for (const name of names.slice(0, MAX_HOST_BROWSE_ENTRIES)) {
+    const absolute = path.join(canonical, name);
+    let type: HostPathEntryType = "other";
+    let size: number | null = null;
+    let mtime: string | null = null;
+    try {
+      const entryStat = fs.lstatSync(absolute);
+      if (entryStat.isSymbolicLink()) {
+        const target = fs.realpathSync(absolute);
+        const targetStat = fs.statSync(target);
+        if (isManagedHostPath(target, options)) continue;
+        type = targetStat.isDirectory() ? "dir" : targetStat.isFile() ? "file" : "link";
+        size = targetStat.size;
+        mtime = targetStat.mtime.toISOString();
+      } else if (entryStat.isDirectory()) {
+        type = "dir";
+      } else if (entryStat.isFile()) {
+        type = "file";
+        size = entryStat.size;
+        mtime = entryStat.mtime.toISOString();
+      }
+    } catch {
+      continue;
+    }
+    entries.push({ name, path: absolute, type, size, mtime });
+  }
+  entries.sort((left, right) => {
+    const leftDir = left.type === "dir" ? 0 : 1;
+    const rightDir = right.type === "dir" ? 0 : 1;
+    return leftDir - rightDir || left.name.localeCompare(right.name);
+  });
+  const parent = path.dirname(canonical) === canonical ? null : path.dirname(canonical);
+  return { path: canonical, parent, entries, truncated };
+}
+
+export const MAX_HOST_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Resolve a user-selected host file for attachment. The result is the
+ * canonical absolute path and is guaranteed to be a regular file outside the
+ * application's managed roots that the mapped tenant user can read.
+ */
+export function resolveHostReadableFile(raw: string, options: { dataRoot: string; tenantRoot: string; workspaceRoot?: string; username?: string }): string {
+  if (typeof raw !== "string" || !raw.trim()) throw new Error("文件路径无效。");
+  if (!path.isAbsolute(raw.trim())) throw new Error("文件路径必须是绝对路径。");
+  let canonical: string;
+  try {
+    canonical = fs.realpathSync(raw.trim());
+  } catch {
+    throw new Error("文件不存在或当前无法访问。");
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(canonical);
+  } catch {
+    throw new Error("文件不存在或当前无法访问。");
+  }
+  if (!stat.isFile()) throw new Error("所选路径不是普通文件。");
+  if (stat.size > MAX_HOST_ATTACHMENT_BYTES) throw new Error("单个附件不能超过 100MB。");
+  if (isManagedHostPath(canonical, options)) throw new Error("不能从 Codex Web 自身的租户或数据目录添加文件。");
+  assertHostPathReadable(canonical, options.username, false);
+  return canonical;
 }
 
 export function removeWorkspace(workspaceRoot: string, conversationId: string): void {

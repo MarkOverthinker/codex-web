@@ -35,6 +35,7 @@ import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { ProviderManagerDialog } from "./provider-manager-dialog";
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
+import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
@@ -404,6 +405,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [taskCategorySettings, setTaskCategorySettings] = useState<TaskListCategorySettings | null>(null);
   const [newTaskDirPanelOpen, setNewTaskDirPanelOpen] = useState(false);
   const [workingDirManagerOpen, setWorkingDirManagerOpen] = useState(false);
+  const [pathBrowser, setPathBrowser] = useState<PathBrowserRequest | null>(null);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
   const [reloadNotice, setReloadNotice] = useState<{ kind: "waiting" | "building" | "restarting" | "success" | "error"; text: string } | null>(null);
@@ -1191,6 +1193,24 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     }
   }
 
+  function applyComposerDraftUploadResult(result: { composerDraft: ComposerDraft }, conversationId: string) {
+    draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
+    if (selectedIdRef.current === conversationId && !editingPendingRef.current) {
+      composerDraftRef.current = result.composerDraft;
+      setComposerDraft(result.composerDraft);
+    }
+    const cached = draftCacheRef.current.get(conversationId);
+    if (cached) draftCacheRef.current.set(conversationId, { ...cached, composerDraft: result.composerDraft });
+    else draftCacheRef.current.set(conversationId, {
+      content: conversationId === selectedIdRef.current ? inputRef.current : result.composerDraft.content,
+      quoteExcerpt: conversationId === selectedIdRef.current ? askAgentQuoteRef.current : result.composerDraft.quote_excerpt ?? "",
+      sourceReference: conversationId === selectedIdRef.current ? sourceReferenceRef.current : result.composerDraft.source_reference ?? null,
+      composerDraft: result.composerDraft,
+    });
+    const currentSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
+    setDraftSaveState(currentSignature === draftSyncedSignaturesRef.current.get(conversationId) ? "saved" : "unsaved");
+  }
+
   async function addComposerFiles(incoming: File[]) {
     if (incoming.length === 0) return;
     const conversationId = selectedIdRef.current;
@@ -1206,23 +1226,33 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setError("");
     try {
       const result = await api.uploadConversationDraftFiles(conversationId, accepted);
-      draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
-      if (selectedIdRef.current === conversationId && !editingPendingRef.current) {
-        composerDraftRef.current = result.composerDraft;
-        setComposerDraft(result.composerDraft);
-      }
-      const cached = draftCacheRef.current.get(conversationId);
-      if (cached) draftCacheRef.current.set(conversationId, { ...cached, composerDraft: result.composerDraft });
-      else draftCacheRef.current.set(conversationId, {
-        content: conversationId === selectedIdRef.current ? inputRef.current : result.composerDraft.content,
-        quoteExcerpt: conversationId === selectedIdRef.current ? askAgentQuoteRef.current : result.composerDraft.quote_excerpt ?? "",
-        sourceReference: conversationId === selectedIdRef.current ? sourceReferenceRef.current : result.composerDraft.source_reference ?? null,
-        composerDraft: result.composerDraft,
-      });
-      const currentSignature = composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
-      setDraftSaveState(currentSignature === draftSyncedSignaturesRef.current.get(conversationId) ? "saved" : "unsaved");
+      applyComposerDraftUploadResult(result, conversationId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "草稿附件上传失败");
+    } finally {
+      const ids = new Set<string>(uploads.map((upload) => upload.id));
+      setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
+    }
+  }
+
+  async function addHostComposerFiles(paths: string[]) {
+    if (paths.length === 0) return;
+    const conversationId = selectedIdRef.current;
+    if (editingPendingRef.current || !conversationId) {
+      setNotice("请先完成或取消正在编辑的任务，再选择对话添加服务器文件。");
+      return;
+    }
+    const available = Math.max(0, 12 - (composerDraftRef.current?.files.length ?? 0) - draftUploadsRef.current.length);
+    const accepted = paths.slice(0, available);
+    if (accepted.length === 0) { setNotice("单个会话草稿最多包含 12 个附件。"); return; }
+    const uploads = accepted.map((filePath) => ({ id: crypto.randomUUID(), name: filePath.split(/[\\/]/).at(-1) ?? filePath }));
+    setDraftUploads((current) => [...current, ...uploads]);
+    setError("");
+    try {
+      const result = await api.addHostDraftFiles(conversationId, accepted);
+      applyComposerDraftUploadResult(result, conversationId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "从服务器添加附件失败");
     } finally {
       const ids = new Set<string>(uploads.map((upload) => upload.id));
       setDraftUploads((current) => current.filter((upload) => !ids.has(upload.id)));
@@ -2022,6 +2052,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const composerPendingPrompts = currentDetail?.pendingPrompts ?? EMPTY_PENDING_PROMPTS;
   const composerDraftFiles = composerDraft?.files ?? EMPTY_WORK_FILES;
   const composerCanSteer = job?.status === "running";
+  const hostFilesAvailable = Boolean(workingDirSettings?.enabled);
   const taskMenuConversation = taskMenu ? conversations.find((conversation) => conversation.id === taskMenu.conversationId) : undefined;
   const categoryMenuCategory = categoryMenu ? categoryViews.find((category) => category.key === categoryMenu.categoryKey) : undefined;
   const categoryNewTaskCategory = categoryNewTaskMenu ? categoryViews.find((category) => category.key === categoryNewTaskMenu.categoryKey) : undefined;
@@ -2055,11 +2086,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     onAddFiles={(incoming) => void addComposerFiles(incoming)} onRemoveDraftFile={(file) => void removeComposerDraftFile(file)} onClearDraft={() => void clearComposerDraft()}
     onRemoveEditingFile={(fileId) => setRemovedEditingFileIds((current) => [...current, fileId])}
     onRestoreEditingFile={(fileId) => setRemovedEditingFileIds((current) => current.filter((id) => id !== fileId))}
+    hostFilesAvailable={hostFilesAvailable}
+    onBrowseHostFiles={() => setPathBrowser({ mode: "files", title: "从服务器选择文件", confirmLabel: "添加所选文件", maxFiles: 12, onSelect: (paths) => void addHostComposerFiles(paths) })}
     onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined}
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
     currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort,
-    presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
+    hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
   return <div className="shell">
@@ -2087,6 +2120,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
               </div>
               <div className="new-task-dir-manual">
                 <input value={manualWorkingDir} onChange={(event) => setManualWorkingDir(event.target.value)} placeholder="或手动输入绝对路径" />
+                <button type="button" className="path-browse-trigger" aria-label="浏览目录" title="浏览目录" onClick={() => setPathBrowser({
+                  mode: "dir",
+                  title: "选择工作目录",
+                  confirmLabel: "使用该目录",
+                  initialPath: manualWorkingDir || undefined,
+                  onSelect: (paths) => setManualWorkingDir(paths[0] ?? ""),
+                })}><FolderOpen size={15} /></button>
                 <button type="button" className="primary-button" disabled={!manualWorkingDir.trim() || workingDirSaving} onClick={() => void newConversation(manualWorkingDir.trim())}>创建</button>
               </div>
               <div className="new-task-dir-footer">
@@ -2331,6 +2371,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         <header><div><FolderOpen size={19} /><strong>工作目录收藏</strong></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setWorkingDirManagerOpen(false)}><X size={18} /></button></header>
         <div className="working-dir-add">
           <input value={favoritePathInput} onChange={(event) => setFavoritePathInput(event.target.value)} placeholder="绝对路径，例如 /home/you/projects/alpha" />
+          <button type="button" className="path-browse-trigger" aria-label="浏览目录" title="浏览目录" onClick={() => setPathBrowser({
+            mode: "dir",
+            title: "选择要收藏的目录",
+            confirmLabel: "使用该目录",
+            initialPath: favoritePathInput || undefined,
+            onSelect: (paths) => setFavoritePathInput(paths[0] ?? ""),
+          })}><FolderOpen size={15} /></button>
           <input value={favoriteLabelInput} onChange={(event) => setFavoriteLabelInput(event.target.value)} placeholder="名称（可选，默认取目录名）" />
           <button type="button" className="primary-button" disabled={workingDirSaving || !favoritePathInput.trim()} onClick={() => void addFavoriteWorkingDir()}>添加</button>
         </div>
@@ -2445,9 +2492,11 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onChanged={() => void refreshPresetPrompts()}
     />
 
+    <PathBrowserDialog request={pathBrowser} onClose={() => setPathBrowser(null)} />
+
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => setInput(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -2660,9 +2709,9 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onPreview }: {
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview }: {
   detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
-  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void;
+  workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail]);
   const chatRef = useRef<HTMLElement>(null);
@@ -2736,12 +2785,16 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       options={[
         { id: "", label: "独立工作区", description: "使用对话自己的隔离目录" },
         ...workingDirSettings.favorites.map((favorite) => ({ id: favorite.path, label: favorite.label, description: favorite.path })),
+        { id: "__browse__", label: "浏览其他目录…" },
       ]}
       placeholder="独立工作区"
       title="选择本对话的 Codex 工作目录"
       disabled={workingDirSaving || detail.conversation.status === "running" || detail.conversation.has_pending_work > 0}
       direction="down"
-      onChange={(value) => onWorkingDirChange(value || null)}
+      onChange={(value) => {
+        if (value === "__browse__") { onBrowseWorkingDir(detail.conversation.working_dir ?? undefined); return; }
+        onWorkingDirChange(value || null);
+      }}
     />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
     {detail.outputFiles.length > 0 && <div className="chat-outputs" aria-label="输出文件">
       <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
@@ -3023,7 +3076,7 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, onSend, onCancel }: {
+function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
   setInput: (value: string) => void;
@@ -3066,6 +3119,8 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   onClearDraft: () => void;
   onRemoveEditingFile: (fileId: string) => void;
   onRestoreEditingFile: (fileId: string) => void;
+  hostFilesAvailable: boolean;
+  onBrowseHostFiles: () => void;
   onSend: (message?: string) => void;
   onCancel?: () => void;
 }) {
@@ -3341,6 +3396,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
       {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
     </div>}
     <div className="composer-actions"><div className="composer-primary-actions"><button className="attach-button" onClick={() => fileInput.current?.click()} disabled={submitting}><Paperclip size={17} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
+      {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <SettingMenu className="model" label="模型" value={selectedModel} options={modelOptions} placeholder="加载中" title={selectedModelOption?.description || "选择任务使用的模型"} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
