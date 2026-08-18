@@ -158,7 +158,7 @@ export function PresetPromptManagerDialog({ open, onClose, onChanged }: {
                 </div>
               ))}
             </div>}
-      <footer className="preset-manager-footer"><small>默认打开数量上限为每个账户 20 条；删除预设会同步从所有对话移除。</small><button type="button" className="preset-manager-close" onClick={onClose}>关闭</button></footer>
+      <footer className="preset-manager-footer"><small>默认打开数量上限为每个账户 20 条，单对话启用上限也是 20 条；删除预设会同步从所有对话移除。</small><button type="button" className="preset-manager-close" onClick={onClose}>关闭</button></footer>
     </section>
   </div>, document.body);
 }
