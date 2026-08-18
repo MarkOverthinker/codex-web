@@ -2,6 +2,7 @@ import type { Conversation, WorkingDirFavorite } from "./api.js";
 
 export const TASK_LIST_AUTO_STANDALONE_KEY = "auto:standalone";
 export const TASK_LIST_AUTO_TEMP_KEY = "auto:temp";
+export const DEFAULT_TASK_CATEGORY_VISIBLE_COUNT = 3;
 
 export type TaskListCustomCategory = {
   id: string;
@@ -362,7 +363,29 @@ export type TaskCategoryBodyState = {
   visibleCount: number;
   remaining: number;
   showExpandControl: boolean;
+  collapseTarget: number;
 };
+
+/**
+ * Normalize a per-category visible count into the drag-adjustable range.
+ * The control is kept visible while a category has more than one task, so the
+ * stored drag count is clamped to `[1, total - 1]` (the last row stays
+ * reachable through the single-click expand behavior instead). An unset value
+ * falls back to showing at most `fallback` rows, matching the original
+ * collapsed preview behavior.
+ */
+export function normalizeTaskCategoryVisibleCount(
+  value: unknown,
+  total: number,
+  fallback = DEFAULT_TASK_CATEGORY_VISIBLE_COUNT,
+): number {
+  const safeTotal = Math.max(0, total);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const max = Math.max(1, safeTotal - 1);
+    return Math.max(1, Math.min(max, Math.trunc(value)));
+  }
+  return Math.max(0, Math.min(safeTotal, Math.max(0, Math.trunc(fallback))));
+}
 
 /**
  * Count conversations that are currently executing in a category, used to
@@ -376,19 +399,22 @@ export function countRunningConversations(conversations: readonly Conversation[]
  * Decide how many tasks a category body shows and whether the expand/collapse
  * control is needed. The remaining count always refers to the collapsed
  * preview limit instead of the currently visible count, so fully expanding a
- * category never hides the collapse button.
+ * category never hides the collapse button. `collapseTarget` is the count the
+ * category returns to after the fully-expanded state is collapsed.
  */
 export function buildTaskCategoryBodyState(
   conversationCount: number,
   fullyExpanded: boolean,
   previewLimit = 3,
 ): TaskCategoryBodyState {
-  const previewCount = Math.max(0, Math.min(conversationCount, Math.max(0, Math.trunc(previewLimit))));
-  const remaining = Math.max(0, conversationCount - previewCount);
+  const total = Math.max(0, conversationCount);
+  const collapseTarget = Math.max(0, Math.min(total, Math.max(0, Math.trunc(previewLimit))));
+  const remaining = Math.max(0, total - collapseTarget);
   return {
-    visibleCount: fullyExpanded ? conversationCount : previewCount,
+    visibleCount: fullyExpanded ? total : collapseTarget,
     remaining,
-    showExpandControl: remaining > 0,
+    showExpandControl: remaining > 0 || fullyExpanded,
+    collapseTarget,
   };
 }
 

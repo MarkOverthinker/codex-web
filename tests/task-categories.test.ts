@@ -9,7 +9,9 @@ import {
   buildTaskCategoryViews,
   countRunningConversations,
   customCategoryKey,
+  DEFAULT_TASK_CATEGORY_VISIBLE_COUNT,
   listValidHiddenCategoryKeys,
+  normalizeTaskCategoryVisibleCount,
   TASK_LIST_AUTO_STANDALONE_KEY,
   type TaskListCategorySettings,
 } from "../src/task-categories.js";
@@ -209,10 +211,32 @@ test("hidden keys validation keeps only known categories and hides stale keys fr
 });
 
 test("category body keeps the collapse control visible after full expansion", () => {
-  assert.deepEqual(buildTaskCategoryBodyState(5, false), { visibleCount: 3, remaining: 2, showExpandControl: true });
-  assert.deepEqual(buildTaskCategoryBodyState(5, true), { visibleCount: 5, remaining: 2, showExpandControl: true });
-  assert.deepEqual(buildTaskCategoryBodyState(3, true), { visibleCount: 3, remaining: 0, showExpandControl: false });
-  assert.deepEqual(buildTaskCategoryBodyState(0, false), { visibleCount: 0, remaining: 0, showExpandControl: false });
+  assert.deepEqual(buildTaskCategoryBodyState(5, false), { visibleCount: 3, remaining: 2, showExpandControl: true, collapseTarget: 3 });
+  assert.deepEqual(buildTaskCategoryBodyState(5, true), { visibleCount: 5, remaining: 2, showExpandControl: true, collapseTarget: 3 });
+  assert.deepEqual(buildTaskCategoryBodyState(3, true), { visibleCount: 3, remaining: 0, showExpandControl: true, collapseTarget: 3 });
+  assert.deepEqual(buildTaskCategoryBodyState(0, false), { visibleCount: 0, remaining: 0, showExpandControl: false, collapseTarget: 0 });
+});
+
+test("category body accepts a per-category visible count", () => {
+  assert.deepEqual(buildTaskCategoryBodyState(8, false, 5), { visibleCount: 5, remaining: 3, showExpandControl: true, collapseTarget: 5 });
+  assert.deepEqual(buildTaskCategoryBodyState(8, true, 5), { visibleCount: 8, remaining: 3, showExpandControl: true, collapseTarget: 5 });
+  assert.deepEqual(buildTaskCategoryBodyState(8, false, 0), { visibleCount: 0, remaining: 8, showExpandControl: true, collapseTarget: 0 });
+  assert.deepEqual(buildTaskCategoryBodyState(8, false, 9), { visibleCount: 8, remaining: 0, showExpandControl: false, collapseTarget: 8 });
+});
+
+test("normalizeTaskCategoryVisibleCount clamps drag values below the full count", () => {
+  assert.equal(DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, 3);
+  assert.equal(normalizeTaskCategoryVisibleCount(undefined, 8), 3);
+  assert.equal(normalizeTaskCategoryVisibleCount(undefined, 2), 2);
+  assert.equal(normalizeTaskCategoryVisibleCount(undefined, 1), 1);
+  assert.equal(normalizeTaskCategoryVisibleCount(1, 8), 1);
+  assert.equal(normalizeTaskCategoryVisibleCount(7, 8), 7);
+  assert.equal(normalizeTaskCategoryVisibleCount(9, 8), 7);
+  assert.equal(normalizeTaskCategoryVisibleCount(-2, 8), 1);
+  assert.equal(normalizeTaskCategoryVisibleCount(4.9, 8), 4);
+  assert.equal(normalizeTaskCategoryVisibleCount(5, 3), 2);
+  assert.equal(normalizeTaskCategoryVisibleCount(5, 2), 1);
+  assert.equal(normalizeTaskCategoryVisibleCount(1, 1), 1);
 });
 
 test("countRunningConversations counts only executing tasks in a category", () => {

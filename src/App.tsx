@@ -14,7 +14,7 @@ import {
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
-  pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
+  DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, normalizeTaskCategoryVisibleCount, pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
 import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
 import { parseCodexSnippetUrl, parseFileRef, parseSnippetHref, type FileLineRef } from "./code-snippet";
@@ -45,6 +45,7 @@ import { useTaskCategoryGridLayout } from "./task-grid-layout";
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
 const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expanded";
+const TASK_CATEGORY_VISIBLE_COUNTS_KEY = "codex-web:task-categories-visible-counts";
 const TASK_VIEW_MODE_KEY = "codex-web:task-view-mode";
 const SIDEBAR_WIDTH_KEY = "codex-web:sidebar-width";
 const PREVIEW_WIDTH_KEY = "codex-web:preview-width";
@@ -58,6 +59,8 @@ const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
 const COMPOSER_DRAFT_SAVE_DELAY_MS = 1_500;
 const ACTIVITY_FLUSH_DELAY_MS = 60;
+const TASK_CATEGORY_DRAG_PX_PER_STEP = 28;
+const TASK_CATEGORY_DRAG_THRESHOLD_PX = 4;
 const JUMP_LOAD_PAGE_LIMIT = 50;
 const EMPTY_WORK_FILES: WorkFile[] = [];
 const EMPTY_PENDING_PROMPTS: PendingPrompt[] = [];
@@ -266,6 +269,27 @@ function persistCategoryDisplayState(key: string, value: Record<string, boolean>
   writeLocalStorageValue(key, JSON.stringify(value));
 }
 
+function readCategoryVisibleCounts(): Record<string, number> {
+  const raw = readLocalStorageValue(TASK_CATEGORY_VISIBLE_COUNTS_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const count = typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : NaN;
+      if (Number.isFinite(count) && count >= 1) result[key] = count;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function persistCategoryVisibleCounts(value: Record<string, number>): void {
+  writeLocalStorageValue(TASK_CATEGORY_VISIBLE_COUNTS_KEY, JSON.stringify(value));
+}
+
 type TaskViewMode = "list" | "grid";
 
 function readTaskViewMode(): TaskViewMode {
@@ -427,6 +451,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [categoryNewTaskMenu, setCategoryNewTaskMenu] = useState<{ categoryKey: string; top: number; left: number } | null>(null);
   const [categoryExpanded, setCategoryExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY));
   const [categoryFullyExpanded, setCategoryFullyExpanded] = useState<Record<string, boolean>>(() => readCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY));
+  const [categoryVisibleCounts, setCategoryVisibleCounts] = useState<Record<string, number>>(() => readCategoryVisibleCounts());
+  const [categoryDragKey, setCategoryDragKey] = useState<string | null>(null);
+  const categoryDragRef = useRef<{ moved: boolean } | null>(null);
   const [taskViewMode, setTaskViewMode] = useState<TaskViewMode>(readTaskViewMode);
   const [previewFile, setPreviewFile] = useState<WorkFile | null>(null);
   const [snippetPreview, setSnippetPreview] = useState<{ conversationId: string; path: string; line?: number } | null>(null);
@@ -766,6 +793,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     persistCategoryDisplayState(TASK_CATEGORY_EXPANDED_KEY, categoryExpanded);
     persistCategoryDisplayState(TASK_CATEGORY_FULLY_EXPANDED_KEY, categoryFullyExpanded);
   }, [categoryExpanded, categoryFullyExpanded]);
+  useEffect(() => {
+    persistCategoryVisibleCounts(categoryVisibleCounts);
+  }, [categoryVisibleCounts]);
   useEffect(() => {
     if (!newTaskDirPanelOpen) return;
     function closeFromOutside(event: PointerEvent) {
@@ -1827,9 +1857,14 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   function renderCategoryView(category: TaskListCategoryView, style?: CSSProperties) {
     const expanded = categoryExpanded[category.key] !== false;
     const fullyExpanded = categoryFullyExpanded[category.key] === true;
-    const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded);
+    const previewLimit = normalizeTaskCategoryVisibleCount(
+      categoryVisibleCounts[category.key] ?? DEFAULT_TASK_CATEGORY_VISIBLE_COUNT,
+      category.conversations.length,
+    );
+    const bodyState = buildTaskCategoryBodyState(category.conversations.length, fullyExpanded, previewLimit);
     const visible = category.conversations.slice(0, bodyState.visibleCount);
     const runningCount = countRunningConversations(category.conversations);
+    const dragging = categoryDragKey === category.key;
     return <section key={category.key} style={style} className={`task-category ${category.pinned ? "pinned" : ""} ${taskViewMode === "grid" ? "task-category-card" : ""}`}>
       <div className="task-category-header">
         <button type="button" className="task-category-toggle" aria-expanded={expanded} aria-label={`${expanded ? "折叠" : "展开"}分类 ${category.name}`} onClick={() => toggleCategoryExpanded(category.key)}>
@@ -1853,7 +1888,18 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       </div>
       {expanded && <div className="task-category-body">
         {visible.map(renderConversationRow)}
-        {bodyState.showExpandControl && <button type="button" className="task-category-more" aria-expanded={fullyExpanded} onClick={() => toggleCategoryFullyExpanded(category.key)}>{fullyExpanded ? "收起为最近 3 条" : `… 还有 ${bodyState.remaining} 条`}</button>}
+        {bodyState.showExpandControl && <button
+          type="button"
+          className={`task-category-more${dragging ? " dragging" : ""}`}
+          aria-expanded={fullyExpanded}
+          aria-label={fullyExpanded ? `收起为最近 ${bodyState.collapseTarget} 条` : `展开分类 ${category.name}`}
+          title="点击展开或收起，按住并上下拖动可调整展示条数"
+          onClick={() => {
+            if (categoryDragRef.current?.moved) return;
+            toggleCategoryFullyExpanded(category.key);
+          }}
+          onPointerDown={(event) => startCategoryCountDrag(category.key, bodyState.visibleCount, category.conversations.length, event)}
+        >{dragging ? `显示 ${bodyState.visibleCount} 条` : fullyExpanded ? `收起为最近 ${bodyState.collapseTarget} 条` : `… 还有 ${bodyState.remaining} 条`}</button>}
       </div>}
     </section>;
   }
@@ -1862,7 +1908,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const expanding = categoryExpanded[key] === false;
     setCategoryExpanded((current) => ({ ...current, [key]: current[key] === false }));
     if (!expanding) {
-      // 折叠分类时清除“完全展开”标记，重新展开后回到最近 3 条。
+      // 折叠分类时清除“完全展开”标记，重新展开后回到该分类设置的展示条数。
       setCategoryFullyExpanded((fully) => {
         if (!fully[key]) return fully;
         const next = { ...fully };
@@ -1877,6 +1923,56 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       const next = { ...current, [key]: current[key] !== true };
       return next;
     });
+  }
+
+  function startCategoryCountDrag(
+    key: string,
+    startCount: number,
+    total: number,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    if (event.button !== 0 || total <= 1) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const dragState = { moved: false };
+    categoryDragRef.current = dragState;
+    setCategoryDragKey(key);
+    // 进入拖动即退出“完全展开”，让拖动的条数直接生效。
+    setCategoryFullyExpanded((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    const target = event.currentTarget;
+    target.setPointerCapture?.(event.pointerId);
+    const move = (moveEvent: PointerEvent) => {
+      const deltaY = startY - moveEvent.clientY;
+      if (Math.abs(deltaY) >= TASK_CATEGORY_DRAG_THRESHOLD_PX) dragState.moved = true;
+      if (!dragState.moved) return;
+      const next = normalizeTaskCategoryVisibleCount(
+        startCount + Math.round(deltaY / TASK_CATEGORY_DRAG_PX_PER_STEP),
+        total,
+      );
+      setCategoryVisibleCounts((current) => {
+        if (current[key] === next) return current;
+        return { ...current, [key]: next };
+      });
+    };
+    const stop = (endEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      target.releasePointerCapture?.(endEvent.pointerId);
+      setCategoryDragKey(null);
+      // 让紧随其后的 click 仍能看到本次拖动的 moved 标记，再释放引用。
+      window.setTimeout(() => {
+        if (categoryDragRef.current === dragState) categoryDragRef.current = null;
+      }, 0);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
   }
 
   function changeTaskViewMode(mode: TaskViewMode) {

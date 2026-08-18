@@ -296,8 +296,9 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .task-category-actions button.pinned { color: var(--amber); }
 .task-category-actions button[aria-expanded="true"] { color: #fff; background: rgba(255, 255, 255, .12); }
 .task-category-body { display: flex; flex-direction: column; margin-left: 4px; padding-left: 10px; border-left: 1px solid rgba(255, 255, 255, .09); }
-.task-category-more { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: center; margin: 3px 0; padding: 4px 8px; border: 1px dashed rgba(255, 255, 255, .13); border-radius: 9px; color: #aeb2c4; background: rgba(255, 255, 255, .035); cursor: pointer; font-size: 11px; font-weight: 650; }
+.task-category-more { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: center; margin: 3px 0; padding: 4px 8px; border: 1px dashed rgba(255, 255, 255, .13); border-radius: 9px; color: #aeb2c4; background: rgba(255, 255, 255, .035); cursor: ns-resize; touch-action: none; user-select: none; font-size: 11px; font-weight: 650; }
 .task-category-more:hover { color: #fff; border-color: rgba(240, 170, 60, .42); background: rgba(240, 170, 60, .09); }
+.task-category-more.dragging { color: #fff; border-color: rgba(240, 170, 60, .65); background: rgba(240, 170, 60, .14); }
 .conversation-row { position: relative; display: flex; align-items: center; margin: 3px 0; overflow: hidden; border: 1px solid transparent; border-radius: 11px; transition: border-color .16s ease, background .16s ease; }
 .conversation-row::before { width: 3px; position: absolute; inset: 7px auto 7px 0; border-radius: 0 4px 4px 0; background: transparent; content: ""; }
 .conversation-row:hover { background: rgba(255, 255, 255, .065); }
