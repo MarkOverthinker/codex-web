@@ -858,8 +858,8 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .setting-value { min-width: 0; overflow: hidden; color: #30364e; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 700; letter-spacing: 0; }
 .setting-select > svg { flex: 0 0 auto; color: #9296a5; transition: transform .16s ease; pointer-events: none; }
 .setting-select[aria-expanded="true"] > svg { transform: rotate(180deg); color: var(--indigo); }
-.setting-menu.model { width: 220px; }
-.setting-menu.effort { width: 92px; }
+.setting-menu.model { width: auto; max-width: min(300px, calc(100vw - 220px)); }
+.setting-menu.effort { width: auto; max-width: 150px; }
 .setting-select { width: 100%; }
 .setting-menu-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30; min-width: 100%; max-width: min(290px, calc(100vw - 28px)); padding: 6px; border: 1px solid rgba(57, 70, 137, .14); border-radius: 12px; background: rgba(255, 255, 255, .98); box-shadow: 0 16px 38px rgba(15, 17, 32, .16), 0 3px 10px rgba(15, 17, 32, .06); backdrop-filter: blur(12px); }
 .setting-menu-panel.open-down { top: calc(100% + 8px); bottom: auto; }
@@ -879,7 +879,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .composer-note { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px 0 0; color: #8c8f9c; text-align: center; font-size: 10px; }
 .composer-note button { padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .composer-note button:disabled { opacity: .45; cursor: default; }
-.preset-menu { position: relative; width: 104px; flex: 0 0 auto; }
+.preset-menu { position: relative; width: auto; max-width: min(320px, calc(100vw - 240px)); flex: 0 1 auto; }
 .preset-menu .preset-select { width: 100%; }
 .preset-menu-panel { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; width: min(280px, calc(100vw - 28px)); max-height: 260px; display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow-y: auto; overscroll-behavior-y: contain; touch-action: pan-y; border: 1px solid rgba(57, 70, 137, .14); border-radius: 12px; background: rgba(255, 255, 255, .98); box-shadow: 0 16px 38px rgba(15, 17, 32, .16), 0 3px 10px rgba(15, 17, 32, .06); backdrop-filter: blur(12px); }
 .preset-menu-item { min-height: 36px; display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: start; gap: 7px; padding: 7px 6px; border-radius: 8px; cursor: pointer; }
@@ -961,9 +961,9 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .composer-primary-actions { gap: 5px; }
   .setting-select { padding-inline: 7px 5px; }
   .setting-select > span { display: none; }
-  .preset-menu { width: 78px; }
-  .setting-menu.model { width: 186px; }
-  .setting-menu.effort { width: 76px; }
+  .preset-menu { width: auto; max-width: 170px; }
+  .setting-menu.model { width: auto; max-width: 170px; }
+  .setting-menu.effort { width: auto; max-width: 82px; }
   .setting-menu.model .setting-menu-panel { width: min(260px, calc(100vw - 28px)); }
   .composer-note { display: none; }
   .welcome { padding: 30px 18px 180px; }

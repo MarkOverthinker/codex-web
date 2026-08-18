@@ -3366,7 +3366,14 @@ function PresetMenu({ conversationId, presetPrompts, enabledPresetPromptIds, dis
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const enabledCount = enabledPresetPromptIds.length;
+  const enabledPresets = presetPrompts.filter((preset) => enabledPresetPromptIds.includes(preset.id));
+  const presetValue = presetPrompts.length === 0
+    ? "未添加"
+    : enabledPresets.length === 0
+      ? `0/${presetPrompts.length}`
+      : enabledPresets.length === 1
+        ? enabledPresets[0].name
+        : `${enabledPresets[0].name} +${enabledPresets.length - 1}`;
 
   useEffect(() => {
     if (disabled) setOpen(false);
@@ -3382,7 +3389,7 @@ function PresetMenu({ conversationId, presetPrompts, enabledPresetPromptIds, dis
 
   return <div ref={rootRef} className="preset-menu">
     <button type="button" className="setting-select preset-select" aria-label="预设 Prompt" aria-haspopup="true" aria-expanded={open} disabled={disabled} title="选择随任务附加的预设 Prompt" onClick={() => setOpen((current) => !current)}>
-      <ListChecks size={14} /><span>预设</span><strong className="setting-value">{presetPrompts.length === 0 ? "未添加" : `${enabledCount}/${presetPrompts.length}`}</strong><ChevronDown size={13} />
+      <ListChecks size={14} /><span>预设</span><strong className="setting-value" title={presetValue}>{presetValue}</strong><ChevronDown size={13} />
     </button>
     {open && <div className="preset-menu-panel" role="group" aria-label="预设 Prompt">
       {presetPrompts.length === 0
