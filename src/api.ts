@@ -105,6 +105,14 @@ export type ProviderModel = {
   updatedAt: string;
 };
 export type ProviderState = { providers: Provider[]; models: ProviderModel[] };
+export type PresetPrompt = {
+  id: string;
+  name: string;
+  content: string;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+};
 export type ReasoningStep = {
   id?: string;
   title?: string;
@@ -139,6 +147,7 @@ export type ConversationDetail = {
   pendingPrompts: PendingPrompt[];
   editingPrompt: PendingPrompt | null;
   composerDraft: ComposerDraft | null;
+  enabledPresetPromptIds: string[];
   activeJob: Job | null;
   latestJob: Job | null;
   jobEvents: JobEvent[];
@@ -233,6 +242,17 @@ export const api = {
   deleteProviderModel: (providerId: string, modelId: string) => request<void>(
     `/providers/${providerId}/models/${modelId}`, { method: "DELETE" },
   ),
+  presetPrompts: () => request<{ presetPrompts: PresetPrompt[] }>("/preset-prompts"),
+  createPresetPrompt: (name: string, content: string) =>
+    request<{ presetPrompt: PresetPrompt }>("/preset-prompts", { method: "POST", body: JSON.stringify({ name, content }) }),
+  updatePresetPrompt: (id: string, payload: { name?: string; content?: string; position?: number }) =>
+    request<{ presetPrompt: PresetPrompt }>(`/preset-prompts/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deletePresetPrompt: (id: string) => request<void>(`/preset-prompts/${id}`, { method: "DELETE" }),
+  setConversationPresetPrompts: (conversationId: string, presetPromptIds: string[]) =>
+    request<{ enabledPresetPromptIds: string[] }>(
+      `/conversations/${conversationId}/preset-prompts`,
+      { method: "PUT", body: JSON.stringify({ presetPromptIds }) },
+    ),
   updateChatFontSize: (chatFontSize: number) => request<{ chatFontSize: number }>("/user-settings/chat-font-size", {
     method: "PUT", body: JSON.stringify({ chatFontSize }),
   }),
