@@ -103,6 +103,7 @@ export type Provider = {
   name: string;
   baseUrl: string;
   modelsFile: string | null;
+  autoReviewModelOverride: string | null;
   wireApi: "responses" | "chat" | "anthropic";
   requiresOpenaiAuth: boolean;
   enabled: boolean;
@@ -250,7 +251,7 @@ export const api = {
     { method: "PUT", body: JSON.stringify(selection) },
   ),
   providers: () => request<ProviderState>("/providers"),
-  createProvider: (payload: { name: string; baseUrl: string; apiKey?: string; modelsFile?: string; wireApi?: Provider["wireApi"]; requiresOpenaiAuth?: boolean; enabled?: boolean }) =>
+  createProvider: (payload: { name: string; baseUrl: string; apiKey?: string; modelsFile?: string; autoReviewModelOverride?: string | null; wireApi?: Provider["wireApi"]; requiresOpenaiAuth?: boolean; enabled?: boolean }) =>
     request<{ provider: Provider }>("/providers", { method: "POST", body: JSON.stringify(payload) }),
   updateProvider: (id: string, payload: Partial<Omit<Provider, "id" | "createdAt" | "updatedAt" | "hasApiKey" | "apiKeyHint" | "extraConfig">> & { apiKey?: string | null }) =>
     request<{ provider: Provider }>(`/providers/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
