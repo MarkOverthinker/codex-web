@@ -83,6 +83,12 @@ writable directly; host tool calls or other escalations are reviewed automatical
 approval prompt, and unresolved manual approval requests are denied. The server
 process runs as root and drops privileges into the tenant user for every task.
 
+Set `ALLOW_DANGER_FULL_ACCESS=true` to additionally let each conversation
+switch to Codex's `danger-full-access` sandbox from the composer. That mode
+skips sandboxing and approval review entirely, giving the agent the tenant
+user's full filesystem and shell access; keep it off unless every account is
+trusted.
+
 Start the service:
 
 ```bash

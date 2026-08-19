@@ -220,7 +220,10 @@ user is a tenant: tasks run under that user's Unix identity with
 `approvals_reviewer = "auto_review"`. The selected working directory, conversation
 workspace, and tenant library are writable without a browser approval prompt; operations that need
 additional access are reviewed automatically and fail closed when no automatic
-decision is available. `CODEX_HOME` points at the user's real `~/.codex`, so
+decision is available. When the operator sets `ALLOW_DANGER_FULL_ACCESS=true`,
+each conversation can also opt into Codex's `danger-full-access` sandbox from
+the composer: sandboxing is then skipped entirely and the agent gets the tenant
+user's full filesystem and shell access, with no approval review. `CODEX_HOME` points at the user's real `~/.codex`, so
 their global skills and reviewed host tools remain available. `add-tenant.mjs` creates missing
 system users (copying a `.codex` template) and reuses existing users' own
 `~/.codex`. Task processes load the user's full supplementary groups via
