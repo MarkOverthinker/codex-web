@@ -52,6 +52,7 @@ export type PendingPrompt = {
   quote_excerpt: string | null;
   agent_model: string;
   reasoning_effort: string;
+  sandbox_mode?: SandboxMode;
   position: number;
   status: "queued" | "editing";
   files: WorkFile[];
@@ -71,6 +72,12 @@ export type Job = { id: string; status: string; conversation_id: string; queuePo
 // The online Codex catalog is authoritative. Keep this open so a newer CLI can
 // expose a new reasoning level without requiring a front-end release first.
 export type ReasoningEffort = string;
+export type SandboxMode = "workspace-write" | "danger-full-access";
+export type SandboxModeOption = {
+  id: SandboxMode;
+  label: string;
+  description: string;
+};
 export type AgentModelOption = {
   id: string;
   label: string;
@@ -84,12 +91,13 @@ export type AgentModelOption = {
 export type AgentOptions = {
   models: AgentModelOption[];
   reasoningEfforts: Array<{ id: ReasoningEffort; label: string }>;
-  defaults: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null };
+  sandboxModes: SandboxModeOption[];
+  defaults: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null; sandbox: SandboxMode };
   selection: AgentSelection;
   codexConfigured?: boolean;
   codexConfigHint?: string;
 };
-export type AgentSelection = { model: string; reasoningEffort: ReasoningEffort; provider?: string | null };
+export type AgentSelection = { model: string; reasoningEffort: ReasoningEffort; provider?: string | null; sandbox?: SandboxMode };
 export type Provider = {
   id: string;
   name: string;

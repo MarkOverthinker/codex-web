@@ -11,7 +11,7 @@ import {
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type SandboxMode, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, normalizeTaskCategoryVisibleCount, pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -412,6 +412,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [agentOptions, setAgentOptions] = useState<AgentOptions | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">("");
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode>("workspace-write");
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
@@ -651,6 +652,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       : result);
     setSelectedModel(result.agentSelection.model);
     setReasoningEffort(result.agentSelection.reasoningEffort);
+    setSandboxMode(result.agentSelection.sandbox ?? "workspace-write");
     setJob(result.activeJob);
     setSending(Boolean(result.activeJob));
     setActivities(mergeJobEvents([], result.jobEvents));
@@ -756,6 +758,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       if (!selectedIdRef.current) {
         setSelectedModel(options.selection.model);
         setReasoningEffort(options.selection.reasoningEffort);
+        setSandboxMode(options.selection.sandbox ?? "workspace-write");
       }
     }).catch((reason) => setError(reason instanceof Error ? reason.message : "模型选项加载失败"));
     void api.workingDirs().then(({ settings }) => setWorkingDirSettings(settings))
@@ -837,6 +840,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       if (agentOptions) {
         setSelectedModel(agentOptions.selection.model);
         setReasoningEffort(agentOptions.selection.reasoningEffort);
+        setSandboxMode(agentOptions.selection.sandbox ?? "workspace-write");
       }
       return;
     }
@@ -1091,6 +1095,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   async function newConversation(workingDir?: string | null) {
     setError(""); const result = await api.createConversation(workingDir);
     setSelectedModel(result.agentSelection.model); setReasoningEffort(result.agentSelection.reasoningEffort);
+    setSandboxMode(result.agentSelection.sandbox ?? "workspace-write");
     await refreshList(); setSelectedId(result.conversation.id);
     setNewTaskDirPanelOpen(false);
   }
@@ -1102,6 +1107,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       const result = await api.createConversationFromSource(selectedId, sourceMessageId, excerpt);
       setSelectedModel(result.agentSelection.model);
       setReasoningEffort(result.agentSelection.reasoningEffort);
+      setSandboxMode(result.agentSelection.sandbox ?? "workspace-write");
       const cached: CachedComposerDraft = {
         content: "",
         quoteExcerpt: result.composerDraft.quote_excerpt ?? "",
@@ -1368,6 +1374,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       if (!id) {
         const created = await api.createConversation(); id = created.conversation.id;
         setSelectedModel(created.agentSelection.model); setReasoningEffort(created.agentSelection.reasoningEffort);
+        setSandboxMode(created.agentSelection.sandbox ?? "workspace-write");
         selectedIdRef.current = id; setSelectedId(id);
       }
       if (editingPending) {
@@ -1415,8 +1422,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       editingPendingRef.current = result.editingPrompt;
       setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setSourceReference(null); setInput(result.editingPrompt.content);
       draftLoadedConversationRef.current = null;
-      if (selectedModel !== prompt.agent_model || reasoningEffort !== prompt.reasoning_effort) {
-        await persistAgentSelection({ model: prompt.agent_model, reasoningEffort: prompt.reasoning_effort });
+      if (selectedModel !== prompt.agent_model || reasoningEffort !== prompt.reasoning_effort || sandboxMode !== (prompt.sandbox_mode ?? "workspace-write")) {
+        await persistAgentSelection({ model: prompt.agent_model, reasoningEffort: prompt.reasoning_effort, sandbox: prompt.sandbox_mode ?? "workspace-write" });
       }
       await refreshDetail(selectedId);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "进入编辑状态失败"); }
@@ -1759,24 +1766,31 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     }
   }
 
-  async function persistAgentSelection(selection: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null }) {
+  async function persistAgentSelection(selection: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null; sandbox?: SandboxMode }) {
     const targetId = selectedIdRef.current;
-    const previous = { model: selectedModel, reasoningEffort };
-    setSelectedModel(selection.model); setReasoningEffort(selection.reasoningEffort); setSelectionSaving(true); setError("");
+    const previous = { model: selectedModel, reasoningEffort, sandboxMode };
+    setSelectedModel(selection.model); setReasoningEffort(selection.reasoningEffort); setSandboxMode(selection.sandbox ?? "workspace-write"); setSelectionSaving(true); setError("");
     try {
       const model = agentOptions?.models.find((candidate) => candidate.id === selection.model);
       const provider = selection.provider ?? model?.provider ?? null;
-      const payload: AgentSelection = { model: selection.model, reasoningEffort: selection.reasoningEffort, ...(provider ? { provider } : {}) };
+      const payload: AgentSelection = {
+        model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
+        sandbox: selection.sandbox ?? "workspace-write",
+        ...(provider ? { provider } : {}),
+      };
       const result = await api.updateAgentSelection(payload, targetId ?? undefined);
       if (selectedIdRef.current === targetId) {
         setSelectedModel(result.selection.model);
         setReasoningEffort(result.selection.reasoningEffort);
+        setSandboxMode(result.selection.sandbox ?? "workspace-write");
       }
       setAgentOptions((current) => current ? { ...current, selection: result.selection } : current);
     } catch (reason) {
       if (selectedIdRef.current === targetId) {
         setSelectedModel(previous.model);
         setReasoningEffort(previous.reasoningEffort);
+        setSandboxMode(previous.sandboxMode);
       }
       setError(reason instanceof Error ? reason.message : "模型设置保存失败");
     } finally {
@@ -1793,13 +1807,20 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       : model.reasoningEfforts.includes(options.defaults.reasoningEffort)
         ? options.defaults.reasoningEffort
         : model.reasoningEfforts.at(-1)!;
-    void persistAgentSelection({ model: model.id, reasoningEffort: nextEffort, ...(model.provider ? { provider: model.provider } : {}) });
+    void persistAgentSelection({ model: model.id, reasoningEffort: nextEffort, sandbox: sandboxMode, ...(model.provider ? { provider: model.provider } : {}) });
   }
 
   function changeReasoning(effort: ReasoningEffort) {
     if (!selectedModel) return;
     const selectedModelOption = agentOptions?.models.find((candidate) => candidate.id === selectedModel);
-    void persistAgentSelection({ model: selectedModel, reasoningEffort: effort, ...(selectedModelOption?.provider ? { provider: selectedModelOption.provider } : {}) });
+    void persistAgentSelection({ model: selectedModel, reasoningEffort: effort, sandbox: sandboxMode, ...(selectedModelOption?.provider ? { provider: selectedModelOption.provider } : {}) });
+  }
+
+  function changeSandbox(mode: SandboxMode) {
+    if (!selectedModel) return;
+    if (mode === "danger-full-access" && !window.confirm("完全访问模式会跳过沙箱：Codex 将拥有该账户的完整系统权限，可执行任意命令并读写任意文件。仅在你完全信任任务内容时使用，确认启用？")) return;
+    const selectedModelOption = agentOptions?.models.find((candidate) => candidate.id === selectedModel);
+    void persistAgentSelection({ model: selectedModel, reasoningEffort, sandbox: mode, ...(selectedModelOption?.provider ? { provider: selectedModelOption.provider } : {}) });
   }
 
   async function changeChatFontSize(delta: number) {
@@ -2357,8 +2378,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     presetPrompts={presetPrompts} enabledPresetPromptIds={currentDetail?.enabledPresetPromptIds ?? EMPTY_PRESET_PROMPT_IDS}
     onTogglePresetPrompt={(id, enabled) => void togglePresetPrompt(id, enabled)} presetSaving={presetSaving}
     onOpenPresetManager={() => setPresetPromptManagerOpen(true)}
-    agentOptions={agentOptions} selectedModel={selectedModel} reasoningEffort={reasoningEffort}
-    onModelChange={changeModel} onReasoningChange={changeReasoning}
+    agentOptions={agentOptions} selectedModel={selectedModel} reasoningEffort={reasoningEffort} sandboxMode={sandboxMode}
+    onModelChange={changeModel} onReasoningChange={changeReasoning} onSandboxChange={changeSandbox}
     onReorderPending={(ordered) => void reorderPendingPrompts(ordered)} onEditPending={(prompt) => void beginPendingEdit(prompt)}
     onDeletePending={(prompt) => void deletePendingPrompt(prompt)} onSteerPending={(prompt) => void steerPendingPrompt(prompt)}
     canSteer={composerCanSteer} onCancelPendingEdit={() => void cancelPendingEdit()}
@@ -2370,7 +2391,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined}
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
-    currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort,
+    currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort, sandboxMode,
     hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
@@ -3433,7 +3454,7 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, onModelChange, onReasoningChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
+function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
   setInput: (value: string) => void;
@@ -3463,8 +3484,10 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   agentOptions: AgentOptions | null;
   selectedModel: string;
   reasoningEffort: ReasoningEffort | "";
+  sandboxMode: SandboxMode;
   onModelChange: (model: string) => void;
   onReasoningChange: (effort: ReasoningEffort) => void;
+  onSandboxChange: (mode: SandboxMode) => void;
   onReorderPending: (ordered: PendingPrompt[]) => void;
   onEditPending: (prompt: PendingPrompt) => void;
   onDeletePending: (prompt: PendingPrompt) => void;
@@ -3695,6 +3718,11 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     label: model.providerName ? `${model.providerName} · ${model.label}` : model.label,
     description: model.description,
   })) ?? [];
+  const sandboxOptions = agentOptions?.sandboxModes.map((mode) => ({
+    id: mode.id,
+    label: mode.label,
+    description: mode.description,
+  })) ?? [];
   const hasRetainedEditingFile = Boolean(editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id)));
   const primaryAction = chooseComposerPrimaryAction({
     running: Boolean(sending && onCancel),
@@ -3757,6 +3785,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <SettingMenu className="model" label="模型" value={selectedModel} options={modelOptions} placeholder="加载中" title={selectedModelOption?.description || "选择任务使用的模型"} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
+      {sandboxOptions.length > 1 && <SettingMenu className={`permission ${sandboxMode === "danger-full-access" ? "danger-selected" : ""}`} label="权限" value={sandboxMode} options={sandboxOptions} placeholder="工作区写入" title="选择 Codex 的运行权限；完全访问会跳过沙箱" disabled={submitting || selectionSaving} onChange={(value) => onSandboxChange(value as SandboxMode)} />}
     </div>
       <div className="composer-submit-actions">
         {voiceEnabled && voiceState === "idle" && <button type="button" className="mic-button" onClick={() => void startRecording()} disabled={submitting || selectionSaving} title="录音输入" aria-label="录音输入"><Mic size={18} /></button>}

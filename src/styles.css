@@ -881,6 +881,10 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .setting-select[aria-expanded="true"] > svg { transform: rotate(180deg); color: var(--indigo); }
 .setting-menu.model { width: auto; max-width: min(300px, calc(100vw - 220px)); }
 .setting-menu.effort { width: auto; max-width: 150px; }
+.setting-menu.permission { width: auto; max-width: 150px; }
+.setting-menu.permission .setting-value[title] { color: #9a2f2f; }
+.setting-menu.permission.danger-selected .setting-select { border-color: #e4a7a7; background: #fff4f4; }
+.setting-menu.permission.danger-selected .setting-menu-panel button.selected { color: #9a2f2f; }
 .setting-select { width: 100%; }
 .setting-menu-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30; min-width: 100%; max-width: min(290px, calc(100vw - 28px)); padding: 6px; border: 1px solid rgba(57, 70, 137, .14); border-radius: 12px; background: rgba(255, 255, 255, .98); box-shadow: 0 16px 38px rgba(15, 17, 32, .16), 0 3px 10px rgba(15, 17, 32, .06); backdrop-filter: blur(12px); }
 .setting-menu-panel.open-down { top: calc(100% + 8px); bottom: auto; }
@@ -985,6 +989,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .preset-menu { width: auto; max-width: 170px; }
   .setting-menu.model { width: auto; max-width: 170px; }
   .setting-menu.effort { width: auto; max-width: 82px; }
+  .setting-menu.permission { width: auto; max-width: 82px; }
   .setting-menu.model .setting-menu-panel { width: min(260px, calc(100vw - 28px)); }
   .composer-note { display: none; }
   .welcome { padding: 30px 18px 180px; }
