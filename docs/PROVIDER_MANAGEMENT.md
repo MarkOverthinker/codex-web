@@ -3,7 +3,7 @@
 Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在任务级别切换：
 
 - 每个 Web 用户拥有独立的 provider 与模型集合；不同用户可以使用相同 provider ID，但 `base_url`、API key、启用状态和模型目录互不影响。
-- 每个 provider 有独立的 `base_url`、`wire_api`、API key / 官方 OAuth 标记和可选的模型目录文件。
+- 每个 provider 有独立的 `base_url`、`wire_api`、API key / 官方 OAuth 标记、自动审核模型覆盖（`auto_review_model_override`）和可选的模型目录文件。
 - 每个模型有“是否可见”开关；聚合生成 `models_cache.json` 时**只写入已启用源中可见的模型**，隐藏模型不会进入任务模型菜单。
 - 模型菜单直接展示“源 · 模型”，不需要单独的 provider 选择器。
 - 运行时通过 Codex app-server 协议的 `modelProvider` 参数请求级切换，不修改 live 配置，也不隔离会话历史。
@@ -15,14 +15,17 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 - 添加 / 编辑 / 删除源；
 - 从 `config.toml` 导入现有 `[model_providers.*]` 段；
 - 为每个源指定模型文件并从该文件导入模型；
+- 为每个源设置自动审核模型覆盖（`auto_review_model_override`，留空表示不覆盖）；
 - 按模型开关可见性、编辑模型 ID / 显示名 / 思考深度 / 输入模态 / 优先级；
 - 整体启用或禁用源。
 
-每次保存只读取当前登录用户的 provider 数据，用 `smol-toml` 原子重写该用户 Codex Home 的 `config.toml`，并全量重写该用户的 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token` 以及导入时保留的扩展字段。API 的查询、修改、删除和引用检查都带当前 Web 用户 ID，不能访问其他用户的源或模型。
+每次保存只读取当前登录用户的 provider 数据，用 `smol-toml` 原子重写该用户 Codex Home 的 `config.toml`，并全量重写该用户的 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token`、`auto_review_model_override` 以及导入时保留的扩展字段。API 的查询、修改、删除和引用检查都带当前 Web 用户 ID，不能访问其他用户的源或模型。
 
 从旧版全局 provider 表升级时，数据库会把已有记录复制到升级时已存在的每个 Web 用户名下，再转为用户级复合主键。旧数据无法可靠判断最初由哪个用户创建，因此迁移优先保持各用户升级前可用的配置；迁移完成后，每份记录独立演进，新建用户不会继承这些源。
 
 生成 `models_cache.json` 时，codex-web 只使用仓库内置的完整模板库，不再把用户 `~/.codex/models_cache.json` 当作模板。模板库包含标准 fallback、当前 Codex 内置模型模板和 DeepSeek 模型模板；先按上游 `model_id` 精确匹配，再按最长前缀匹配，未知模型才使用标准 fallback。数据库字段只覆盖 slug、显示信息、优先级、输入模态和思考深度；每个 `supported_reasoning_levels` 子项也会补齐 `effort` 和 `description`。这样即使用户缓存来自旧版 Codex 或字段不全，生成目录也不会因 `shell_type` 等字段缺失而解析失败。host 模式下，写入宿主用户 `~/.codex` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
+
+源级 `auto_review_model_override` 会写入该源下所有可见模型的目录条目，使该源上的自动审批审查使用指定模型；留空时保留每个模型模板自带的默认值（通常为 `null`，即 Codex 默认行为），因此不会因为某个源不支持默认审核模型而无法工作。
 
 ## 模型文件
 

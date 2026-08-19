@@ -151,6 +151,7 @@ export type ProviderRow = {
   base_url: string;
   api_key: string | null;
   models_file: string | null;
+  auto_review_model_override: string | null;
   extra_config: string | null;
   wire_api: "responses" | "chat" | "anthropic";
   requires_openai_auth: boolean;
@@ -393,6 +394,7 @@ export class AppDatabase {
         base_url TEXT NOT NULL,
         api_key TEXT,
         models_file TEXT,
+        auto_review_model_override TEXT,
         extra_config TEXT,
         wire_api TEXT NOT NULL DEFAULT 'responses',
         requires_openai_auth INTEGER NOT NULL DEFAULT 0,
@@ -457,6 +459,7 @@ export class AppDatabase {
     if (!jobColumnsAfter.has("skip_queue")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN skip_queue INTEGER NOT NULL DEFAULT 0");
     const providerColumns = this.columnNames("providers");
     if (!providerColumns.has("models_file")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN models_file TEXT");
+    if (!providerColumns.has("auto_review_model_override")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN auto_review_model_override TEXT");
     if (!providerColumns.has("extra_config")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN extra_config TEXT");
     const fileColumns = this.columnNames("files");
     if (!fileColumns.has("pending_prompt_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN pending_prompt_id TEXT REFERENCES pending_prompts(id) ON DELETE CASCADE");
@@ -544,6 +547,7 @@ export class AppDatabase {
           base_url TEXT NOT NULL,
           api_key TEXT,
           models_file TEXT,
+          auto_review_model_override TEXT,
           extra_config TEXT,
           wire_api TEXT NOT NULL DEFAULT 'responses',
           requires_openai_auth INTEGER NOT NULL DEFAULT 0,
@@ -570,8 +574,8 @@ export class AppDatabase {
           FOREIGN KEY(user_id, provider_id) REFERENCES providers(user_id, id) ON DELETE CASCADE,
           UNIQUE(user_id, provider_id, model_id)
         );
-        INSERT INTO providers(user_id,id,name,base_url,api_key,models_file,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
-        SELECT account.id,provider.id,provider.name,provider.base_url,provider.api_key,provider.models_file,provider.extra_config,
+        INSERT INTO providers(user_id,id,name,base_url,api_key,models_file,auto_review_model_override,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
+        SELECT account.id,provider.id,provider.name,provider.base_url,provider.api_key,provider.models_file,provider.auto_review_model_override,provider.extra_config,
           provider.wire_api,provider.requires_openai_auth,provider.enabled,provider.created_at,provider.updated_at
         FROM users account CROSS JOIN providers_legacy_global provider;
         INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
@@ -1175,6 +1179,7 @@ export class AppDatabase {
     baseUrl: string;
     apiKey?: string | null;
     modelsFile?: string | null;
+    autoReviewModelOverride?: string | null;
     extraConfig?: Record<string, unknown> | null;
     wireApi?: ProviderRow["wire_api"];
     requiresOpenaiAuth?: boolean;
@@ -1182,11 +1187,12 @@ export class AppDatabase {
   }): ProviderRow {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO providers(user_id,id,name,base_url,api_key,models_file,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO providers(user_id,id,name,base_url,api_key,models_file,auto_review_model_override,extra_config,wire_api,requires_openai_auth,enabled,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       input.userId, input.id, input.name.trim(), input.baseUrl.trim(), input.apiKey?.trim() || null,
       input.modelsFile?.trim() || null,
+      input.autoReviewModelOverride?.trim() || null,
       input.extraConfig ? JSON.stringify(input.extraConfig) : null,
       input.wireApi ?? "responses", input.requiresOpenaiAuth ? 1 : 0, input.enabled === false ? 0 : 1, now, now,
     );
@@ -1201,6 +1207,7 @@ export class AppDatabase {
       baseUrl?: string;
       apiKey?: string | null;
       modelsFile?: string | null;
+      autoReviewModelOverride?: string | null;
       extraConfig?: Record<string, unknown> | null;
       wireApi?: ProviderRow["wire_api"];
       requiresOpenaiAuth?: boolean;
@@ -1214,15 +1221,16 @@ export class AppDatabase {
       baseUrl: fields.baseUrl?.trim() || existing.base_url,
       apiKey: fields.apiKey === undefined ? existing.api_key : fields.apiKey?.trim() || null,
       modelsFile: fields.modelsFile === undefined ? existing.models_file : fields.modelsFile?.trim() || null,
+      autoReviewModelOverride: fields.autoReviewModelOverride === undefined ? existing.auto_review_model_override : fields.autoReviewModelOverride?.trim() || null,
       extraConfig: fields.extraConfig === undefined ? existing.extra_config : fields.extraConfig ? JSON.stringify(fields.extraConfig) : null,
       wireApi: fields.wireApi ?? existing.wire_api,
       requiresOpenaiAuth: fields.requiresOpenaiAuth ?? Boolean(existing.requires_openai_auth),
       enabled: fields.enabled ?? Boolean(existing.enabled),
     };
     this.sqlite.prepare(`
-      UPDATE providers SET name=?,base_url=?,api_key=?,models_file=?,extra_config=?,wire_api=?,requires_openai_auth=?,enabled=?,updated_at=?
+      UPDATE providers SET name=?,base_url=?,api_key=?,models_file=?,auto_review_model_override=?,extra_config=?,wire_api=?,requires_openai_auth=?,enabled=?,updated_at=?
       WHERE user_id=? AND id=?
-    `).run(next.name, next.baseUrl, next.apiKey, next.modelsFile, next.extraConfig, next.wireApi, next.requiresOpenaiAuth ? 1 : 0, next.enabled ? 1 : 0, new Date().toISOString(), userId, id);
+    `).run(next.name, next.baseUrl, next.apiKey, next.modelsFile, next.autoReviewModelOverride, next.extraConfig, next.wireApi, next.requiresOpenaiAuth ? 1 : 0, next.enabled ? 1 : 0, new Date().toISOString(), userId, id);
     return this.getProvider(userId, id);
   }
 

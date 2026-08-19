@@ -2829,10 +2829,17 @@ test("web users have isolated conversations, files, jobs, settings, and tenant d
 
   const ownerProvider = await owner.post("/codex-web/api/providers")
     .set("X-CSRF-Token", ownerLogin.body.csrfToken)
-    .send({ name: "Shared API", baseUrl: "https://owner.example.com/v1", apiKey: "sk-owner" })
+    .send({ name: "Shared API", baseUrl: "https://owner.example.com/v1", apiKey: "sk-owner", autoReviewModelOverride: "gpt-5.6-terra" })
     .expect(201);
   assert.equal(ownerProvider.body.provider.id, "shared-api");
+  assert.equal(ownerProvider.body.provider.autoReviewModelOverride, "gpt-5.6-terra");
   assert.deepEqual((await member.get("/codex-web/api/providers").expect(200)).body.providers, []);
+
+  await owner.put("/codex-web/api/providers/shared-api")
+    .set("X-CSRF-Token", ownerLogin.body.csrfToken)
+    .send({ autoReviewModelOverride: null })
+    .expect(200);
+  assert.equal((await owner.get("/codex-web/api/providers").expect(200)).body.providers[0].autoReviewModelOverride, null);
 
   const memberProvider = await member.post("/codex-web/api/providers")
     .set("X-CSRF-Token", memberLogin.body.csrfToken)

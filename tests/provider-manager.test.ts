@@ -11,6 +11,7 @@ import { loadAgentOptions, resolveAgentExecutionSelection, resolveAgentSelection
 import {
   assertOfficialOAuthLimit,
   importCatalogModels,
+  importProvidersFromConfig,
   listCatalogModelOptions,
   listProviderModelsPublic,
   reassignProviderModelSlugs,
@@ -82,6 +83,7 @@ test("legacy global providers are copied into isolated user scopes", () => {
   const db = testDb(root);
   assert.equal(db.getProvider(LEGACY_USER_ID, "shared")?.base_url, "https://shared.example.com/v1");
   assert.equal(db.getProvider(memberId, "shared")?.base_url, "https://shared.example.com/v1");
+  assert.equal(db.getProvider(LEGACY_USER_ID, "shared")?.auto_review_model_override, null);
   assert.equal(db.listProviderModels(LEGACY_USER_ID, "shared").length, 1);
   assert.equal(db.listProviderModels(memberId, "shared").length, 1);
 
@@ -219,6 +221,51 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
   assert.equal(catalog.models[0].shell_type, "shell_command");
   assert.equal(catalog.models[0].context_window, 1_048_576, "bundled DeepSeek template is used");
   assert.ok(String(catalog.models[0].base_instructions).length > 1_000, "complete bundled instructions are preserved");
+  db.close();
+});
+
+test("provider auto review model override is applied per source and falls back to the template default", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const db = testDb(root);
+  db.createProvider({
+    userId: LEGACY_USER_ID,
+    id: "deepseek",
+    name: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/",
+    autoReviewModelOverride: "gpt-5.6-terra",
+  });
+  db.createProvider({ userId: LEGACY_USER_ID, id: "other", name: "Other", baseUrl: "https://other.example.com/v1" });
+  db.createProviderModel({ userId: LEGACY_USER_ID, id: "m1", providerId: "deepseek", modelId: "deepseek-v4-flash", slug: "deepseek-v4-flash", displayName: "Flash", priority: 1 });
+  db.createProviderModel({ userId: LEGACY_USER_ID, id: "m2", providerId: "other", modelId: "bare-model", slug: "bare-model", displayName: "Bare", priority: 1 });
+  writeProviderConfig(codexHome, db, LEGACY_USER_ID);
+  const catalog = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models: Array<Record<string, unknown>> };
+  const bySlug = new Map(catalog.models.map((model) => [model.slug, model]));
+  assert.equal(bySlug.get("deepseek-v4-flash")?.auto_review_model_override, "gpt-5.6-terra");
+  assert.equal(bySlug.get("bare-model")?.auto_review_model_override, null, "unspecified source keeps the template default");
+
+  db.updateProvider(LEGACY_USER_ID, "deepseek", { autoReviewModelOverride: null });
+  writeProviderConfig(codexHome, db, LEGACY_USER_ID);
+  const updated = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models: Array<Record<string, unknown>> };
+  assert.equal(updated.models.find((model) => model.slug === "deepseek-v4-flash")?.auto_review_model_override, null);
+  db.close();
+});
+
+test("importProvidersFromConfig reads a provider-level auto_review_model_override", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    '[model_providers.deepseek]',
+    'name = "DeepSeek"',
+    'base_url = "https://api.deepseek.com/"',
+    'auto_review_model_override = "gpt-5.6-terra"',
+  ].join("\n"), "utf8");
+  const db = testDb(root);
+  importProvidersFromConfig(codexHome, db, LEGACY_USER_ID);
+  assert.equal(db.getProvider(LEGACY_USER_ID, "deepseek")?.auto_review_model_override, "gpt-5.6-terra");
+  assert.deepEqual(db.getProvider(LEGACY_USER_ID, "deepseek")?.extra_config, "{}", "override is not duplicated into extra config");
   db.close();
 });
 

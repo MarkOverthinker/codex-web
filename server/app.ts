@@ -825,6 +825,9 @@ export function createApp(overrides: AppOverrides = {}) {
     const requiresOpenaiAuth = raw?.requiresOpenaiAuth === true;
     const apiKey = typeof raw?.apiKey === "string" && raw.apiKey.trim() ? raw.apiKey.trim() : null;
     const modelsFile = typeof raw?.modelsFile === "string" && raw.modelsFile.trim() ? raw.modelsFile.trim().replace(/^[./\\]+/, "") : null;
+    const autoReviewModelOverride = typeof raw?.autoReviewModelOverride === "string" && raw.autoReviewModelOverride.trim()
+      ? raw.autoReviewModelOverride.trim().slice(0, 200)
+      : null;
     try {
       assertOfficialOAuthLimit(db, session.user_id, { requiresOpenaiAuth, enabled: raw?.enabled !== false });
       const provider = db.createProvider({
@@ -834,6 +837,7 @@ export function createApp(overrides: AppOverrides = {}) {
         baseUrl,
         apiKey,
         modelsFile,
+        autoReviewModelOverride,
         wireApi,
         requiresOpenaiAuth,
         enabled: raw?.enabled !== false,
@@ -869,6 +873,11 @@ export function createApp(overrides: AppOverrides = {}) {
     if ("modelsFile" in (raw ?? {})) {
       fields.modelsFile = typeof raw!.modelsFile === "string" && raw!.modelsFile.trim()
         ? raw!.modelsFile.trim().replace(/^[./\\]+/, "")
+        : null;
+    }
+    if ("autoReviewModelOverride" in (raw ?? {})) {
+      fields.autoReviewModelOverride = typeof raw!.autoReviewModelOverride === "string" && raw!.autoReviewModelOverride.trim()
+        ? raw!.autoReviewModelOverride.trim().slice(0, 200)
         : null;
     }
     if (raw?.wireApi === "chat" || raw?.wireApi === "anthropic" || raw?.wireApi === "responses") fields.wireApi = raw.wireApi;

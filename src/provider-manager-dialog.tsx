@@ -8,6 +8,7 @@ type ProviderDraft = {
   baseUrl: string;
   apiKey: string;
   modelsFile: string;
+  autoReviewModelOverride: string;
   wireApi: Provider["wireApi"];
   requiresOpenaiAuth: boolean;
   enabled: boolean;
@@ -28,6 +29,7 @@ const emptyProviderDraft: ProviderDraft = {
   baseUrl: "",
   apiKey: "",
   modelsFile: "",
+  autoReviewModelOverride: "",
   wireApi: "responses",
   requiresOpenaiAuth: false,
   enabled: true,
@@ -49,6 +51,7 @@ function providerDraft(provider: Provider): ProviderDraft {
     baseUrl: provider.baseUrl,
     apiKey: "",
     modelsFile: provider.modelsFile ?? "",
+    autoReviewModelOverride: provider.autoReviewModelOverride ?? "",
     wireApi: provider.wireApi,
     requiresOpenaiAuth: provider.requiresOpenaiAuth,
     enabled: provider.enabled,
@@ -111,6 +114,7 @@ export function ProviderManagerDialog({ open, onClose, onChanged }: {
       name: providerDraftState.name,
       baseUrl: providerDraftState.baseUrl,
       modelsFile: providerDraftState.modelsFile,
+      autoReviewModelOverride: providerDraftState.autoReviewModelOverride.trim() || null,
       wireApi: providerDraftState.wireApi,
       requiresOpenaiAuth: providerDraftState.requiresOpenaiAuth,
       enabled: providerDraftState.enabled,
@@ -265,7 +269,7 @@ export function ProviderManagerDialog({ open, onClose, onChanged }: {
                     <div className="provider-card-copy">
                       <strong>{provider.name}</strong>
                       <small title={provider.baseUrl}>{provider.baseUrl}</small>
-                      <small>{provider.wireApi}{provider.requiresOpenaiAuth ? " · 官方 OAuth" : ""}{provider.apiKeyHint ? ` · ${provider.apiKeyHint}` : ""}{provider.modelsFile ? ` · 模型文件 ${provider.modelsFile}` : ""}</small>
+                      <small>{provider.wireApi}{provider.requiresOpenaiAuth ? " · 官方 OAuth" : ""}{provider.apiKeyHint ? ` · ${provider.apiKeyHint}` : ""}{provider.modelsFile ? ` · 模型文件 ${provider.modelsFile}` : ""}{provider.autoReviewModelOverride ? ` · 审核模型 ${provider.autoReviewModelOverride}` : ""}</small>
                     </div>
                     <label className="provider-enabled-toggle">
                       <input type="checkbox" checked={provider.enabled} disabled={busyProviderId === provider.id} onChange={() => void toggleProviderEnabled(provider)} />
@@ -317,6 +321,7 @@ export function ProviderManagerDialog({ open, onClose, onChanged }: {
           <label><span>Base URL</span><input value={providerDraftState.baseUrl} onChange={(event) => setProviderDraftState((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" /></label>
           <label><span>API Key{providerDraftState.apiKey ? "（已填，保存将覆盖）" : editingProvider !== "new" ? "（留空保持不变）" : providerDraftState.requiresOpenaiAuth ? "（可选）" : ""}</span><input type="password" value={providerDraftState.apiKey} onChange={(event) => setProviderDraftState((current) => ({ ...current, apiKey: event.target.value }))} placeholder={providerDraftState.requiresOpenaiAuth ? "留空则使用官方 OAuth 登录" : editingProvider !== "new" ? "留空保持不变" : "粘贴 API Key"} /></label>
           <label><span>模型文件（codex-home 内文件名）</span><input value={providerDraftState.modelsFile} onChange={(event) => setProviderDraftState((current) => ({ ...current, modelsFile: event.target.value }))} placeholder="models.json 或 sssaicodeapi-models.json" /></label>
+          <label><span>自动审核模型覆盖（auto_review_model_override）</span><input value={providerDraftState.autoReviewModelOverride} onChange={(event) => setProviderDraftState((current) => ({ ...current, autoReviewModelOverride: event.target.value }))} placeholder="留空则使用该模型默认的自动审核模型" /></label>
           <label><span>协议</span>
             <select value={providerDraftState.wireApi} onChange={(event) => setProviderDraftState((current) => ({ ...current, wireApi: event.target.value as Provider["wireApi"] }))}>
               <option value="responses">Responses（原生支持）</option>

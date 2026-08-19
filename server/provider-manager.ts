@@ -44,6 +44,7 @@ export type ProviderPublic = {
   name: string;
   baseUrl: string;
   modelsFile: string | null;
+  autoReviewModelOverride: string | null;
   wireApi: ProviderRow["wire_api"];
   requiresOpenaiAuth: boolean;
   enabled: boolean;
@@ -164,6 +165,7 @@ function publicProvider(provider: ProviderRow): ProviderPublic {
     name: provider.name,
     baseUrl: provider.base_url,
     modelsFile: provider.models_file,
+    autoReviewModelOverride: provider.auto_review_model_override,
     wireApi: provider.wire_api,
     requiresOpenaiAuth: Boolean(provider.requires_openai_auth),
     enabled: Boolean(provider.enabled),
@@ -277,10 +279,14 @@ function reasoningLevels(model: ProviderModelRow, template: TemplateCatalogEntry
   });
 }
 
-function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEntry | undefined): Record<string, unknown> {
+function buildCatalogEntry(
+  model: ProviderModelRow,
+  template: TemplateCatalogEntry | undefined,
+  autoReviewModelOverride: string | null,
+): Record<string, unknown> {
   const displayName = String(model.display_name || model.model_id);
   const description = String(model.description || `${model.provider_id} 提供的模型`);
-  return {
+  const entry: Record<string, unknown> = {
     ...cloneTemplateFields(template),
     slug: model.slug,
     display_name: displayName,
@@ -290,6 +296,8 @@ function buildCatalogEntry(model: ProviderModelRow, template: TemplateCatalogEnt
     input_modalities: parseStringArray(model.input_modalities, ["text", "image"]),
     supported_reasoning_levels: reasoningLevels(model, template),
   };
+  if (autoReviewModelOverride) entry.auto_review_model_override = autoReviewModelOverride;
+  return entry;
 }
 
 /**
@@ -489,7 +497,7 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, userId: 
     const provider = db.getProvider(userId, model.provider_id);
     if (!provider?.enabled || !model.visible) continue;
     const template = catalogTemplateForModel(model.model_id);
-    models.push(buildCatalogEntry(model, template));
+    models.push(buildCatalogEntry(model, template, provider.auto_review_model_override));
   }
   assertCatalogEntries(models);
   const catalogPath = path.join(codexHome, "models_cache.json");
@@ -519,7 +527,7 @@ export function importProvidersFromConfig(codexHome: string, db: AppDatabase, us
     if (!baseUrl) continue;
     const token = typeof record.experimental_bearer_token === "string" ? record.experimental_bearer_token : null;
     const wireApi = record.wire_api === "chat" || record.wire_api === "anthropic" ? record.wire_api : "responses";
-    const baseKeys = new Set(["name", "base_url", "experimental_bearer_token", "wire_api", "requires_openai_auth", "models_file"]);
+    const baseKeys = new Set(["name", "base_url", "experimental_bearer_token", "wire_api", "requires_openai_auth", "models_file", "auto_review_model_override"]);
     const extraConfig = Object.fromEntries(Object.entries(record).filter(([entryKey]) => !baseKeys.has(entryKey)));
     db.createProvider({
       userId,
@@ -528,6 +536,9 @@ export function importProvidersFromConfig(codexHome: string, db: AppDatabase, us
       baseUrl,
       apiKey: token,
       modelsFile: typeof record.models_file === "string" ? record.models_file : null,
+      autoReviewModelOverride: typeof record.auto_review_model_override === "string" && record.auto_review_model_override.trim()
+        ? record.auto_review_model_override.trim()
+        : null,
       extraConfig,
       wireApi,
       requiresOpenaiAuth: record.requires_openai_auth === true,
