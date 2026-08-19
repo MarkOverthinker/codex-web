@@ -162,11 +162,12 @@ test("colliding model ids get unique source-prefixed catalog slugs", () => {
   assert.deepEqual(slugs, ["gpt-5.6-sol", "proxy-gpt-5.6-sol"]);
   const options = loadAgentOptions({} as AppConfig, "", db, LEGACY_USER_ID);
   const persistedSelection = resolveAgentSelection(options, "proxy-gpt-5.6-sol", "high", "proxy");
-  assert.deepEqual(persistedSelection, { model: "proxy-gpt-5.6-sol", reasoningEffort: "high", provider: "proxy" });
+  assert.deepEqual(persistedSelection, { model: "proxy-gpt-5.6-sol", reasoningEffort: "high", provider: "proxy", sandbox: "workspace-write" });
   assert.deepEqual(resolveAgentExecutionSelection(options, persistedSelection), {
     model: "gpt-5.6-sol",
     reasoningEffort: "high",
     provider: "proxy",
+    sandbox: "workspace-write",
   });
   db.close();
 });

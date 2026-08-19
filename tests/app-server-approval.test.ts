@@ -77,6 +77,7 @@ input.on("line", (line) => {
     imagePaths: [],
     model: "test-model",
     reasoningEffort: "medium",
+    sandboxMode: "workspace-write",
     library,
     shellEnvironment: {},
     networkAccessEnabled: false,
@@ -116,6 +117,79 @@ input.on("line", (line) => {
   assert.equal(completedReview?.riskLevel, "medium");
   assert.match(completedReview?.detail ?? "", /审核依据/);
   assert.ok(progress.some((event) => event.reviewId === "fallback:approval-1" && event.reviewStatus === "denied"));
+});
+
+test("app-server passes danger-full-access through and skips workspace writable roots", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-danger-access-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "fake-app-server.mjs");
+  const capturePath = path.join(root, "capture.json");
+  const workspace = path.join(root, "workspace");
+  const library = path.join(root, "library");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(library);
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+const capturePath = process.env.CAPTURE_PATH;
+const capture = { argv: process.argv.slice(2), messages: [] };
+const persist = () => fs.writeFileSync(capturePath, JSON.stringify(capture));
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+persist();
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
+  const message = JSON.parse(line);
+  capture.messages.push(message);
+  persist();
+  if (message.method === "initialize") send({ id: message.id, result: {} });
+  if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: "thread-danger" } } });
+  if (message.method === "turn/start") {
+    send({ id: message.id, result: { turn: { id: "turn-danger" } } });
+    send({ method: "turn/completed", params: { turn: { id: "turn-danger", status: "completed", error: null } } });
+  }
+});
+`, { mode: 0o755 });
+
+  const progress: JobEvent[] = [];
+  let threadId = "";
+  const controller = new AbortController();
+  const execution = startAppServerTurn({
+    executablePath: executable,
+    cwd: workspace,
+    env: { ...process.env, CAPTURE_PATH: capturePath },
+    threadId: null,
+    prompt: "run with full access",
+    imagePaths: [],
+    model: "test-model",
+    reasoningEffort: "medium",
+    sandboxMode: "danger-full-access",
+    library,
+    shellEnvironment: {},
+    networkAccessEnabled: true,
+    webSearchMode: "cached",
+    optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
+  }, {
+    signal: controller.signal,
+    onThreadStarted: (value) => { threadId = value; },
+    onProgress: (payload) => progress.push(payload as JobEvent),
+  });
+
+  assert.equal(await withTimeout(execution.result), "");
+  assert.equal(threadId, "thread-danger");
+  const capture = JSON.parse(fs.readFileSync(capturePath, "utf8")) as {
+    argv: string[];
+    messages: Array<{ method?: string; params?: Record<string, unknown> }>;
+  };
+  assert.deepEqual(capture.argv, [
+    "app-server", "--listen", "stdio://",
+    "-c", 'approval_policy="on-request"',
+    "-c", 'approvals_reviewer="auto_review"',
+    "-c", 'sandbox_mode="danger-full-access"',
+  ]);
+  const threadStart = capture.messages.find((message) => message.method === "thread/start")?.params;
+  assert.equal(threadStart?.sandbox, "danger-full-access");
+  const threadConfig = threadStart?.config as Record<string, unknown>;
+  assert.equal("sandbox_workspace_write" in threadConfig, false);
 });
 
 test("automatic approval reviews replace live entries and remain in completed reasoning", () => {
