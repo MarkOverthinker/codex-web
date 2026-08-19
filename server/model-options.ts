@@ -7,6 +7,27 @@ import { listCatalogModelOptions, providerManaged } from "./provider-manager.js"
 
 export type { ModelReasoningEffort } from "@openai/codex-sdk";
 
+export type SandboxMode = "workspace-write" | "danger-full-access";
+
+export type SandboxModeOption = {
+  id: SandboxMode;
+  label: string;
+  description: string;
+};
+
+export const SANDBOX_MODE_OPTIONS: SandboxModeOption[] = [
+  {
+    id: "workspace-write",
+    label: "工作区写入",
+    description: "仅可写入选定工作目录、对话工作区与租户资料库；额外操作由自动审核决定",
+  },
+  {
+    id: "danger-full-access",
+    label: "完全访问",
+    description: "跳过沙箱，拥有该账户的完整系统权限，可执行任意命令并读写任意文件",
+  },
+];
+
 export type AgentModelOption = {
   id: string;
   label: string;
@@ -21,13 +42,15 @@ export type AgentModelOption = {
 export type AgentOptions = {
   models: AgentModelOption[];
   reasoningEfforts: Array<{ id: ModelReasoningEffort; label: string }>;
-  defaults: { model: string; reasoningEffort: ModelReasoningEffort; provider?: string | null };
+  sandboxModes: SandboxModeOption[];
+  defaults: { model: string; reasoningEffort: ModelReasoningEffort; provider?: string | null; sandbox: SandboxMode };
 };
 
 export type AgentSelection = {
   model: string;
   reasoningEffort: ModelReasoningEffort;
   provider?: string | null;
+  sandbox?: SandboxMode;
 };
 
 type CatalogModel = {
@@ -141,16 +164,26 @@ export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome
     ? DEFAULT_REASONING_EFFORT
     : defaultOption.reasoningEfforts.at(-1)!;
   const offeredEfforts = orderedEfforts(available.flatMap((model) => model.reasoningEfforts));
-  const defaults: AgentOptions["defaults"] = { model: defaultModel, reasoningEffort: defaultReasoning };
+  const sandboxModes = SANDBOX_MODE_OPTIONS.filter(
+    (mode) => mode.id !== "danger-full-access" || config.allowDangerFullAccess === true,
+  );
+  const defaults: AgentOptions["defaults"] = { model: defaultModel, reasoningEffort: defaultReasoning, sandbox: "workspace-write" };
   if (defaultOption.provider) defaults.provider = defaultOption.provider;
   return {
     models: available,
     reasoningEfforts: offeredEfforts.map((id) => ({ id, label: EFFORT_LABELS[id] ?? id })),
+    sandboxModes,
     defaults,
   };
 }
 
-export function resolveAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown, rawProvider?: unknown): AgentSelection {
+function normalizeSandbox(options: AgentOptions, raw: unknown): SandboxMode {
+  const value = typeof raw === "string" ? (raw as SandboxMode) : "";
+  if (value && options.sandboxModes.some((mode) => mode.id === value)) return value;
+  return "workspace-write";
+}
+
+export function resolveAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown, rawProvider?: unknown, rawSandbox?: unknown): AgentSelection {
   const requestedModel = typeof rawModel === "string" ? rawModel.trim() : "";
   const modelId = requestedModel || options.defaults.model;
   const model = options.models.find((candidate) => candidate.id === modelId);
@@ -168,19 +201,24 @@ export function resolveAgentSelection(options: AgentOptions, rawModel: unknown, 
       throw new Error("所选模型与源不匹配，请刷新页面后重试。");
     }
   }
-  return { model: model.id, reasoningEffort: effort, ...(provider ? { provider } : {}) };
+  const sandbox = normalizeSandbox(options, rawSandbox);
+  if (rawSandbox !== undefined && rawSandbox !== null && rawSandbox !== "" && (typeof rawSandbox !== "string" || rawSandbox !== sandbox)) {
+    throw new Error("所选权限模式不可用，请刷新页面后重试。");
+  }
+  return { model: model.id, reasoningEffort: effort, sandbox, ...(provider ? { provider } : {}) };
 }
 
-export function repairAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown): AgentSelection {
+export function repairAgentSelection(options: AgentOptions, rawModel: unknown, rawEffort: unknown, rawSandbox?: unknown): AgentSelection {
   const modelId = typeof rawModel === "string" ? rawModel.trim() : "";
   const model = options.models.find((candidate) => candidate.id === modelId);
-  if (!model) return { ...options.defaults };
+  if (!model) return { ...options.defaults, sandbox: normalizeSandbox(options, rawSandbox) };
   const effort = typeof rawEffort === "string" ? rawEffort.trim() as ModelReasoningEffort : undefined;
   const selection: AgentSelection = {
     model: model.id,
     reasoningEffort: effort && model.reasoningEfforts.includes(effort)
       ? effort
       : model.reasoningEfforts.at(-1)!,
+    sandbox: normalizeSandbox(options, rawSandbox),
   };
   if (model.provider) selection.provider = model.provider;
   return selection;
@@ -195,5 +233,6 @@ export function resolveAgentExecutionSelection(options: AgentOptions, selection:
   return {
     ...selection,
     model: model.upstreamModel || model.id,
+    sandbox: normalizeSandbox(options, selection.sandbox),
   };
 }
