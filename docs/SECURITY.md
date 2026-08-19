@@ -7,6 +7,12 @@
 - Bind the application to loopback and expose it only through an HTTPS reverse proxy.
 - Codex can execute code and modify files inside its selected workspace and tenant library. Only upload files you trust and review generated changes.
 - Codex Web runs tasks with `workspace-write`, `approval_policy = "on-request"`, and automatic approval review. The reviewer only evaluates actions that already require approval; sandbox-contained actions run directly. Requests that still reach the web client for manual approval are denied rather than accepted or left pending.
+- If the operator sets `ALLOW_DANGER_FULL_ACCESS=true`, every web user can
+  select Codex's `danger-full-access` per conversation. That mode disables
+  sandboxing and approval review entirely: the agent can execute arbitrary
+  commands and read/write anything the tenant user can, including (in host
+  mode) the user's home directory and `~/.codex`. Only enable it when every
+  account and every task prompt is fully trusted.
 - Custom host working directories are accepted only in host mode and never
   point at Codex Web's own data, tenant, or workspace roots; the worker
   revalidates the absolute path and the tenant system user's access before
