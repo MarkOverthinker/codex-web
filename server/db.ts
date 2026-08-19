@@ -31,6 +31,7 @@ export type ConversationRow = {
   agent_model: string | null;
   reasoning_effort: string | null;
   agent_provider: string | null;
+  sandbox_mode: string | null;
   status: "idle" | "running";
   has_unread_result: number;
   has_pending_work: number;
@@ -81,6 +82,7 @@ export type PendingPromptRow = {
   agent_model: string;
   reasoning_effort: string;
   agent_provider: string | null;
+  sandbox_mode: string;
   position: number;
   status: "queued" | "editing";
   created_at: string;
@@ -109,6 +111,7 @@ export type JobRow = {
   agent_model: string | null;
   reasoning_effort: string | null;
   agent_provider: string | null;
+  sandbox_mode: string | null;
   queue_seq: number;
   skip_queue: number;
   status: JobStatus;
@@ -138,6 +141,7 @@ export type StoredAgentSelection = {
   model: string;
   reasoningEffort: string;
   provider?: string | null;
+  sandbox?: "workspace-write" | "danger-full-access";
 };
 
 export type ProviderRow = {
@@ -271,6 +275,7 @@ export class AppDatabase {
         title TEXT NOT NULL,
         title_source TEXT NOT NULL DEFAULT 'legacy',
         codex_thread_id TEXT,
+        sandbox_mode TEXT,
         status TEXT NOT NULL DEFAULT 'idle',
         has_unread_result INTEGER NOT NULL DEFAULT 0,
         rollout_bytes INTEGER,
@@ -295,6 +300,7 @@ export class AppDatabase {
         quote_excerpt TEXT,
         agent_model TEXT NOT NULL,
         reasoning_effort TEXT NOT NULL,
+        sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write',
         position INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'queued',
         created_at TEXT NOT NULL,
@@ -327,6 +333,7 @@ export class AppDatabase {
         message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
         agent_model TEXT,
         reasoning_effort TEXT,
+        sandbox_mode TEXT,
         skip_queue INTEGER NOT NULL DEFAULT 0,
         queue_seq INTEGER,
         status TEXT NOT NULL,
@@ -440,10 +447,13 @@ export class AppDatabase {
     if (!jobColumns.has("queue_seq")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN queue_seq INTEGER");
     const conversationColumnsAfter = this.columnNames("conversations");
     if (!conversationColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN agent_provider TEXT");
+    if (!conversationColumnsAfter.has("sandbox_mode")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN sandbox_mode TEXT");
     const pendingPromptColumnsAfter = this.columnNames("pending_prompts");
     if (!pendingPromptColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN agent_provider TEXT");
+    if (!pendingPromptColumnsAfter.has("sandbox_mode")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write'");
     const jobColumnsAfter = this.columnNames("jobs");
     if (!jobColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN agent_provider TEXT");
+    if (!jobColumnsAfter.has("sandbox_mode")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN sandbox_mode TEXT");
     if (!jobColumnsAfter.has("skip_queue")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN skip_queue INTEGER NOT NULL DEFAULT 0");
     const providerColumns = this.columnNames("providers");
     if (!providerColumns.has("models_file")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN models_file TEXT");
@@ -642,11 +652,11 @@ export class AppDatabase {
   createConversation(id: string, title: string, selection?: StoredAgentSelection, userId = LEGACY_USER_ID, workingDir?: string | null): ConversationRow {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO conversations(id,user_id,title,title_source,working_dir,agent_model,reasoning_effort,agent_provider,status,created_at,updated_at)
-      VALUES(?,?,?,'default',?,?,?,?,'idle',?,?)
+      INSERT INTO conversations(id,user_id,title,title_source,working_dir,agent_model,reasoning_effort,agent_provider,sandbox_mode,status,created_at,updated_at)
+      VALUES(?,?,?,'default',?,?,?,?,?,'idle',?,?)
     `).run(
       id, userId, title, workingDir ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null,
-      selection?.provider ?? null, now, now,
+      selection?.provider ?? null, selection?.sandbox ?? "workspace-write", now, now,
     );
     return this.getConversation(id)!;
   }
@@ -671,8 +681,8 @@ export class AppDatabase {
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
       this.sqlite.prepare(`
-        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,working_dir,agent_model,reasoning_effort,agent_provider,status,created_at,updated_at)
-        VALUES(?,?,?,'legacy',?,?,?,?,NULL,'idle',?,?)
+        INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,working_dir,agent_model,reasoning_effort,agent_provider,sandbox_mode,status,created_at,updated_at)
+        VALUES(?,?,?,'legacy',?,?,?,?,NULL,'workspace-write','idle',?,?)
       `).run(input.id, input.userId, input.title, input.threadId, input.workingDir, input.agentModel, input.reasoningEffort, input.createdAt, input.updatedAt);
       const insertMessage = this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,?,?,NULL,?)");
       for (const message of input.messages) {
@@ -691,8 +701,8 @@ export class AppDatabase {
       .run(fields.title, fields.titleSource ?? null, new Date().toISOString(), id);
     if (fields.codexThreadId !== undefined) this.sqlite.prepare("UPDATE conversations SET codex_thread_id=?, updated_at=? WHERE id=?").run(fields.codexThreadId, new Date().toISOString(), id);
     if (fields.workingDir !== undefined) this.sqlite.prepare("UPDATE conversations SET working_dir=?, updated_at=? WHERE id=?").run(fields.workingDir, new Date().toISOString(), id);
-    if (fields.agentSelection !== undefined) this.sqlite.prepare("UPDATE conversations SET agent_model=?, reasoning_effort=?, agent_provider=?, updated_at=? WHERE id=?").run(
-      fields.agentSelection.model, fields.agentSelection.reasoningEffort, fields.agentSelection.provider ?? null, new Date().toISOString(), id,
+    if (fields.agentSelection !== undefined) this.sqlite.prepare("UPDATE conversations SET agent_model=?, reasoning_effort=?, agent_provider=?, sandbox_mode=?, updated_at=? WHERE id=?").run(
+      fields.agentSelection.model, fields.agentSelection.reasoningEffort, fields.agentSelection.provider ?? null, fields.agentSelection.sandbox ?? "workspace-write", new Date().toISOString(), id,
     );
     if (fields.status !== undefined) this.sqlite.prepare("UPDATE conversations SET status=?, updated_at=? WHERE id=?").run(fields.status, new Date().toISOString(), id);
   }
@@ -896,9 +906,9 @@ export class AppDatabase {
     try {
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),0)+1 AS value FROM pending_prompts WHERE conversation_id=? AND status='queued'").get(conversationId) as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,position,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)
-      `).run(pendingId, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, next.value, status, now, now);
+        INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,sandbox_mode,position,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(pendingId, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, status, now, now);
       this.sqlite.prepare("UPDATE files SET pending_prompt_id=?,composer_draft_id=NULL WHERE conversation_id=? AND composer_draft_id=?")
         .run(pendingId, conversationId, conversationId);
       this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);
@@ -929,9 +939,9 @@ export class AppDatabase {
       this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,queue_seq,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,'queued',?,?)
-      `).run(jobId, conversationId, messageId, selection.model, selection.reasoningEffort, selection.provider ?? null, next.value, now, now);
+        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,sandbox_mode,queue_seq,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,'queued',?,?)
+      `).run(jobId, conversationId, messageId, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, now, now);
       this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, conversationId);
       this.sqlite.exec("COMMIT");
     } catch (error) {
@@ -945,9 +955,9 @@ export class AppDatabase {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),0)+1 AS value FROM pending_prompts WHERE conversation_id=? AND status='queued'").get(conversationId) as { value: number };
     this.sqlite.prepare(`
-      INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,position,status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,'queued',?,?)
-    `).run(id, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, next.value, now, now);
+      INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,sandbox_mode,position,status,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,'queued',?,?)
+    `).run(id, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, now, now);
     return this.getPendingPrompt(id)!;
   }
 
@@ -989,15 +999,15 @@ export class AppDatabase {
 
   updatePendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles | undefined {
     const result = this.sqlite.prepare(`
-      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,status='queued',updated_at=? WHERE id=?
-    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, new Date().toISOString(), id);
+      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,sandbox_mode=?,status='queued',updated_at=? WHERE id=?
+    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", new Date().toISOString(), id);
     return result.changes ? this.getPendingPrompt(id) : undefined;
   }
 
   updateEditingPendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles | undefined {
     const result = this.sqlite.prepare(`
-      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,updated_at=? WHERE id=? AND status='editing'
-    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, new Date().toISOString(), id);
+      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,sandbox_mode=?,updated_at=? WHERE id=? AND status='editing'
+    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", new Date().toISOString(), id);
     return result.changes ? this.getPendingPrompt(id) : undefined;
   }
 
@@ -1061,9 +1071,9 @@ export class AppDatabase {
       this.sqlite.prepare("DELETE FROM pending_prompts WHERE id=?").run(pendingId);
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,queue_seq,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,'queued',?,?)
-      `).run(jobId, prompt.conversation_id, messageId, prompt.agent_model, prompt.reasoning_effort, next.value, now, now);
+        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,sandbox_mode,queue_seq,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,'queued',?,?)
+      `).run(jobId, prompt.conversation_id, messageId, prompt.agent_model, prompt.reasoning_effort, prompt.sandbox_mode, next.value, now, now);
       this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, prompt.conversation_id);
       this.sqlite.exec("COMMIT");
     } catch (error) {
@@ -1098,7 +1108,12 @@ export class AppDatabase {
     try {
       const value = JSON.parse(row.value) as Partial<StoredAgentSelection>;
       if (typeof value.model === "string" && typeof value.reasoningEffort === "string") {
-        return { model: value.model, reasoningEffort: value.reasoningEffort, provider: value.provider ?? null };
+        return {
+          model: value.model,
+          reasoningEffort: value.reasoningEffort,
+          provider: value.provider ?? null,
+          sandbox: value.sandbox ?? "workspace-write",
+        };
       }
     } catch {
       // Invalid or manually edited preference is repaired by the caller.
@@ -1530,9 +1545,9 @@ export class AppDatabase {
   createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection): JobRow {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
-    this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,?)").run(
+    this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,sandbox_mode,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'queued',?,?)").run(
       id, conversationId, messageId ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null,
-      selection?.provider ?? null, next.value, now, now,
+      selection?.provider ?? null, selection?.sandbox ?? "workspace-write", next.value, now, now,
     );
     return this.getJob(id)!;
   }
