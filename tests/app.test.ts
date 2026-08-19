@@ -915,12 +915,14 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
     effectivePrompt: "test",
     imagePaths: [path.join(workspace, "uploads", "image.png")],
     selection: { model: "gpt-5.6-sol", reasoningEffort: "xhigh" },
+    sandboxMode: "workspace-write",
     networkAccessEnabled: false,
     webSearchMode: "cached",
     codexWindowsSandbox: "elevated",
     optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
   };
   assert.doesNotThrow(() => validateTenantWorkerRequest(request, owner.userId, tenantRoot));
+  assert.throws(() => validateTenantWorkerRequest({ ...request, sandboxMode: "read-only" as never }, owner.userId, tenantRoot), /Invalid worker sandbox mode/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, tenantRoot: path.join(os.tmpdir(), "other") }, owner.userId, tenantRoot), /path mismatch/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, imagePaths: [path.join(tenantRoot, "..", "secret.png")] }, owner.userId, tenantRoot), /escapes workspace/);
   assert.throws(
@@ -942,7 +944,9 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
   const composeSource = fs.readFileSync(path.join(process.cwd(), "compose.yaml"), "utf8");
   assert.match(executionSource, /executablePath: process\.env\.CODEX_RUNTIME_PATH/);
   assert.match(executionSource, /runtimeWorkspaceRoots: hostMode \? \[request\.workingDir \?\? request\.workspace, request\.workspace, request\.library\] : undefined/);
-  assert.doesNotMatch(executionSource, /danger-full-access|dangerFullAccess/);
+  // The worker must never enable danger-full-access on its own; it may only
+  // pass through a value that was validated and gated by the web app.
+  assert.doesNotMatch(executionSource, /sandboxMode\s*=\s*"danger-full-access"|sandbox:\s*"danger-full-access"/);
   const appServerSource = fs.readFileSync(path.join(process.cwd(), "server", "app-server-turn.ts"), "utf8");
   assert.match(appServerSource, /"turn\/steer"/);
   assert.match(appServerSource, /expectedTurnId: this\.activeTurnId/);
@@ -1113,18 +1117,24 @@ test("agent options use the live catalog (image-capable and text-only) and defau
   assert.deepEqual(options.models.map((model) => model.id), ["gpt-5.5", "gpt-5.6-sol", "text-only"]);
   assert.deepEqual(options.models[1].reasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(options.reasoningEfforts.at(-1), { id: "max", label: "最大" });
-  assert.deepEqual(options.defaults, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
-  assert.deepEqual(resolveAgentSelection(options, "gpt-5.5", "high"), { model: "gpt-5.5", reasoningEffort: "high" });
-  assert.deepEqual(resolveAgentSelection(options, "gpt-5.6-sol", "max"), { model: "gpt-5.6-sol", reasoningEffort: "max" });
-  assert.deepEqual(repairAgentSelection(options, "retired-model", "high"), { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
-  assert.deepEqual(repairAgentSelection(options, "gpt-5.5", "medium"), { model: "gpt-5.5", reasoningEffort: "xhigh" });
+  assert.deepEqual(options.defaults, { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" });
+  assert.deepEqual(options.sandboxModes.map((mode) => mode.id), ["workspace-write"]);
+  assert.deepEqual(resolveAgentSelection(options, "gpt-5.5", "high"), { model: "gpt-5.5", reasoningEffort: "high", sandbox: "workspace-write" });
+  assert.deepEqual(resolveAgentSelection(options, "gpt-5.6-sol", "max"), { model: "gpt-5.6-sol", reasoningEffort: "max", sandbox: "workspace-write" });
+  assert.deepEqual(repairAgentSelection(options, "retired-model", "high"), { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" });
+  assert.deepEqual(repairAgentSelection(options, "gpt-5.5", "medium"), { model: "gpt-5.5", reasoningEffort: "xhigh", sandbox: "workspace-write" });
   assert.throws(() => resolveAgentSelection(options, "hidden-model", "high"), /当前不可用/);
   assert.throws(() => resolveAgentSelection(options, "gpt-5.6-sol", "ultra"), /不受该模型支持/);
+  assert.throws(() => resolveAgentSelection(options, "gpt-5.5", "high", undefined, "danger-full-access"), /权限模式不可用/);
   fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{
     slug: "gpt-5.7-sol", display_name: "GPT-5.7-Sol", priority: 0, visibility: "list",
     input_modalities: ["text", "image"], supported_reasoning_levels: [{ effort: "high" }, { effort: "xhigh" }],
   }, ...JSON.parse(fs.readFileSync(path.join(root, "models_cache.json"), "utf8")).models] }), "utf8");
-  assert.deepEqual(loadAgentOptions(loadConfig({ codexHome: root })).defaults, { model: "gpt-5.7-sol", reasoningEffort: "xhigh" });
+  assert.deepEqual(loadAgentOptions(loadConfig({ codexHome: root })).defaults, { model: "gpt-5.7-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" });
+  const enabledOptions = loadAgentOptions(loadConfig({ codexHome: root, allowDangerFullAccess: true }));
+  assert.deepEqual(enabledOptions.sandboxModes.map((mode) => mode.id), ["workspace-write", "danger-full-access"]);
+  assert.deepEqual(resolveAgentSelection(enabledOptions, "gpt-5.7-sol", "xhigh", undefined, "danger-full-access"), { model: "gpt-5.7-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" });
+  assert.deepEqual(repairAgentSelection(enabledOptions, "retired-model", "xhigh", "danger-full-access"), { model: "gpt-5.7-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" });
 });
 
 test("legacy databases gain durable selections and preserve existing titles", (context) => {
@@ -1157,9 +1167,10 @@ test("legacy databases gain durable selections and preserve existing titles", (c
   first.close();
 
   reopened = new AppDatabase(root);
-  assert.deepEqual(reopened.getAgentSelectionPreference(), { model: "gpt-5.6-terra", reasoningEffort: "high", provider: null });
+  assert.deepEqual(reopened.getAgentSelectionPreference(), { model: "gpt-5.6-terra", reasoningEffort: "high", provider: null, sandbox: "workspace-write" });
   assert.equal(reopened.getConversation("legacy")?.agent_model, "gpt-5.6-luna");
   assert.equal(reopened.getConversation("legacy")?.reasoning_effort, "low");
+  assert.equal(reopened.getConversation("legacy")?.sandbox_mode, "workspace-write");
 });
 
 test("working directory favorites, defaults, and conversation overrides persist in settings", (context) => {
@@ -1657,8 +1668,13 @@ test("single-user login and CSRF protection", async (context) => {
   const options = await agent.get("/codex-web/api/agent-options").expect(200);
   assert.equal(options.body.defaults.model, "gpt-5.6-sol");
   assert.equal(options.body.defaults.reasoningEffort, "xhigh");
-  assert.deepEqual(options.body.selection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+  assert.equal(options.body.defaults.sandbox, "workspace-write");
+  assert.deepEqual(options.body.sandboxModes.map((mode: { id: string }) => mode.id), ["workspace-write"]);
+  assert.deepEqual(options.body.selection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" });
   assert.equal(options.body.codexConfigured, true);
+  await agent.put("/codex-web/api/agent-selection")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" }).expect(400);
 
   await agent.post("/codex-web/api/conversations").expect(403);
   const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
@@ -1666,7 +1682,7 @@ test("single-user login and CSRF protection", async (context) => {
   assert.equal(created.body.conversation.title_source, "default");
   assert.equal(created.body.conversation.has_unread_result, 0);
   assert.equal(created.body.conversation.working_dir, null);
-  assert.deepEqual(created.body.agentSelection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+  assert.deepEqual(created.body.agentSelection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" });
   const workingDirSettings = await agent.get("/codex-web/api/working-dirs").expect(200);
   assert.equal(workingDirSettings.body.settings.enabled, false);
   await agent.put("/codex-web/api/working-dirs/favorites")
@@ -1679,7 +1695,7 @@ test("single-user login and CSRF protection", async (context) => {
     .set("X-CSRF-Token", login.body.csrfToken)
     .send({ model: "gpt-5.6-luna", reasoningEffort: "low" }).expect(200);
   const second = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
-  assert.deepEqual(second.body.agentSelection, { model: "gpt-5.6-luna", reasoningEffort: "low" });
+  assert.deepEqual(second.body.agentSelection, { model: "gpt-5.6-luna", reasoningEffort: "low", sandbox: "workspace-write" });
   const unreadJobId = crypto.randomUUID();
   instance.db.createJob(unreadJobId, created.body.conversation.id);
   instance.db.finishJob(unreadJobId, created.body.conversation.id, "completed");
@@ -1698,7 +1714,7 @@ test("single-user login and CSRF protection", async (context) => {
     .set("X-CSRF-Token", login.body.csrfToken)
     .send({ model: "gpt-5.6-terra", reasoningEffort: "high" }).expect(200);
   const firstDetail = await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200);
-  assert.deepEqual(firstDetail.body.agentSelection, { model: "gpt-5.6-luna", reasoningEffort: "low" });
+  assert.deepEqual(firstDetail.body.agentSelection, { model: "gpt-5.6-luna", reasoningEffort: "low", sandbox: "workspace-write" });
 
   const codexHome = ensureTenant(tenantRoot, LEGACY_USER_ID).codexHome;
   fs.writeFileSync(path.join(codexHome, "models_cache.json"), JSON.stringify({ models: [{
@@ -1707,7 +1723,7 @@ test("single-user login and CSRF protection", async (context) => {
     supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }, { effort: "xhigh" }],
   }] }), "utf8");
   const repaired = await agent.get(`/codex-web/api/conversations/${created.body.conversation.id}`).expect(200);
-  assert.deepEqual(repaired.body.agentSelection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh" });
+  assert.deepEqual(repaired.body.agentSelection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" });
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.agent_model, "gpt-5.6-sol");
   await agent.get("/codex-web/api/conversations").expect(200);
 
@@ -1736,6 +1752,43 @@ test("single-user login and CSRF protection", async (context) => {
     .field("message", "请制作一份很长很长的家长会成绩分析演示文稿").expect(202);
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.title, "新任务");
   assert.equal(instance.db.getConversation(created.body.conversation.id)?.title_source, "default");
+});
+
+test("danger-full-access is only available after the admin opt-in and persists per conversation", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-danger-access-api-test-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot: path.join(root, "tenants"),
+    username: "owner",
+    passwordHash: bcrypt.hashSync("Danger-Full-Access-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+    allowDangerFullAccess: true,
+  });
+  context.after(() => instance.db.close());
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Danger-Full-Access-2026!" }).expect(200);
+
+  const options = await agent.get("/codex-web/api/agent-options").expect(200);
+  assert.deepEqual(options.body.sandboxModes.map((mode: { id: string }) => mode.id), ["workspace-write", "danger-full-access"]);
+  assert.equal(options.body.defaults.sandbox, "workspace-write");
+
+  const saved = await agent.put("/codex-web/api/agent-selection")
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" }).expect(200);
+  assert.deepEqual(saved.body.selection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" });
+
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  assert.deepEqual(created.body.agentSelection, { model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" });
+  assert.equal(instance.db.getConversation(created.body.conversation.id)?.sandbox_mode, "danger-full-access");
+
+  const downgraded = await agent.put(`/codex-web/api/conversations/${created.body.conversation.id}/agent-selection`)
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .send({ model: "gpt-5.6-sol", reasoningEffort: "xhigh", sandbox: "workspace-write" }).expect(200);
+  assert.equal(downgraded.body.selection.sandbox, "workspace-write");
+  assert.equal(instance.db.getConversation(created.body.conversation.id)?.sandbox_mode, "workspace-write");
 });
 
 test("message attachments and composer drafts expose host paths for copyable display", async (context) => {
