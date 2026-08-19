@@ -1,4 +1,4 @@
-import type { AgentSelection } from "./model-options.js";
+import type { AgentSelection, SandboxMode } from "./model-options.js";
 import type { OptionalAgentCapabilities } from "./optional-capabilities.js";
 
 export type TenantWorkerRunRequest = {
@@ -19,6 +19,7 @@ export type TenantWorkerRunRequest = {
   outputSchema?: Record<string, unknown>;
   selection: AgentSelection;
   modelProvider?: string | null;
+  sandboxMode: SandboxMode;
   networkAccessEnabled: boolean;
   webSearchMode: "cached" | "live";
   codexWindowsSandbox: "elevated" | "unelevated";

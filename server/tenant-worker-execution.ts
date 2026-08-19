@@ -39,6 +39,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     model: request.selection.model,
     reasoningEffort: request.selection.reasoningEffort,
     modelProvider: request.modelProvider,
+    sandboxMode: request.sandboxMode,
     library: request.library,
     shellEnvironment: buildShellEnvironment(pythonRuntime, request.runtimeRoot, hostMode ? request.home : undefined),
     networkAccessEnabled: request.networkAccessEnabled,
@@ -81,6 +82,7 @@ export function validateTenantWorkerRequest(request: TenantWorkerRunRequest, exp
     throw new Error("Invalid worker identifiers");
   }
   if (!isOptionalAgentCapabilities(request.optionalCapabilities)) throw new Error("Invalid optional capabilities");
+  if (request.sandboxMode !== "workspace-write" && request.sandboxMode !== "danger-full-access") throw new Error("Invalid worker sandbox mode");
   if (request.modelProvider !== undefined && request.modelProvider !== null && !/^[a-z0-9][a-z0-9._-]{1,80}$/i.test(request.modelProvider)) {
     throw new Error("Invalid worker model provider");
   }

@@ -208,6 +208,7 @@ export class CodexRunner {
         outputSchema: shouldGenerateTitle ? AUTO_TITLE_OUTPUT_SCHEMA : undefined,
         selection,
         modelProvider: selection.provider ?? null,
+        sandboxMode: selection.sandbox ?? "workspace-write",
         networkAccessEnabled: taskPolicy.networkAccessEnabled,
         webSearchMode: taskPolicy.isolated ? "cached" : "live",
         codexWindowsSandbox: this.config.codexWindowsSandbox,
