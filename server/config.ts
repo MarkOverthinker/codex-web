@@ -22,6 +22,7 @@ export type AppConfig = {
   codexWindowsSandbox: "elevated" | "unelevated";
   containerized: boolean;
   hostMode: boolean;
+  allowDangerFullAccess: boolean;
   allowHostPublicBind: boolean;
   codexHome: string;
   reloaderStatusUrl: string;
@@ -69,6 +70,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     codexWindowsSandbox: overrides.codexWindowsSandbox ?? (process.env.CODEX_WINDOWS_SANDBOX === "unelevated" ? "unelevated" : "elevated"),
     containerized: overrides.containerized ?? process.env.CONTAINERIZED === "true",
     hostMode: overrides.hostMode ?? process.env.HOST_MODE === "true",
+    allowDangerFullAccess: overrides.allowDangerFullAccess ?? process.env.ALLOW_DANGER_FULL_ACCESS === "true",
     allowHostPublicBind: overrides.allowHostPublicBind ?? process.env.ALLOW_HOST_PUBLIC_BIND === "true",
     codexHome: overrides.codexHome ?? (process.env.CODEX_HOME || path.join(os.homedir(), ".codex")),
     reloaderStatusUrl: overrides.reloaderStatusUrl ?? (process.env.CODEX_WEB_RELOADER_URL || "http://127.0.0.1:37822"),
