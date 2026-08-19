@@ -4,6 +4,7 @@ import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { describeUpstreamError, isRetryableUpstreamError } from "./retry-policy.js";
 import { buildOptionalCapabilityConfig, type OptionalAgentCapabilities } from "./optional-capabilities.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
+import type { SandboxMode } from "./model-options.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -24,6 +25,7 @@ export type AppServerTurnOptions = {
   model: string;
   reasoningEffort: string;
   modelProvider?: string | null;
+  sandboxMode: SandboxMode;
   library: string;
   shellEnvironment: Record<string, string>;
   networkAccessEnabled: boolean;
@@ -52,7 +54,6 @@ type RpcNotification = { method: string; params?: JsonObject };
 
 const APPROVAL_POLICY = "on-request";
 const APPROVALS_REVIEWER = "auto_review";
-const SANDBOX_MODE = "workspace-write";
 const APPROVAL_REJECTION = "自动审核未接管此请求，Codex Web 已按安全默认值拒绝。";
 
 let setprivProbeResult: boolean | undefined;
@@ -102,7 +103,7 @@ class AppServerTurnClient {
       "--listen", "stdio://",
       "-c", `approval_policy="${APPROVAL_POLICY}"`,
       "-c", `approvals_reviewer="${APPROVALS_REVIEWER}"`,
-      "-c", `sandbox_mode="${SANDBOX_MODE}"`,
+      "-c", `sandbox_mode="${options.sandboxMode}"`,
     ];
     const spawnOptions: SpawnOptionsWithoutStdio = {
       cwd: options.cwd,
@@ -187,12 +188,14 @@ class AppServerTurnClient {
         runtimeWorkspaceRoots,
         approvalPolicy: APPROVAL_POLICY,
         approvalsReviewer: APPROVALS_REVIEWER,
-        sandbox: SANDBOX_MODE,
+        sandbox: this.options.sandboxMode,
         config: {
-          sandbox_workspace_write: {
-            writable_roots: runtimeWorkspaceRoots,
-            network_access: this.options.networkAccessEnabled,
-          },
+          ...(this.options.sandboxMode === "workspace-write" ? {
+            sandbox_workspace_write: {
+              writable_roots: runtimeWorkspaceRoots,
+              network_access: this.options.networkAccessEnabled,
+            },
+          } : {}),
           shell_environment_policy: { inherit: "core", set: this.options.shellEnvironment },
           model_reasoning_summary: "auto",
           hide_agent_reasoning: false,
