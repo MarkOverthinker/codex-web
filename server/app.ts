@@ -150,9 +150,9 @@ export function createApp(overrides: AppOverrides = {}) {
 
   function userAgentSelection(userId: string, options: AgentOptions = optionsForUser(userId)): AgentSelection {
     const stored = db.getAgentSelectionPreference(userId);
-    const selection = repairAgentSelection(options, stored?.model, stored?.reasoningEffort);
+    const selection = repairAgentSelection(options, stored?.model, stored?.reasoningEffort, stored?.sandbox);
     if (!stored || stored.model !== selection.model || stored.reasoningEffort !== selection.reasoningEffort
-      || (stored.provider ?? null) !== (selection.provider ?? null)) {
+      || (stored.provider ?? null) !== (selection.provider ?? null) || (stored.sandbox ?? "workspace-write") !== selection.sandbox) {
       db.setAgentSelectionPreference(selection, userId);
     }
     return selection;
@@ -160,10 +160,11 @@ export function createApp(overrides: AppOverrides = {}) {
 
   function conversationAgentSelection(conversation: ConversationRow, options: AgentOptions = optionsForUser(conversation.user_id)): AgentSelection {
     const fallback = conversation.agent_model && conversation.reasoning_effort
-      ? { model: conversation.agent_model, reasoningEffort: conversation.reasoning_effort }
+      ? { model: conversation.agent_model, reasoningEffort: conversation.reasoning_effort, sandbox: conversation.sandbox_mode ?? "workspace-write" }
       : userAgentSelection(conversation.user_id, options);
-    const selection = repairAgentSelection(options, fallback.model, fallback.reasoningEffort);
-    if (conversation.agent_model !== selection.model || conversation.reasoning_effort !== selection.reasoningEffort || conversation.agent_provider !== (selection.provider ?? null)) {
+    const selection = repairAgentSelection(options, fallback.model, fallback.reasoningEffort, fallback.sandbox);
+    if (conversation.agent_model !== selection.model || conversation.reasoning_effort !== selection.reasoningEffort
+      || conversation.agent_provider !== (selection.provider ?? null) || (conversation.sandbox_mode ?? "workspace-write") !== selection.sandbox) {
       db.updateConversation(conversation.id, { agentSelection: selection });
     }
     return selection;
@@ -325,8 +326,8 @@ export function createApp(overrides: AppOverrides = {}) {
     return db.listPresetPrompts(userId).filter((preset) => preset.default_enabled).length;
   }
 
-  function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow, rawProvider?: unknown): AgentSelection {
-    const selection = resolveAgentSelection(optionsForUser(userId), rawModel, rawEffort, rawProvider);
+  function saveAgentSelection(userId: string, rawModel: unknown, rawEffort: unknown, conversation?: ConversationRow, rawProvider?: unknown, rawSandbox?: unknown): AgentSelection {
+    const selection = resolveAgentSelection(optionsForUser(userId), rawModel, rawEffort, rawProvider, rawSandbox);
     db.setAgentSelectionPreference(selection, userId);
     if (conversation) db.updateConversation(conversation.id, { agentSelection: selection });
     return selection;
@@ -510,7 +511,7 @@ export function createApp(overrides: AppOverrides = {}) {
         return;
       }
       const options = optionsForUser(conversation.user_id);
-      const selection = repairAgentSelection(options, job.agent_model, job.reasoning_effort);
+      const selection = repairAgentSelection(options, job.agent_model, job.reasoning_effort, job.sandbox_mode);
       const executionSelection = resolveAgentExecutionSelection(options, selection);
       await runner.run(job.id, conversation.id, agentPrompt(message.content, message.quote_excerpt, message.source_reference), db.listFilesForMessage(message.id), executionSelection);
     } finally {
@@ -805,7 +806,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.put("/agent-selection", (req, res) => {
     const session = res.locals.session as SessionRow;
-    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, undefined, req.body?.provider) }); }
+    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, undefined, req.body?.provider, req.body?.sandbox) }); }
     catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "模型选项无效。" }); }
   });
 
@@ -1623,7 +1624,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
     if (conversation.archived_at) return res.status(409).json({ error: "会话已归档，请恢复后再修改。" });
-    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, conversation, req.body?.provider) }); }
+    try { return res.json({ selection: saveAgentSelection(session.user_id, req.body?.model, req.body?.reasoningEffort, conversation, req.body?.provider, req.body?.sandbox) }); }
     catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "模型选项无效。" }); }
   });
 
