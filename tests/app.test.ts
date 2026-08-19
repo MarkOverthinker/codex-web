@@ -682,6 +682,10 @@ test("completed reasoning panel collects incremental steps and legacy details", 
   assert.match(appSource, /思考过程/);
   assert.match(styles, /\.reasoning-panel \{/);
   assert.match(styles, /\.reasoning-step-detail/);
+  assert.match(styles, /\.reasoning-steps \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(styles, /\.reasoning-step \{ min-width: 0/);
+  assert.match(styles, /\.reasoning-step-title \{[^}]*overflow-wrap: anywhere/);
+  assert.doesNotMatch(styles, /\.reasoning-step-title \{[^}]*white-space: nowrap/);
 });
 
 test("task timing shows live elapsed time and completed total duration", () => {

@@ -619,16 +619,16 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .reasoning-panel-meta { margin-left: auto; color: #8b8f9e; font-size: 10px; font-weight: 500; }
 .reasoning-panel > summary > svg { transition: transform .15s ease; }
 .reasoning-panel[open] > summary > svg { transform: rotate(180deg); }
-.reasoning-steps { margin: 0; padding: 8px 10px 10px; list-style: none; display: grid; gap: 6px; }
+.reasoning-steps { margin: 0; padding: 8px 10px 10px; list-style: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .reasoning-duration { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 9px 11px; border: 1px solid #d9dce9; border-radius: 9px; color: #33407d; background: #f6f7fb; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.reasoning-step { border: 1px solid #e2e4ee; border-radius: 9px; background: #fff; }
+.reasoning-step { min-width: 0; border: 1px solid #e2e4ee; border-radius: 9px; background: #fff; }
 .reasoning-step > summary { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; list-style: none; cursor: pointer; user-select: none; }
 .reasoning-step > summary::-webkit-details-marker { display: none; }
 .reasoning-step-index { flex: 0 0 auto; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: #33407d; background: #e9ecf6; font-size: 10px; font-weight: 750; }
-.reasoning-step-title { min-width: 0; overflow: hidden; color: #454a5b; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.reasoning-step-title { min-width: 0; overflow-wrap: anywhere; word-break: break-word; color: #454a5b; font-size: 12px; font-weight: 650; }
 .reasoning-step > summary > svg { flex: 0 0 auto; margin-left: auto; color: #9a9dab; transition: transform .15s ease; }
 .reasoning-step[open] > summary > svg { transform: rotate(180deg); }
-.reasoning-panel .reasoning-step .reasoning-step-detail { padding: 0 11px 10px 37px; border: none; background: transparent; box-shadow: none; color: #3d4150; font-size: 12px; line-height: 1.62; }
+.reasoning-panel .reasoning-step .reasoning-step-detail { min-width: 0; padding: 0 11px 10px 37px; border: none; background: transparent; box-shadow: none; color: #3d4150; font-size: 12px; line-height: 1.62; }
 .approval-reasoning-step { border-color: #d8dff2; background: #f9faff; }
 .markdown { line-height: 1.72; overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
