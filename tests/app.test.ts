@@ -2975,6 +2975,51 @@ test("composer drafts and attachments survive browser sessions and are consumed 
   assert.equal(fs.existsSync(clearPath), false);
 });
 
+test("composer draft attachments are removable one by one with long display names", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-draft-file-delete-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Draft-Delete-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Draft-Delete-Password-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id as string;
+
+  const uploaded = await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files`)
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .attach("files", Buffer.from("clipboard png bytes"), { filename: "clipboard-image-20260821-220916-1.png", contentType: "image/png" })
+    .attach("files", Buffer.from("keep me"), { filename: "keep.txt", contentType: "text/plain" })
+    .expect(201);
+  const files = uploaded.body.composerDraft.files as Array<{ id: string; original_name: string; relative_path: string }>;
+  assert.equal(files.length, 2);
+  const workspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, conversationId);
+  const target = files.find((file) => file.original_name.startsWith("clipboard-image"))!;
+  const kept = files.find((file) => file.original_name === "keep.txt")!;
+  const targetPath = path.join(workspace, target.relative_path);
+  const keptPath = path.join(workspace, kept.relative_path);
+  assert.equal(fs.existsSync(targetPath), true);
+  assert.equal(fs.existsSync(keptPath), true);
+
+  const removed = await agent.delete(`/codex-web/api/conversations/${conversationId}/draft/files/${target.id}`)
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .expect(200);
+  assert.deepEqual(removed.body.composerDraft.files.map((file: { original_name: string }) => file.original_name), ["keep.txt"]);
+  assert.equal(instance.db.getFile(target.id), undefined);
+  assert.equal(instance.db.getFile(kept.id)?.composer_draft_id, conversationId);
+  assert.equal(fs.existsSync(targetPath), false);
+  assert.equal(fs.existsSync(keptPath), true);
+
+  await agent.delete(`/codex-web/api/conversations/${conversationId}/draft/files/${kept.id}`)
+    .set("X-CSRF-Token", login.body.csrfToken)
+    .expect(200);
+  assert.equal(instance.db.getComposerDraft(conversationId), undefined);
+  assert.equal(fs.existsSync(keptPath), false);
+});
+
 test("file-only submissions persist on the server and wait for a real instruction", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-awaiting-instruction-test-"));
   const tenantRoot = path.join(root, "tenants");
