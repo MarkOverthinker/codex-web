@@ -532,7 +532,6 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   currentConversationIdRef.current = detail?.conversation.id === selectedId ? detail.conversation.id : null;
   taskMenuRef.current = taskMenu;
   editingPendingRef.current = editingPending;
-  inputRef.current = input;
   askAgentQuoteRef.current = askAgentQuote;
   sourceReferenceRef.current = sourceReference;
   composerDraftRef.current = composerDraft;
@@ -601,6 +600,31 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     return operation;
   }, []);
 
+  const applyExternalComposerText = useCallback((text: string) => {
+    inputRef.current = text;
+    setInput(text);
+  }, []);
+
+  const handleComposerTextChange = useCallback((text: string) => {
+    inputRef.current = text;
+    const conversationId = selectedIdRef.current;
+    if (!conversationId || editingPendingRef.current || draftLoadedConversationRef.current !== conversationId) return;
+    const quoteExcerpt = askAgentQuoteRef.current;
+    const sourceRef = sourceReferenceRef.current;
+    const signature = composerDraftSignature(text, quoteExcerpt, sourceRef);
+    draftCacheRef.current.set(conversationId, { content: text, quoteExcerpt, sourceReference: sourceRef, composerDraft: composerDraftRef.current });
+    if (signature === draftSyncedSignaturesRef.current.get(conversationId)) {
+      setDraftSaveState(composerDraftRef.current ? "saved" : "idle");
+      return;
+    }
+    setDraftSaveState("unsaved");
+    if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = window.setTimeout(() => {
+      draftSaveTimerRef.current = null;
+      void persistComposerDraft(conversationId, text, quoteExcerpt, sourceRef).catch(() => undefined);
+    }, COMPOSER_DRAFT_SAVE_DELAY_MS);
+  }, [persistComposerDraft]);
+
   const flushActivities = useCallback(() => {
     if (activityFlushTimerRef.current !== null) {
       window.clearTimeout(activityFlushTimerRef.current);
@@ -666,7 +690,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         setEditingPending(result.editingPrompt);
         setRemovedEditingFileIds([]);
         setFiles([]);
-        setInput(result.editingPrompt.content);
+        applyExternalComposerText(result.editingPrompt.content);
         setAskAgentQuote(result.editingPrompt.quote_excerpt ?? "");
         setSourceReference(null);
       }
@@ -692,7 +716,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         draftLoadedConversationRef.current = id;
         composerDraftRef.current = restored.composerDraft;
         setComposerDraft(restored.composerDraft);
-        setInput(restored.content);
+        applyExternalComposerText(restored.content);
         setAskAgentQuote(restored.quoteExcerpt);
         setSourceReference(restored.sourceReference);
         setFiles([]);
@@ -711,7 +735,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         composerDraftRef.current = serverDraft;
         setComposerDraft(serverDraft);
         if (!responseIsStale && localSignature === syncedSignature && serverSignature !== syncedSignature) {
-          setInput(serverContent);
+          applyExternalComposerText(serverContent);
           setAskAgentQuote(serverQuote);
           setSourceReference(serverSource);
           draftSyncedSignaturesRef.current.set(id, serverSignature);
@@ -852,7 +876,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     draftLoadedConversationRef.current = cached ? selectedId : null;
     composerDraftRef.current = cached?.composerDraft ?? null;
     setComposerDraft(cached?.composerDraft ?? null);
-    setInput(cached?.content ?? "");
+    applyExternalComposerText(cached?.content ?? "");
     setAskAgentQuote(cached?.quoteExcerpt ?? "");
     setSourceReference(cached?.sourceReference ?? null);
     setDraftSaveState(cached ? "unsaved" : "idle");
@@ -862,8 +886,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   }, [selectedId]);
   useEffect(() => {
     if (!selectedId || editingPending || draftLoadedConversationRef.current !== selectedId) return;
-    const signature = composerDraftSignature(input, askAgentQuote, sourceReference);
-    draftCacheRef.current.set(selectedId, { content: input, quoteExcerpt: askAgentQuote, sourceReference, composerDraft: composerDraftRef.current });
+    const content = inputRef.current;
+    const signature = composerDraftSignature(content, askAgentQuote, sourceReference);
+    draftCacheRef.current.set(selectedId, { content, quoteExcerpt: askAgentQuote, sourceReference, composerDraft: composerDraftRef.current });
     if (signature === draftSyncedSignaturesRef.current.get(selectedId)) {
       setDraftSaveState(composerDraftRef.current ? "saved" : "idle");
       return;
@@ -872,13 +897,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = window.setTimeout(() => {
       draftSaveTimerRef.current = null;
-      void persistComposerDraft(selectedId, input, askAgentQuote, sourceReference).catch(() => undefined);
+      void persistComposerDraft(selectedId, content, askAgentQuote, sourceReference).catch(() => undefined);
     }, COMPOSER_DRAFT_SAVE_DELAY_MS);
     return () => {
       if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = null;
     };
-  }, [askAgentQuote, editingPending, input, persistComposerDraft, selectedId, sourceReference]);
+  }, [askAgentQuote, editingPending, persistComposerDraft, selectedId, sourceReference]);
   useEffect(() => () => {
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     const conversationId = selectedId;
@@ -1120,7 +1145,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       await refreshList();
       setSelectedId(result.conversation.id);
       setComposerDraft(result.composerDraft);
-      setInput("");
+      applyExternalComposerText("");
       setAskAgentQuote(result.composerDraft.quote_excerpt ?? "");
       setSourceReference(result.composerDraft.source_reference);
       setFiles([]);
@@ -1357,14 +1382,15 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       draftCacheRef.current.delete(conversationId);
       draftSyncedSignaturesRef.current.set(conversationId, composerDraftSignature("", "", null));
       composerDraftRef.current = null;
-      setComposerDraft(null); setInput(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]); setDraftSaveState("idle");
+      setComposerDraft(null); applyExternalComposerText(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]); setDraftSaveState("idle");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "清空草稿失败"); }
   }
 
-  async function send(message = input) {
+  async function send(message?: string) {
+    const content = message ?? inputRef.current;
     const hasRetainedEditingFile = Boolean(editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id)));
     const hasComposerDraftFile = Boolean(!editingPending && composerDraft?.files.length);
-    if ((!message.trim() && !askAgentQuote && files.length === 0 && !hasRetainedEditingFile && !hasComposerDraftFile) || submitting || selectionSaving) return;
+    if ((!content.trim() && !askAgentQuote && files.length === 0 && !hasRetainedEditingFile && !hasComposerDraftFile) || submitting || selectionSaving) return;
     if (draftUploads.length > 0) { setNotice("请等待草稿附件上传完成后再发送。"); return; }
     setError(""); setNotice(""); setSubmitting(true);
     if (!sending) setActivities([{ kind: "status", label: files.length ? "正在上传并准备文件" : "正在提交任务" }]);
@@ -1378,7 +1404,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         selectedIdRef.current = id; setSelectedId(id);
       }
       if (editingPending) {
-        const result = await api.updatePendingPrompt(id, editingPending.id, message, files, removedEditingFileIds, askAgentQuote);
+        const result = await api.updatePendingPrompt(id, editingPending.id, content, files, removedEditingFileIds, askAgentQuote);
         if (result.needsInstruction) {
           const persisted = result.editingPrompt ?? result.pendingPrompt ?? editingPending;
           editingPendingRef.current = persisted; setEditingPending(persisted); setRemovedEditingFileIds([]);
@@ -1391,9 +1417,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         if (useComposerDraft) {
           if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
           await draftSaveQueueRef.current;
-          await persistComposerDraft(id, message, askAgentQuote, sourceReferenceRef.current);
+          await persistComposerDraft(id, content, askAgentQuote, sourceReferenceRef.current);
         }
-        const result = await api.sendMessage(id, message, useComposerDraft ? [] : files, askAgentQuote, useComposerDraft);
+        const result = await api.sendMessage(id, content, useComposerDraft ? [] : files, askAgentQuote, useComposerDraft);
         if (result.needsInstruction) setNotice(result.guidance || "文件已上传，请输入具体操作后再发送。");
         if (useComposerDraft) {
           draftMutationGenerationRef.current.set(id, (draftMutationGenerationRef.current.get(id) ?? 0) + 1);
@@ -1402,7 +1428,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           composerDraftRef.current = null; setComposerDraft(null); setDraftSaveState("idle");
         }
       }
-      setInput(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]);
+      applyExternalComposerText(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]);
       await reconcile(id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "发送失败");
@@ -1420,7 +1446,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       }
       const result = await api.editPendingPrompt(selectedId, prompt.id);
       editingPendingRef.current = result.editingPrompt;
-      setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setSourceReference(null); setInput(result.editingPrompt.content);
+      setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setSourceReference(null); applyExternalComposerText(result.editingPrompt.content);
       draftLoadedConversationRef.current = null;
       if (selectedModel !== prompt.agent_model || reasoningEffort !== prompt.reasoning_effort || sandboxMode !== (prompt.sandbox_mode ?? "workspace-write")) {
         await persistAgentSelection({ model: prompt.agent_model, reasoningEffort: prompt.reasoning_effort, sandbox: prompt.sandbox_mode ?? "workspace-write" });
@@ -1436,7 +1462,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     try {
       if (editingPending.content.trim() || editingPending.quote_excerpt) await api.restorePendingPrompt(selectedId, editingPending.id);
       else await api.deletePendingPrompt(selectedId, editingPending.id);
-      editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]); setInput(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]);
+      editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]); applyExternalComposerText(""); setAskAgentQuote(""); setSourceReference(null); setFiles([]);
       draftLoadedConversationRef.current = null;
       setNotice("");
       await reconcile(selectedId);
@@ -2364,7 +2390,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   // value captured by the callbacks it receives.
   const composerElement = useMemo(() => <Composer
     key={selectedId ?? "new-conversation"}
-    input={input} setInput={setInput}
+    input={input} onTextChange={handleComposerTextChange}
     askAgentQuote={askAgentQuote} onClearAskAgentQuote={() => setAskAgentQuote("")}
     sourceReference={sourceReference} onClearSourceReference={() => { setAskAgentQuote(""); setSourceReference(null); }}
     onOpenSourceReference={(reference) => openSourceReference(reference)}
@@ -2391,7 +2417,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined}
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
-    currentDetail, draftSaveState, draftUploads, editingPending, files, input, job, reasoningEffort, sandboxMode,
+    currentDetail, draftSaveState, draftUploads, editingPending, files, handleComposerTextChange, input, job, reasoningEffort, sandboxMode,
     hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
@@ -2798,7 +2824,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
       {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
-        : <Welcome onSuggestion={(text) => setInput(text)} />}
+        : <Welcome onSuggestion={(text) => applyExternalComposerText(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
       {notice && <div className="toast info" role="status"><span>{notice}</span><button onClick={() => setNotice("")}><X size={16} /></button></div>}
       {currentDetail?.conversation.archived_at && <div className="archived-conversation-banner"><Archive size={15} /><span>这个任务已归档，历史内容仍可查看。</span><button type="button" onClick={() => void restoreConversation(currentDetail.conversation)}>恢复任务</button></div>}
@@ -3454,10 +3480,10 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
+function Composer({ conversationId, input, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
-  setInput: (value: string) => void;
+  onTextChange: (text: string) => void;
   askAgentQuote: string;
   onClearAskAgentQuote: () => void;
   sourceReference: MessageSourceReference | null;
@@ -3525,13 +3551,15 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   const handledFocusRequestRef = useRef(focusRequest);
   const inputRef = useRef(input);
   const hadInputRef = useRef(Boolean(input));
+  const [hasText, setHasText] = useState(() => Boolean(input.trim()));
+  const onTextChangeRef = useRef(onTextChange);
   const filesRef = useRef(files);
   const draftFilesRef = useRef(draftFiles);
   const draftUploadsRef = useRef(draftUploads);
   const editingPendingRef = useRef(editingPending);
   const removedEditingFileIdsRef = useRef(removedEditingFileIds);
   const onSendRef = useRef(onSend);
-  inputRef.current = input;
+  onTextChangeRef.current = onTextChange;
   filesRef.current = files;
   draftFilesRef.current = draftFiles;
   draftUploadsRef.current = draftUploads;
@@ -3540,9 +3568,13 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   onSendRef.current = onSend;
 
   useEffect(() => {
-    const hadInput = hadInputRef.current;
+    const textarea = textareaRef.current;
+    if (!textarea || textarea.value === input) return;
+    textarea.value = input;
+    inputRef.current = input;
     hadInputRef.current = Boolean(input);
-    if (hadInput && !input) setComposerTextHeight(null);
+    setHasText(Boolean(input.trim()));
+    if (!input) setComposerTextHeight(null);
   }, [input]);
 
   useEffect(() => () => {
@@ -3661,6 +3693,15 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     setVoiceState("idle"); setVoiceElapsed(0);
   }
 
+  function handleTextChange(value: string) {
+    const hadInput = hadInputRef.current;
+    inputRef.current = value;
+    hadInputRef.current = Boolean(value);
+    setHasText(Boolean(value.trim()));
+    if (hadInput && !value) setComposerTextHeight(null);
+    onTextChangeRef.current(value);
+  }
+
   async function processRecording(mimeType: string) {
     releaseAudio(); recorderRef.current = null;
     if (discardRecordingRef.current) { chunksRef.current = []; return; }
@@ -3679,7 +3720,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
       });
       const existing = inputRef.current;
       const combined = existing ? `${existing}${/\s$/.test(existing) ? "" : "\n"}${result.text}` : result.text;
-      inputRef.current = combined; setInput(combined); setVoiceState("idle"); setVoiceElapsed(0);
+      handleTextChange(combined); setVoiceState("idle"); setVoiceElapsed(0);
       if (sendAfterTranscriptionRef.current) onSendRef.current(combined);
     } catch (reason) {
       setVoiceError(reason instanceof Error ? reason.message : "语音识别失败，请重试。");
@@ -3710,7 +3751,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     window.clearTimeout(pasteTimer.current);
     pasteTimer.current = window.setTimeout(() => setPasteNotice(""), 2600);
   }
-  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(); } }
+  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(inputRef.current); } }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
   const modelOptions = agentOptions?.models.map((model) => ({
@@ -3726,12 +3767,12 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
   const hasRetainedEditingFile = Boolean(editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id)));
   const primaryAction = chooseComposerPrimaryAction({
     running: Boolean(sending && onCancel),
-    hasText: Boolean(input.trim() || askAgentQuote),
+    hasText: Boolean(hasText || askAgentQuote),
     hasAttachments: files.length > 0 || draftFiles.length > 0 || draftUploads.length > 0 || hasRetainedEditingFile,
     voiceActive: voiceState !== "idle",
   });
   const awaitingInstruction = Boolean(editingPending && !editingPending.content.trim() && !editingPending.quote_excerpt);
-  const hasUnsentDraft = !editingPending && Boolean(input || askAgentQuote || draftFiles.length || draftUploads.length);
+  const hasUnsentDraft = !editingPending && Boolean(hasText || askAgentQuote || draftFiles.length || draftUploads.length);
   const draftStatusLabel = draftUploads.length > 0 ? "正在上传附件…"
     : draftSaveState === "saving" ? "正在保存草稿…"
     : draftSaveState === "unsaved" ? "草稿将在停止输入后自动保存"
@@ -3776,7 +3817,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
     {files.length > 0 && <div className="pending-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={14} />{file.name}<button onClick={() => setFiles(files.filter((_, i) => i !== index))}><X size={13} /></button></span>)}</div>}
     {pasteNotice && <div className="paste-notice" role="status" aria-live="polite"><Check size={14} />{pasteNotice}</div>}
     {voiceError && <div className="voice-error" role="alert"><span>{voiceError}</span><button type="button" onClick={() => setVoiceError("")}><X size={13} /></button></div>}
-    <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
+    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
     {voiceState !== "idle" && <div className={`voice-panel ${voiceState}`}>
       {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
     </div>}
@@ -3791,7 +3832,7 @@ function Composer({ conversationId, input, setInput, askAgentQuote, onClearAskAg
         {voiceEnabled && voiceState === "idle" && <button type="button" className="mic-button" onClick={() => void startRecording()} disabled={submitting || selectionSaving} title="录音输入" aria-label="录音输入"><Mic size={18} /></button>}
         {primaryAction === "stop" && onCancel
           ? <button type="button" className="send-button stop" onClick={onCancel} title="停止当前显示的任务" aria-label="停止当前显示的任务"><Square size={15} fill="currentColor" /></button>
-          : <button type="button" className="send-button" onClick={() => voiceState === "recording" ? finishRecording(true) : onSend()} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceState === "transcribing" || (voiceState !== "recording" && !input.trim() && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title={voiceState === "recording" ? "识别语音并发送" : "发送"} aria-label={voiceState === "recording" ? "识别语音并发送" : "发送"}>{submitting || voiceState === "transcribing" ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
+          : <button type="button" className="send-button" onClick={() => voiceState === "recording" ? finishRecording(true) : onSend(inputRef.current)} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceState === "transcribing" || (voiceState !== "recording" && !hasText && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title={voiceState === "recording" ? "识别语音并发送" : "发送"} aria-label={voiceState === "recording" ? "识别语音并发送" : "发送"}>{submitting || voiceState === "transcribing" ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
       </div>
     </div>
   </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p></div>;

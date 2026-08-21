@@ -516,7 +516,7 @@ test("selected message text can be quoted into a focused Agent question", () => 
   assert.match(appSource, /className="ask-agent-reference"/);
   assert.match(appSource, /setAskAgentQuote\(normalized\.slice/);
   assert.doesNotMatch(appSource, /buildAskAgentDraft/);
-  assert.match(appSource, /api\.sendMessage\(id, message, useComposerDraft \? \[\] : files, askAgentQuote, useComposerDraft\)/);
+  assert.match(appSource, /api\.sendMessage\(id, (message|content), useComposerDraft \? \[\] : files, askAgentQuote, useComposerDraft\)/);
   assert.match(appSource, /className="message-reference"/);
   assert.match(appSource, /focusRequest=\{composerFocusRequest\}/);
   assert.match(styles, /\.ask-agent-selection \{[^}]*position: fixed;[^}]*touch-action: manipulation/);
