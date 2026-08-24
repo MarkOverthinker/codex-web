@@ -429,6 +429,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [accountSaving, setAccountSaving] = useState(false);
   const [accountError, setAccountError] = useState("");
   const [accountNotice, setAccountNotice] = useState("");
+  const [providerManagementSaving, setProviderManagementSaving] = useState(false);
   const [taskMenu, setTaskMenu] = useState<{ conversationId: string; top: number; left: number } | null>(null);
   const [archivedDialogOpen, setArchivedDialogOpen] = useState(false);
   const [archivedConversations, setArchivedConversations] = useState<Conversation[]>([]);
@@ -1794,6 +1795,21 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     }
   }
 
+  async function toggleProviderManagement(enabled: boolean) {
+    setProviderManagementSaving(true);
+    setError("");
+    try {
+      const result = await api.updateProviderManagement(enabled);
+      onSessionChange({ ...session, providerManagementEnabled: result.providerManagementEnabled });
+      if (!enabled) setProviderManagerOpen(false);
+      setNotice(enabled ? "API 源管理已打开。" : "API 源管理已关闭，Codex Web 将只读取你的 Codex 配置文件。");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "API 源管理设置保存失败");
+    } finally {
+      setProviderManagementSaving(false);
+    }
+  }
+
   async function persistAgentSelection(selection: { model: string; reasoningEffort: ReasoningEffort; provider?: string | null; sandbox?: SandboxMode }) {
     const targetId = selectedIdRef.current;
     const previous = { model: selectedModel, reasoningEffort, sandboxMode };
@@ -2408,6 +2424,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const categoryMenuCategory = categoryMenu ? categoryViews.find((category) => category.key === categoryMenu.categoryKey) : undefined;
   const categoryNewTaskCategory = categoryNewTaskMenu ? categoryViews.find((category) => category.key === categoryNewTaskMenu.categoryKey) : undefined;
   const account = resolveAccountIdentity(session);
+  const providerManagementEnabled = session.providerManagementEnabled === true;
   // Memoize the composer element so the high-frequency activity stream does not
   // re-render the textarea, pending queue, model menus and file chips. React
   // skips a subtree entirely when the element reference stays identical, and
@@ -2539,7 +2556,11 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
             </div>
           </div>
           <button type="button" className="account-settings-archive" onClick={() => void openArchivedConversations()}><Archive size={15} /><span>已归档任务</span></button>
-          <button type="button" className="account-settings-archive" onClick={() => { setProviderManagerOpen(true); setAccountSettingsOpen(false); }}><Settings2 size={15} /><span>API 源管理</span></button>
+          <label className="provider-management-setting">
+            <span className="provider-management-copy"><strong>API 源管理</strong><small>{providerManagementEnabled ? "Codex Web 将维护数据库中的源和模型目录" : "关闭后只读取你自己维护的 ~/.codex 配置"}</small></span>
+            <input type="checkbox" checked={providerManagementEnabled} disabled={providerManagementSaving} onChange={(event) => void toggleProviderManagement(event.target.checked)} />
+          </label>
+          {providerManagementEnabled && <button type="button" className="account-settings-archive" onClick={() => { setProviderManagerOpen(true); setAccountSettingsOpen(false); }}><Settings2 size={15} /><span>打开 API 源管理器</span></button>}
           <button type="button" className="account-settings-archive" onClick={() => { setPresetPromptManagerOpen(true); setAccountSettingsOpen(false); }}><ListChecks size={15} /><span>预设 Prompt 管理</span></button>
         </section>}
         <div className="account-row">

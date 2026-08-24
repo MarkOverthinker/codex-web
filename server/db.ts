@@ -1132,6 +1132,19 @@ export class AppDatabase {
     `).run(userId, JSON.stringify(selection), new Date().toISOString());
   }
 
+  getProviderManagementEnabled(userId = LEGACY_USER_ID): boolean {
+    const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='provider_management_enabled'").get(userId) as { value: string } | undefined;
+    return row?.value === "true";
+  }
+
+  setProviderManagementEnabled(enabled: boolean, userId = LEGACY_USER_ID): boolean {
+    this.sqlite.prepare(`
+      INSERT INTO user_settings(user_id,key,value,updated_at) VALUES(?,'provider_management_enabled',?,?)
+      ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+    `).run(userId, String(enabled), new Date().toISOString());
+    return enabled;
+  }
+
   getChatFontSize(userId = LEGACY_USER_ID): number {
     const row = this.sqlite.prepare("SELECT value FROM user_settings WHERE user_id=? AND key='chat_font_size'").get(userId) as { value: string } | undefined;
     return normalizeChatFontSize(row?.value, CHAT_FONT_SIZE_DEFAULT);
