@@ -5,7 +5,7 @@ export type { MessageSourceReference } from "./message-source.js";
 
 export const BASE_PATH = "/codex-web";
 
-export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean; canChangeUsername?: boolean };
+export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean; canChangeUsername?: boolean; providerManagementEnabled?: boolean };
 export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
   working_dir: string | null;
@@ -283,6 +283,9 @@ export const api = {
   }),
   updateChatColumnWidth: (chatColumnWidth: number) => request<{ chatColumnWidth: number }>("/user-settings/chat-column-width", {
     method: "PUT", body: JSON.stringify({ chatColumnWidth }),
+  }),
+  updateProviderManagement: (enabled: boolean) => request<{ providerManagementEnabled: boolean }>("/user-settings/provider-management", {
+    method: "PUT", body: JSON.stringify({ enabled }),
   }),
   workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
   browsePath: (path?: string) => request<{ listing: HostDirectoryListing }>(

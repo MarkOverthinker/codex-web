@@ -80,14 +80,18 @@ export function createApp(overrides: AppOverrides = {}) {
   const db = new AppDatabase(config.dataRoot, { username: config.username, passwordHash: config.passwordHash, displayName: config.displayName });
   for (const user of db.listUsers()) {
     storageFor(user.id);
-    ensureProviderConfig(config, codexHomeFor(user.id), db, user.id, providerConfigOwner(user.id));
+    if (db.getProviderManagementEnabled(user.id)) {
+      ensureProviderConfig(config, codexHomeFor(user.id), db, user.id, providerConfigOwner(user.id));
+    }
   }
   migrateExistingOutputFiles(config, db);
   migrateUploadFileMimes(db);
   const subscribers = new Map<string, Set<Response>>();
 
   function optionsForUser(userId: string): AgentOptions {
-    return loadAgentOptions(config, codexHomeFor(userId), db, userId);
+    return db.getProviderManagementEnabled(userId)
+      ? loadAgentOptions(config, codexHomeFor(userId), db, userId)
+      : loadAgentOptions(config, codexHomeFor(userId));
   }
 
   function codexHomeFor(userId: string): string {
@@ -370,7 +374,14 @@ export function createApp(overrides: AppOverrides = {}) {
       chatColumnWidth: db.getChatColumnWidth(session.user_id),
       voiceEnabled,
       canChangeUsername: !config.hostMode,
+      providerManagementEnabled: db.getProviderManagementEnabled(session.user_id),
     };
+  }
+
+  function requireProviderManagement(session: SessionRow, res: Response): boolean {
+    if (db.getProviderManagementEnabled(session.user_id)) return true;
+    res.status(403).json({ error: "API 源管理未启用，请先在个人设置中打开。", code: "provider-management-disabled" });
+    return false;
   }
 
   function removePendingPromptFiles(prompt: PendingPromptWithFiles, userId: string): void {
@@ -812,11 +823,13 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.get("/providers", (_req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     return res.json({ providers: listProvidersPublic(db, session.user_id), models: listProviderModelsPublic(db, session.user_id) });
   });
 
   api.post("/providers", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const raw = req.body as Record<string, unknown> | undefined;
     const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 100) : "";
     const baseUrl = typeof raw?.baseUrl === "string" ? raw.baseUrl.trim().slice(0, 500) : "";
@@ -851,6 +864,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.put("/providers/:id", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const id = String(req.params.id);
     const provider = db.getProvider(session.user_id, id);
     if (!provider) return res.status(404).json({ error: "源不存在。" });
@@ -896,6 +910,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.delete("/providers/:id", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const id = String(req.params.id);
     if (!db.getProvider(session.user_id, id)) return res.status(404).json({ error: "源不存在。" });
     if (db.isProviderReferenced(session.user_id, id)) {
@@ -912,6 +927,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.post("/providers/import-config", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     try {
       const providers = importProvidersFromConfig(codexHomeFor(session.user_id), db, session.user_id);
       writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
@@ -923,6 +939,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.post("/providers/:id/import-models", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const id = String(req.params.id);
     if (!db.getProvider(session.user_id, id)) return res.status(404).json({ error: "源不存在。" });
     try {
@@ -936,6 +953,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.post("/providers/:id/models", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const providerId = String(req.params.id);
     if (!db.getProvider(session.user_id, providerId)) return res.status(404).json({ error: "源不存在。" });
     const raw = req.body as Record<string, unknown> | undefined;
@@ -964,6 +982,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.put("/providers/:id/models/:modelId", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const providerId = String(req.params.id);
     const id = String(req.params.modelId);
     const model = db.getProviderModel(session.user_id, id);
@@ -992,6 +1011,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.delete("/providers/:id/models/:modelId", (req, res) => {
     const session = res.locals.session as SessionRow;
+    if (!requireProviderManagement(session, res)) return;
     const providerId = String(req.params.id);
     const id = String(req.params.modelId);
     const model = db.getProviderModel(session.user_id, id);
@@ -1003,6 +1023,16 @@ export function createApp(overrides: AppOverrides = {}) {
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "删除模型失败。" });
     }
+  });
+
+  api.put("/user-settings/provider-management", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "API 源管理开关无效。" });
+    const enabled = db.setProviderManagementEnabled(req.body.enabled, session.user_id);
+    if (enabled) {
+      ensureProviderConfig(config, codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
+    }
+    return res.json({ providerManagementEnabled: enabled });
   });
 
   api.put("/user-settings/chat-font-size", (req, res) => {

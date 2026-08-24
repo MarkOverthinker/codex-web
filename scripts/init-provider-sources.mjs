@@ -98,6 +98,9 @@ function main() {
         }
       }
       if (providerChanged || providers.length > 0) {
+        // Running this explicit initialization script opts the user into the
+        // provider manager; ordinary startup remains read-only by default.
+        db.setProviderManagementEnabled(true, user.id);
         writeProviderConfig(codexHome, db, user.id, { uid: hostTenant.uid, gid: hostTenant.gid });
         changed = true;
         console.log(`Initialized providers for ${hostTenant.label} (${codexHome}).`);

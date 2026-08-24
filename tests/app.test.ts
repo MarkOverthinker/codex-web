@@ -1137,6 +1137,40 @@ test("agent options use the live catalog (image-capable and text-only) and defau
   assert.deepEqual(repairAgentSelection(enabledOptions, "retired-model", "xhigh", "danger-full-access"), { model: "gpt-5.7-sol", reasoningEffort: "xhigh", sandbox: "danger-full-access" });
 });
 
+test("provider management is opt-in and disabled mode reads the user's Codex catalog", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-provider-management-toggle-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Provider-Toggle-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const codexHome = ensureTenant(tenantRoot, LEGACY_USER_ID).codexHome;
+  fs.writeFileSync(path.join(codexHome, "models_cache.json"), JSON.stringify({ models: [{
+    slug: "local-model", display_name: "Local model", description: "user managed", visibility: "list",
+    input_modalities: ["text"], supported_reasoning_levels: [{ effort: "high" }],
+  }] }), "utf8");
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Provider-Toggle-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  assert.equal(login.body.providerManagementEnabled, false);
+  assert.deepEqual((await agent.get("/codex-web/api/agent-options").expect(200)).body.models.map((model: { id: string }) => model.id), ["local-model"]);
+  await agent.get("/codex-web/api/providers").expect(403);
+  assert.equal(fs.existsSync(path.join(codexHome, "config.toml")), false);
+
+  const enabled = await agent.put("/codex-web/api/user-settings/provider-management")
+    .set("X-CSRF-Token", csrf).send({ enabled: true }).expect(200);
+  assert.equal(enabled.body.providerManagementEnabled, true);
+  assert.equal((await agent.get("/codex-web/api/auth/session").expect(200)).body.providerManagementEnabled, true);
+  assert.deepEqual((await agent.get("/codex-web/api/providers").expect(200)).body.providers, []);
+
+  const disabled = await agent.put("/codex-web/api/user-settings/provider-management")
+    .set("X-CSRF-Token", csrf).send({ enabled: false }).expect(200);
+  assert.equal(disabled.body.providerManagementEnabled, false);
+  await agent.get("/codex-web/api/providers").expect(403);
+});
+
 test("legacy databases gain durable selections and preserve existing titles", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-agent-selection-db-test-"));
   let reopened: AppDatabase | undefined;
@@ -2824,6 +2858,16 @@ test("web users have isolated conversations, files, jobs, settings, and tenant d
   const member = request.agent(instance.app);
   const ownerLogin = await owner.post("/codex-web/api/auth/login").send({ username: "owner", password: "Owner-Password-2026!" }).expect(200);
   const memberLogin = await member.post("/codex-web/api/auth/login").send({ username: "member", password: "Member-Password-2026!" }).expect(200);
+  assert.equal(ownerLogin.body.providerManagementEnabled, false);
+  assert.equal(memberLogin.body.providerManagementEnabled, false);
+  await owner.put("/codex-web/api/user-settings/provider-management")
+    .set("X-CSRF-Token", ownerLogin.body.csrfToken)
+    .send({ enabled: true })
+    .expect(200);
+  await member.put("/codex-web/api/user-settings/provider-management")
+    .set("X-CSRF-Token", memberLogin.body.csrfToken)
+    .send({ enabled: true })
+    .expect(200);
   const ownerConversation = await owner.post("/codex-web/api/conversations").set("X-CSRF-Token", ownerLogin.body.csrfToken).expect(201);
   const memberConversation = await member.post("/codex-web/api/conversations").set("X-CSRF-Token", memberLogin.body.csrfToken).expect(201);
 

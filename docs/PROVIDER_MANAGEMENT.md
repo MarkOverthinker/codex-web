@@ -1,5 +1,11 @@
 # Provider management (API 源管理)
 
+## 默认行为
+
+API 源管理按 Web 用户独立保存，默认关闭。关闭时，codex-web 不读取数据库中的 provider 记录，也不会写入或生成 `~/.codex/config.toml`、`models_cache.json`；模型菜单直接读取该用户 Codex Home 中由用户自行维护的 `models_cache.json` 或 `models.json`，任务执行沿用用户自己的 `config.toml`。
+
+在个人设置中打开“API 源管理”后，才会启用本文后续的数据库源、模型目录和配置生成流程。关闭管理不会删除数据库记录或改写现有文件；再次打开时，已有管理记录可能重新生成受管理的配置，请确认记录内容与本地文件一致。
+
 Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在任务级别切换：
 
 - 每个 Web 用户拥有独立的 provider 与模型集合；不同用户可以使用相同 provider ID，但 `base_url`、API key、启用状态和模型目录互不影响。
@@ -44,6 +50,8 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 ## 初始化
 
 页面导入即可完成大部分工作：在 API 源管理中点“从 config.toml 导入”，然后为每个源选择模型文件并点“从模型文件导入”。
+
+显式运行 `scripts/init-provider-sources.mjs` 也表示用户选择启用 API 源管理；脚本会为导入到 provider 的用户打开该开关。仅启动 codex-web 不会因为数据库中残留旧 provider 记录而自动接管配置。
 
 如果运行服务的账号拥有数据库写权限，也可以一键初始化（以 root 运行，幂等）：
 
