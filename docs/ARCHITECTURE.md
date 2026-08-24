@@ -37,6 +37,13 @@ placeholder, and reserving less than the real height collapses `scrollHeight`
 and makes the browser clamp the viewport back to an earlier message while
 scrolling toward the top of a reply.
 
+Task rows inside a category use a long-press gesture for reordering so that
+normal vertical swipes still scroll the list on touch devices. Rows keep
+`touch-action: pan-y`; a 350ms press arms the drag, locks the container's
+touch action, and expands the category for live reordering, while moving more
+than 10px before the press completes cancels it and lets the scroll proceed.
+Only a press that actually crosses another row persists the new order.
+
 Markdown rendering uses GFM, KaTeX for math, and static highlight.js token
 styling for fenced code blocks. Math accepts `$...$`/`$$...$$` as well as
 LaTeX `\(...\)`/`\[...\]` and bare `[`/`]` display-math lines, which are

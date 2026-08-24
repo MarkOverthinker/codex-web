@@ -250,7 +250,8 @@ categories, move a directory into one, pin categories, reorder pinned
 categories, and hide categories you do not want in the sidebar; category
 definitions, directory assignment, pin order, and hidden categories are
 persisted on the server while expanded/collapsed state stays in the browser.
-Inside a category you can drag its tasks to reorder them freely, and the
+Inside a category you can long-press and drag its tasks to reorder them
+freely (normal swiping still scrolls the list), and the
 per-category order is persisted on the server too; tasks created after a saved
 order stay visible at the top until you drag them again.
 From a category's action menu you can also start a new task directly in that
