@@ -293,6 +293,14 @@ test("composer replaces stop with send as soon as there is sendable input", () =
   assert.equal(chooseComposerPrimaryAction({ running: false, hasText: false, hasAttachments: false, voiceActive: false }), "send");
 });
 
+test("non-controlled composer still applies external clears when the state value is unchanged", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  assert.match(appSource, /const \[composerInputRevision, setComposerInputRevision\] = useState\(0\)/);
+  assert.match(appSource, /setComposerInputRevision\(\(revision\) => revision \+ 1\)/);
+  assert.match(appSource, /input=\{input\} inputRevision=\{composerInputRevision\}/);
+  assert.match(appSource, /\}, \[input, inputRevision\]\);/);
+});
+
 test("composer top edge resizes the input height by pointer drag", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
