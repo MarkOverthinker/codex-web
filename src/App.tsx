@@ -396,6 +396,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
+  const [composerInputRevision, setComposerInputRevision] = useState(0);
   const [askAgentQuote, setAskAgentQuote] = useState("");
   const [sourceReference, setSourceReference] = useState<MessageSourceReference | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -606,6 +607,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const applyExternalComposerText = useCallback((text: string) => {
     inputRef.current = text;
     setInput(text);
+    // The textarea is intentionally non-controlled, so an external value
+    // equal to the current state still needs a render to reach the DOM.
+    setComposerInputRevision((revision) => revision + 1);
   }, []);
 
   const handleComposerTextChange = useCallback((text: string) => {
@@ -2432,7 +2436,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   // value captured by the callbacks it receives.
   const composerElement = useMemo(() => <Composer
     key={selectedId ?? "new-conversation"}
-    input={input} onTextChange={handleComposerTextChange}
+    input={input} inputRevision={composerInputRevision} onTextChange={handleComposerTextChange}
     askAgentQuote={askAgentQuote} onClearAskAgentQuote={() => setAskAgentQuote("")}
     sourceReference={sourceReference} onClearSourceReference={() => { setAskAgentQuote(""); setSourceReference(null); }}
     onOpenSourceReference={(reference) => openSourceReference(reference)}
@@ -2459,7 +2463,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined}
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
-    currentDetail, draftSaveState, draftUploads, editingPending, files, handleComposerTextChange, input, job, reasoningEffort, sandboxMode,
+    currentDetail, draftSaveState, draftUploads, editingPending, files, handleComposerTextChange, input, composerInputRevision, job, reasoningEffort, sandboxMode,
     hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
@@ -3526,9 +3530,10 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
+function Composer({ conversationId, input, inputRevision, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
+  inputRevision: number;
   onTextChange: (text: string) => void;
   askAgentQuote: string;
   onClearAskAgentQuote: () => void;
@@ -3621,7 +3626,7 @@ function Composer({ conversationId, input, onTextChange, askAgentQuote, onClearA
     hadInputRef.current = Boolean(input);
     setHasText(Boolean(input.trim()));
     if (!input) setComposerTextHeight(null);
-  }, [input]);
+  }, [input, inputRevision]);
 
   useEffect(() => () => {
     window.clearTimeout(pasteTimer.current);
