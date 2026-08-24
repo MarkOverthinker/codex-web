@@ -304,7 +304,7 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .conversation-row:hover { background: rgba(255, 255, 255, .065); }
 .conversation-row.active { border-color: rgba(240, 170, 60, .24); background: linear-gradient(90deg, rgba(240, 170, 60, .15), rgba(255, 255, 255, .045)); }
 .conversation-row.active::before { background: var(--amber); }
-.task-category .conversation-row.category-draggable { cursor: grab; touch-action: none; }
+.task-category .conversation-row.category-draggable { cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .task-category .conversation-row.category-draggable:active { cursor: grabbing; }
 .task-category .conversation-row.dragging {
   position: relative;

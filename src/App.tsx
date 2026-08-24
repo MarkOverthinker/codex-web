@@ -68,6 +68,8 @@ type CategoryTaskDragState = {
 const ACTIVITY_FLUSH_DELAY_MS = 60;
 const TASK_CATEGORY_DRAG_PX_PER_STEP = 28;
 const TASK_CATEGORY_DRAG_THRESHOLD_PX = 4;
+const TASK_CATEGORY_DRAG_LONG_PRESS_MS = 350;
+const TASK_CATEGORY_DRAG_ARM_CANCEL_PX = 10;
 const JUMP_LOAD_PAGE_LIMIT = 50;
 const EMPTY_WORK_FILES: WorkFile[] = [];
 const EMPTY_PENDING_PROMPTS: PendingPrompt[] = [];
@@ -463,7 +465,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [categoryDragKey, setCategoryDragKey] = useState<string | null>(null);
   const categoryDragRef = useRef<{ moved: boolean } | null>(null);
   const [categoryTaskDrag, setCategoryTaskDrag] = useState<CategoryTaskDragState | null>(null);
-  const categoryTaskDragRef = useRef<CategoryTaskDragState & { list: HTMLElement | null; moved: boolean } | null>(null);
+  const categoryTaskDragRef = useRef<CategoryTaskDragState & { list: HTMLElement | null; moved: boolean; changed: boolean } | null>(null);
   const conversationsRef = useRef(conversations);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
   const workingDirSettingsRef = useRef(workingDirSettings);
@@ -2082,46 +2084,66 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       order,
       list,
       moved: false,
+      changed: false,
     };
     categoryTaskDragRef.current = dragState;
     let suppressingClick = false;
+    let armed = false;
+    let longPressTimer: number | undefined;
     const suppressClick = (clickEvent: MouseEvent) => {
       clickEvent.preventDefault();
       clickEvent.stopPropagation();
     };
+    const cancelLongPress = () => {
+      if (longPressTimer !== undefined) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = undefined;
+      }
+    };
+    // 长按达成后进入拖动模式：锁定滚动方向、抑制点击，并展开整类任务做实时预览。
+    const armDrag = () => {
+      if (armed) return;
+      armed = true;
+      longPressTimer = undefined;
+      suppressingClick = true;
+      document.body.style.userSelect = "none";
+      document.addEventListener("click", suppressClick, true);
+      if (dragState.list) dragState.list.style.touchAction = "none";
+      dragState.moved = true;
+      setCategoryTaskDrag({ categoryKey, conversationId, overIndex: dragState.overIndex, order: dragState.order });
+    };
+    longPressTimer = window.setTimeout(armDrag, TASK_CATEGORY_DRAG_LONG_PRESS_MS);
     const move = (moveEvent: PointerEvent) => {
       const deltaY = moveEvent.clientY - startY;
-      if (Math.abs(deltaY) >= TASK_CATEGORY_DRAG_THRESHOLD_PX) {
-        if (!dragState.moved) {
-          dragState.moved = true;
-          suppressingClick = true;
-          document.body.style.userSelect = "none";
-          document.addEventListener("click", suppressClick, true);
-          setCategoryTaskDrag({ categoryKey, conversationId, overIndex: dragState.overIndex, order: dragState.order });
+      // 长按尚未达成时，手指大幅移动视为滚动列表，取消长按。
+      if (!armed) {
+        if (Math.abs(deltaY) >= TASK_CATEGORY_DRAG_ARM_CANCEL_PX) cancelLongPress();
+        return;
+      }
+      if (Math.abs(deltaY) < TASK_CATEGORY_DRAG_THRESHOLD_PX) return;
+      let overIndex = dragState.overIndex;
+      const listRect = dragState.list?.getBoundingClientRect();
+      if (listRect && listRect.height > 0) {
+        let candidate = 0;
+        const pointerY = moveEvent.clientY;
+        for (const item of dragState.list!.querySelectorAll<HTMLElement>("[data-category-task-id]")) {
+          if (item.dataset.categoryTaskId === conversationId) continue;
+          const rect = item.getBoundingClientRect();
+          if (pointerY > rect.top + rect.height / 2) candidate += 1;
+          else break;
         }
-        let overIndex = dragState.overIndex;
-        const listRect = dragState.list?.getBoundingClientRect();
-        if (listRect && listRect.height > 0) {
-          let candidate = 0;
-          const pointerY = moveEvent.clientY;
-          for (const item of dragState.list!.querySelectorAll<HTMLElement>("[data-category-task-id]")) {
-            if (item.dataset.categoryTaskId === conversationId) continue;
-            const rect = item.getBoundingClientRect();
-            if (pointerY > rect.top + rect.height / 2) candidate += 1;
-            else break;
-          }
-          overIndex = Math.max(0, Math.min(candidate, dragState.order.length - 1));
-        }
-        if (overIndex !== dragState.overIndex) {
-          dragState.overIndex = overIndex;
-          const next = [...dragState.order];
-          const current = next.indexOf(conversationId);
-          if (current >= 0) {
-            next.splice(current, 1);
-            next.splice(overIndex, 0, conversationId);
-            dragState.order = next;
-            setCategoryTaskDrag({ categoryKey, conversationId, overIndex, order: next });
-          }
+        overIndex = Math.max(0, Math.min(candidate, dragState.order.length - 1));
+      }
+      if (overIndex !== dragState.overIndex) {
+        dragState.overIndex = overIndex;
+        dragState.changed = true;
+        const next = [...dragState.order];
+        const current = next.indexOf(conversationId);
+        if (current >= 0) {
+          next.splice(current, 1);
+          next.splice(overIndex, 0, conversationId);
+          dragState.order = next;
+          setCategoryTaskDrag({ categoryKey, conversationId, overIndex, order: next });
         }
       }
     };
@@ -2129,13 +2151,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
+      cancelLongPress();
       if (suppressingClick) document.removeEventListener("click", suppressClick, true);
       document.body.style.userSelect = "";
       const savedOrder = dragState.order;
-      const moved = dragState.moved;
+      const moved = dragState.moved && dragState.changed;
       const savedCategoryKey = dragState.categoryKey;
       if (dragState.list) dragState.list.style.touchAction = "";
-      if (moved) setCategoryTaskDrag(null);
+      // 只要长按激活过拖动预览，松开时都要恢复折叠状态；
+      // 只有真正移动过顺序才需要保存。
+      if (dragState.moved) setCategoryTaskDrag(null);
       categoryTaskDragRef.current = null;
       if (moved && endEvent.type !== "pointercancel") {
         const settings = taskCategorySettingsRef.current;
@@ -2954,7 +2979,7 @@ const ConversationRow = memo(function ConversationRow({
       "data-category-task-row": "",
       "data-category-task-key": rowCategoryKey,
       "data-category-task-id": conversation.id,
-      title: "按住拖动排序",
+      title: "长按拖动排序",
     } : {})}
   >
     <button className="conversation-select" onClick={() => onSelect(conversation.id)}>
