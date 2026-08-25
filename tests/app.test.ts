@@ -298,7 +298,17 @@ test("non-controlled composer still applies external clears when the state value
   assert.match(appSource, /const \[composerInputRevision, setComposerInputRevision\] = useState\(0\)/);
   assert.match(appSource, /setComposerInputRevision\(\(revision\) => revision \+ 1\)/);
   assert.match(appSource, /input=\{input\} inputRevision=\{composerInputRevision\}/);
+  assert.match(appSource, /useLayoutEffect\(\(\) => \{/);
   assert.match(appSource, /\}, \[input, inputRevision\]\);/);
+});
+
+test("stale conversation responses cannot restore a draft after sending", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const sendSource = appSource.slice(appSource.indexOf("async function send(message?: string)"), appSource.indexOf("async function beginPendingEdit"));
+  assert.match(appSource, /const responseIsStale = \(draftMutationGenerationRef\.current\.get\(id\) \?\? 0\) !== draftGenerationAtRequest/);
+  assert.match(appSource, /const shouldRestore = !responseIsStale && \(wasEditing \|\| draftLoadedConversationRef\.current !== id\)/);
+  assert.match(sendSource, /draftLoadedConversationRef\.current = id;/);
+  assert.match(sendSource, /applyExternalComposerText\(""\);/);
 });
 
 test("composer top edge resizes the input height by pointer drag", () => {
