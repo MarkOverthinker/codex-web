@@ -19,9 +19,13 @@ explicit confirmation; this intentionally bypasses the serialization guard,
 so the user accepts that two sessions may write the same directory at once.
 Task-list categories are also persisted per user in `user_settings`: custom
 category names, which directories they contain, the pinned-category order, and
-hidden-category keys. The browser derives the grouped sidebar view from
-conversations, favorites, and that settings record; only expanded/collapsed
-state is kept in `localStorage`.
+hidden-category keys. Without an explicit task drag, conversations inside each
+category are ordered by `updated_at` with the most recently active task first.
+The browser derives the grouped sidebar view from conversations, favorites, and
+that settings record; only expanded/collapsed state is kept in `localStorage`.
+The first startup after the task-order fix removes legacy persisted drag orders
+once, because older accidental gestures could otherwise continue to override
+the activity order after an upgrade. New explicit drags remain persistent.
 The working-dir feature is host-mode only; isolated tenants keep the
 per-conversation workspace model and the tenant boundary is unchanged.
 

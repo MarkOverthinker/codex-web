@@ -1225,6 +1225,31 @@ test("legacy databases gain durable selections and preserve existing titles", (c
   assert.equal(reopened.getConversation("legacy")?.sandbox_mode, "workspace-write");
 });
 
+test("legacy task category orders reset once and remain available after a new manual order", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-task-category-order-migration-test-"));
+  const settings = { customCategories: [], pinned: [], hidden: [], conversationOrders: { "auto:standalone": ["old-task"] } };
+  try {
+    const first = new AppDatabase(root, { username: "owner", passwordHash: "", displayName: "Owner" }, false);
+    first.setTaskListCategorySettings(settings);
+    first.close();
+
+    const database = new DatabaseSync(path.join(root, "codex-web.sqlite"));
+    database.prepare("DELETE FROM app_settings WHERE key=?").run("task_list_category_order_reset_v1");
+    database.close();
+
+    const migrated = new AppDatabase(root, { username: "owner", passwordHash: "", displayName: "Owner" }, false);
+    assert.deepEqual(migrated.getTaskListCategorySettings().conversationOrders, {});
+    migrated.setTaskListCategorySettings({ ...settings, conversationOrders: { "auto:standalone": ["new-manual-order"] } });
+    migrated.close();
+
+    const reopened = new AppDatabase(root, { username: "owner", passwordHash: "", displayName: "Owner" }, false);
+    assert.deepEqual(reopened.getTaskListCategorySettings().conversationOrders, { "auto:standalone": ["new-manual-order"] });
+    reopened.close();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("working directory favorites, defaults, and conversation overrides persist in settings", (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-working-dir-db-test-"));
   const db = new AppDatabase(root);
