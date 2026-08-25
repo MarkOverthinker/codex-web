@@ -86,11 +86,31 @@ test("legacy global providers are copied into isolated user scopes", () => {
   assert.equal(db.getProvider(LEGACY_USER_ID, "shared")?.auto_review_model_override, null);
   assert.equal(db.listProviderModels(LEGACY_USER_ID, "shared").length, 1);
   assert.equal(db.listProviderModels(memberId, "shared").length, 1);
+  assert.equal(db.getProviderManagementEnabled(LEGACY_USER_ID), true);
+  assert.equal(db.getProviderManagementEnabled(memberId), true);
 
   db.updateProvider(memberId, "shared", { baseUrl: "https://member.example.com/v1" });
   assert.equal(db.getProvider(memberId, "shared")?.base_url, "https://member.example.com/v1");
   assert.equal(db.getProvider(LEGACY_USER_ID, "shared")?.base_url, "https://shared.example.com/v1");
   db.close();
+});
+
+test("provider management migration preserves an explicit opt-out", () => {
+  const root = tempRoot();
+  const db = testDb(root);
+  db.createProvider({
+    userId: LEGACY_USER_ID,
+    id: "shared",
+    name: "Shared",
+    baseUrl: "https://shared.example.com/v1",
+    enabled: true,
+  });
+  db.setProviderManagementEnabled(false, LEGACY_USER_ID);
+  db.close();
+
+  const reopened = testDb(root);
+  assert.equal(reopened.getProviderManagementEnabled(LEGACY_USER_ID), false);
+  reopened.close();
 });
 
 function sampleConfig(codexHome: string): void {

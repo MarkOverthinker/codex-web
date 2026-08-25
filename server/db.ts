@@ -479,6 +479,7 @@ export class AppDatabase {
     `).run(LEGACY_USER_ID, legacyUser.username, legacyUser.displayName ?? legacyUser.username, legacyUser.passwordHash, "owner", now, now);
 
     this.migrateProvidersToUsers();
+    this.migrateProviderManagementSettings();
     this.migrateLegacyTaskCategoryOrders();
 
     this.sqlite.exec("BEGIN IMMEDIATE");
@@ -625,6 +626,25 @@ export class AppDatabase {
     } finally {
       this.sqlite.exec("PRAGMA foreign_keys=ON");
     }
+  }
+
+  /**
+   * Provider management was enabled implicitly before its per-user setting
+   * was introduced. Preserve that behavior for existing provider records;
+   * an explicit false setting remains an opt-out.
+   */
+  private migrateProviderManagementSettings(): void {
+    const now = new Date().toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO user_settings(user_id,key,value,updated_at)
+      SELECT DISTINCT providers.user_id, 'provider_management_enabled', 'true', ?
+      FROM providers
+      WHERE NOT EXISTS (
+        SELECT 1 FROM user_settings
+        WHERE user_settings.user_id=providers.user_id
+          AND user_settings.key='provider_management_enabled'
+      )
+    `).run(now);
   }
 
   listUsers(): UserRow[] {
