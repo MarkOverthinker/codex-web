@@ -207,6 +207,7 @@ export const MAX_CONVERSATION_PRESET_PROMPTS = 20;
 export const PRESET_PROMPT_NAME_MAX = 50;
 export const PRESET_PROMPT_CONTENT_MAX = 10_000;
 export const PRESET_PROMPT_TOTAL_MAX = 50_000;
+const TASK_LIST_CATEGORY_ORDER_RESET_MIGRATION = "task_list_category_order_reset_v1";
 
 const conversationSelect = `
   conversations.*,
@@ -478,6 +479,7 @@ export class AppDatabase {
     `).run(LEGACY_USER_ID, legacyUser.username, legacyUser.displayName ?? legacyUser.username, legacyUser.passwordHash, "owner", now, now);
 
     this.migrateProvidersToUsers();
+    this.migrateLegacyTaskCategoryOrders();
 
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
@@ -524,6 +526,37 @@ export class AppDatabase {
 
   private columnNames(table: string): Set<string> {
     return new Set((this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+  }
+
+  private migrateLegacyTaskCategoryOrders(): void {
+    const marker = this.sqlite.prepare("SELECT value FROM app_settings WHERE key=?").get(TASK_LIST_CATEGORY_ORDER_RESET_MIGRATION) as { value: string } | undefined;
+    if (marker) return;
+
+    const now = new Date().toISOString();
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = this.sqlite.prepare("SELECT user_id,value FROM user_settings WHERE key='task_list_categories'").all() as Array<{ user_id: string; value: string }>;
+      const update = this.sqlite.prepare("UPDATE user_settings SET value=?,updated_at=? WHERE user_id=? AND key='task_list_categories'");
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value) as Record<string, unknown> | null;
+          if (!parsed || typeof parsed !== "object" || !("conversationOrders" in parsed)) continue;
+          delete parsed.conversationOrders;
+          update.run(JSON.stringify(parsed), now, row.user_id);
+        } catch {
+          // The normal settings reader already falls back safely for malformed JSON.
+        }
+      }
+      this.sqlite.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?)").run(
+        TASK_LIST_CATEGORY_ORDER_RESET_MIGRATION,
+        "1",
+        now,
+      );
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private migrateProvidersToUsers(): void {

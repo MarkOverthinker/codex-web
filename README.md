@@ -250,10 +250,12 @@ categories, move a directory into one, pin categories, reorder pinned
 categories, and hide categories you do not want in the sidebar; category
 definitions, directory assignment, pin order, and hidden categories are
 persisted on the server while expanded/collapsed state stays in the browser.
-Inside a category you can long-press and drag its tasks to reorder them
-freely (normal swiping still scrolls the list), and the
-per-category order is persisted on the server too; tasks created after a saved
-order stay visible at the top until you drag them again.
+Inside a category, tasks default to most-recently-active first. You can
+long-press and drag its tasks to choose a persistent custom order (normal
+swiping still scrolls the list); tasks created after a saved order stay visible
+at the top until you drag them again. The first startup after the task-order
+fix clears legacy saved drag orders once so an upgrade cannot preserve an order
+created by older accidental gestures.
 From a category's action menu you can also start a new task directly in that
 category's working directory; custom categories with several directories ask
 you to pick one first. Hidden categories can be restored from the category
