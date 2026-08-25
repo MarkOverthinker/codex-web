@@ -665,6 +665,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const draftGenerationAtRequest = draftMutationGenerationRef.current.get(id) ?? 0;
     let result = await api.conversation(id);
     if (selectedIdRef.current !== id) return result;
+    const responseIsStale = (draftMutationGenerationRef.current.get(id) ?? 0) !== draftGenerationAtRequest;
     if (result.conversation.has_unread_result) {
       try {
         const seen = await api.markConversationSeen(id);
@@ -687,7 +688,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setJob(result.activeJob);
     setSending(Boolean(result.activeJob));
     setActivities(mergeJobEvents([], result.jobEvents));
-    if (result.editingPrompt) {
+    if (result.editingPrompt && !responseIsStale) {
       composerDraftRef.current = result.composerDraft;
       setComposerDraft(result.composerDraft);
       const cachedDraft = draftCacheRef.current.get(id);
@@ -701,16 +702,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         setAskAgentQuote(result.editingPrompt.quote_excerpt ?? "");
         setSourceReference(null);
       }
-    } else {
+    } else if (!result.editingPrompt) {
       const wasEditing = Boolean(editingPendingRef.current);
-      if (wasEditing) {
+      if (wasEditing && !responseIsStale) {
         editingPendingRef.current = null;
         setEditingPending(null);
         setRemovedEditingFileIds([]);
         draftLoadedConversationRef.current = null;
       }
       const cached = draftCacheRef.current.get(id);
-      const shouldRestore = wasEditing || draftLoadedConversationRef.current !== id;
+      const shouldRestore = !responseIsStale && (wasEditing || draftLoadedConversationRef.current !== id);
       if (shouldRestore) {
         const cachedSignature = cached ? composerDraftSignature(cached.content, cached.quoteExcerpt, cached.sourceReference) : undefined;
         const cachedIsDirty = Boolean(cached && cachedSignature !== draftSyncedSignaturesRef.current.get(id));
@@ -737,7 +738,6 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         const serverQuote = result.composerDraft?.quote_excerpt ?? "";
         const serverSource = result.composerDraft?.source_reference ?? null;
         const serverSignature = composerDraftSignature(serverContent, serverQuote, serverSource);
-        const responseIsStale = (draftMutationGenerationRef.current.get(id) ?? 0) !== draftGenerationAtRequest;
         const serverDraft = responseIsStale ? composerDraftRef.current : result.composerDraft;
         composerDraftRef.current = serverDraft;
         setComposerDraft(serverDraft);
@@ -1432,6 +1432,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           draftMutationGenerationRef.current.set(id, (draftMutationGenerationRef.current.get(id) ?? 0) + 1);
           draftCacheRef.current.delete(id);
           draftSyncedSignaturesRef.current.set(id, composerDraftSignature("", "", null));
+          draftLoadedConversationRef.current = id;
           composerDraftRef.current = null; setComposerDraft(null); setDraftSaveState("idle");
         }
       }
@@ -3618,10 +3619,10 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   removedEditingFileIdsRef.current = removedEditingFileIds;
   onSendRef.current = onSend;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const textarea = textareaRef.current;
-    if (!textarea || textarea.value === input) return;
-    textarea.value = input;
+    if (!textarea) return;
+    if (textarea.value !== input) textarea.value = input;
     inputRef.current = input;
     hadInputRef.current = Boolean(input);
     setHasText(Boolean(input.trim()));

@@ -40,10 +40,11 @@ scrolling toward the top of a reply.
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
 restoring, editing, and clearing text use the separate `composerInputRevision`
-counter to force the external-sync effect even when the React `input` state
-already contains the same value. Any future external composer mutation must
-go through `applyExternalComposerText` so a successful send cannot leave the
-submitted text visible in the textarea.
+counter to force the external-sync layout effect even when the React `input`
+state already contains the same value. Any future external composer mutation
+must go through `applyExternalComposerText`. A successful send also marks the
+current conversation as having an empty loaded draft before `reconcile`; an
+older in-flight conversation response must not restore the submitted text.
 
 Task rows inside a category use a long-press gesture for reordering so that
 normal vertical swipes still scroll the list on touch devices. Rows keep
