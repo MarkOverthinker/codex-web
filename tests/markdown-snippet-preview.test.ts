@@ -41,10 +41,10 @@ test("code snippet API returns the full file content when full=1", async (contex
   assert.ok(windowed.body.lines.length < 1200);
 });
 
-test("markdown local paths render as Markdown preview only without a line number", () => {
+test("markdown local paths render as full Markdown preview even with a line number", () => {
   assert.equal(isMarkdownSnippetPath("notes.md"), true);
   assert.equal(isMarkdownSnippetPath("docs/guide.markdown"), true);
-  assert.equal(isMarkdownSnippetPath("notes.md", 12), false);
+  assert.equal(isMarkdownSnippetPath("notes.md", 12), true);
   assert.equal(isMarkdownSnippetPath("notes.txt"), false);
   const ref = parseSnippetHref("sandbox:/app/workspaces/uploads/notes.md");
   assert.deepEqual(ref, { path: "/app/workspaces/uploads/notes.md" });
