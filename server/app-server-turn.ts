@@ -338,7 +338,7 @@ class AppServerTurnClient {
         this.finalResponse = typeof item.text === "string" ? item.text : this.finalResponse;
         if (this.options.outputSchema) return;
       }
-      const progress = summarizeItem(item, message.method === "item/completed");
+      const progress = summarizeAppServerItem(item, message.method === "item/completed");
       if (progress) this.callbacks.onProgress(progress);
       return;
     }
@@ -384,7 +384,7 @@ function makeUserInput(prompt: string, imagePaths: string[]): JsonObject[] {
   return input;
 }
 
-function summarizeItem(item: JsonObject, completed: boolean): unknown | null {
+export function summarizeAppServerItem(item: JsonObject, completed: boolean): unknown | null {
   if (item.type === "reasoning") {
     const summaries = asStringArray(item.summary)
       .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
@@ -411,12 +411,113 @@ function summarizeItem(item: JsonObject, completed: boolean): unknown | null {
   }
   if (item.type === "webSearch") return { kind: "search", label: "正在搜索资料" };
   if (item.type === "mcpToolCall") return { kind: "tool", label: `正在使用 ${redactBrand(String(item.server ?? "工具"))}`, detail: redactBrand(String(item.tool ?? "")) };
+  if (item.type === "collabAgentToolCall") return summarizeCollabAgentToolCall(item, completed);
+  if (item.type === "subAgentActivity") return summarizeSubAgentActivity(item);
   if (item.type === "plan") return { kind: "update", label: "任务计划已更新", detail: String(item.text ?? "") };
   if (item.type === "agentMessage" && completed) {
     const detail = redactBrand(sanitizeAgentMarkdown(String(item.text ?? ""))).trim();
     return detail ? { kind: "update", label: "阶段反馈", detail } : null;
   }
   return null;
+}
+
+function summarizeCollabAgentToolCall(item: JsonObject, completed: boolean): unknown {
+  const tool = typeof item.tool === "string" ? item.tool : "";
+  const status = typeof item.status === "string" ? item.status : completed ? "completed" : "inProgress";
+  const label = collabAgentToolLabel(tool, status);
+  const detailParts: string[] = [];
+  if (typeof item.prompt === "string" && item.prompt.trim()) {
+    detailParts.push(`任务：${redactBrand(item.prompt.replace(/\s+/g, " ").trim())}`);
+  }
+  if (typeof item.model === "string" && item.model.trim()) detailParts.push(`模型：${redactBrand(item.model)}`);
+  if (typeof item.reasoningEffort === "string" && item.reasoningEffort.trim()) detailParts.push(`推理：${item.reasoningEffort}`);
+  const receiverThreadIds = Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds.map(String).filter(Boolean) : [];
+  if (receiverThreadIds.length > 0) detailParts.push(`子代理线程：${receiverThreadIds.join("、")}`);
+  const agentsStates = asObject(item.agentsStates);
+  if (agentsStates) {
+    const states = Object.entries(agentsStates)
+      .map(([threadId, state]) => {
+        const statusValue = asObject(state)?.status;
+        return `${threadId}：${typeof statusValue === "string" ? subAgentStatusLabel(statusValue) : "状态未知"}`;
+      });
+    if (states.length > 0) detailParts.push(`状态：${states.join("；")}`);
+  }
+  return {
+    kind: "subagent",
+    label,
+    detail: detailParts.join("\n"),
+    subagentTool: tool,
+    subagentStatus: status,
+    agentThreadIds: receiverThreadIds,
+  };
+}
+
+function summarizeSubAgentActivity(item: JsonObject): unknown {
+  const activity = typeof item.kind === "string" ? item.kind : "interacted";
+  const agentPath = typeof item.agentPath === "string" ? item.agentPath : "";
+  const agentThreadId = typeof item.agentThreadId === "string" ? item.agentThreadId : "";
+  const detailParts = [
+    agentPath ? `代理：${redactBrand(agentPath)}` : "",
+    agentThreadId ? `线程：${agentThreadId}` : "",
+  ].filter(Boolean);
+  return {
+    kind: "subagent",
+    label: subAgentActivityLabel(activity),
+    detail: detailParts.join("\n"),
+    subagentActivity: activity,
+    agentPath: agentPath || undefined,
+    agentThreadId: agentThreadId || undefined,
+  };
+}
+
+function collabAgentToolLabel(tool: string, status: string): string {
+  if (status === "failed") return "子代理操作失败";
+  if (status === "interrupted") return "子代理操作已中断";
+  if (status === "completed") {
+    return ({
+      spawnAgent: "子代理已启动",
+      sendInput: "已向子代理发送任务",
+      resumeAgent: "子代理已恢复",
+      wait: "已取得子代理结果",
+      closeAgent: "子代理已关闭",
+      sendMessage: "已传递子代理消息",
+      followupTask: "已追加子代理任务",
+      interruptAgent: "子代理已中断",
+      listAgents: "已查看子代理状态",
+    } as Record<string, string>)[tool] ?? "子代理操作完成";
+  }
+  return ({
+    spawnAgent: "正在启动子代理",
+    sendInput: "正在向子代理发送任务",
+    resumeAgent: "正在恢复子代理",
+    wait: "正在等待子代理结果",
+    closeAgent: "正在关闭子代理",
+    sendMessage: "正在传递子代理消息",
+    followupTask: "正在追加子代理任务",
+    interruptAgent: "正在中断子代理",
+    listAgents: "正在查看子代理状态",
+  } as Record<string, string>)[tool] ?? "正在处理子代理操作";
+}
+
+function subAgentActivityLabel(activity: string): string {
+  return ({
+    started: "子代理已开始工作",
+    interacted: "子代理正在工作",
+    interrupted: "子代理已中断",
+    completed: "子代理已完成工作",
+  } as Record<string, string>)[activity] ?? "子代理状态已更新";
+}
+
+function subAgentStatusLabel(status: string): string {
+  return ({
+    pendingInit: "等待启动",
+    running: "运行中",
+    interrupted: "已中断",
+    completed: "已完成",
+    errored: "出错",
+    shutdown: "已关闭",
+    notFound: "未找到",
+  } as Record<string, string>)[status] ?? status;
 }
 
 function summarizeAutoApprovalReview(params: JsonObject, completed: boolean): unknown | null {

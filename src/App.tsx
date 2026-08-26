@@ -3330,7 +3330,7 @@ function ProcessPanel({ activities, startedAt: jobStartedAt, activeJobId, onSkip
             : activity.label?.startsWith("正在") ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
           <div><span>{activity.label}</span>{activity.created_at && <time dateTime={activity.created_at}>{formatActivityTime(activity.created_at)}</time>}
             {activity.kind === "file" && activity.files?.length ? <small title={activity.files.join("、")}>{activity.files.map((file) => file.split(/[\\/]/).at(-1)).join("、")}</small> : null}
-            {["search", "tool"].includes(activity.kind ?? "") && activity.detail ? <small>{activity.detail}</small> : null}
+            {["search", "tool", "subagent"].includes(activity.kind ?? "") && activity.detail ? <small>{activity.detail}</small> : null}
             {activity.kind === "command" && activity.detail ? <details className="technical-detail"><summary>{activity.actionCount && activity.actionCount > 1 ? `查看 ${activity.actionCount} 个技术步骤` : "查看技术细节"}</summary><code>{activity.groupedDetails?.join("\n\n") || activity.detail}</code></details> : null}
             {activity.kind === "approval" && activity.detail ? <details className={`approval-detail ${activity.reviewStatus ?? ""}`}><summary>查看审核内容</summary><div className="process-note-content"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{normalizeMathDelimiters(activity.detail)}</ReactMarkdown></div></details> : null}
           </div>

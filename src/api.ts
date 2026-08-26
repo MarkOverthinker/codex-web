@@ -147,7 +147,7 @@ export type JobEvent = {
   seq?: number;
   type?: string;
   created_at?: string;
-  kind?: "status" | "reasoning" | "update" | "command" | "file" | "search" | "tool" | "todo" | "error" | string;
+  kind?: "status" | "reasoning" | "update" | "command" | "file" | "search" | "tool" | "todo" | "subagent" | "error" | string;
   label?: string;
   detail?: string;
   files?: string[];
@@ -161,6 +161,12 @@ export type JobEvent = {
   reviewStatus?: string;
   riskLevel?: string;
   userAuthorization?: string;
+  subagentTool?: string;
+  subagentStatus?: string;
+  subagentActivity?: string;
+  agentThreadIds?: string[];
+  agentPath?: string;
+  agentThreadId?: string;
 };
 export type ConversationDetail = {
   conversation: Conversation;

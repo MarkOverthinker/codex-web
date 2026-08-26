@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { startAppServerTurn } from "../server/app-server-turn.js";
+import { startAppServerTurn, summarizeAppServerItem } from "../server/app-server-turn.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES } from "../server/optional-capabilities.js";
 import { buildProcessJournal } from "../src/process-journal.js";
 import { mergeJobEvents, PROCESS_EVENT_WINDOW } from "../src/recovery.js";
@@ -229,4 +229,34 @@ test("automatic approval reviews replace live entries and remain in completed re
   const merged = mergeJobEvents([], [...activities, ...overflow]);
   assert.ok(merged.some((event) => event.reviewId === "review-1" && event.reviewStatus === "approved"));
   assert.ok(!merged.some((event) => event.reviewId === "review-1" && event.reviewStatus === "inProgress"));
+});
+
+test("app-server subagent items become durable work-journal activities", () => {
+  const spawn = summarizeAppServerItem({
+    type: "collabAgentToolCall",
+    id: "collab-1",
+    tool: "spawnAgent",
+    status: "inProgress",
+    senderThreadId: "parent-thread",
+    receiverThreadIds: ["child-thread"],
+    prompt: "检查 API 路由并汇报风险",
+    model: "gpt-5.4",
+    reasoningEffort: "high",
+    agentsStates: { "child-thread": { status: "running" } },
+  }, false) as JobEvent;
+  const activity = summarizeAppServerItem({
+    type: "subAgentActivity",
+    id: "activity-1",
+    kind: "completed",
+    agentThreadId: "child-thread",
+    agentPath: "主线程/子代理 1",
+  }, true) as JobEvent;
+
+  assert.equal(spawn.kind, "subagent");
+  assert.equal(spawn.label, "正在启动子代理");
+  assert.match(spawn.detail ?? "", /检查 API 路由并汇报风险/);
+  assert.deepEqual(spawn.agentThreadIds, ["child-thread"]);
+  assert.equal(activity.label, "子代理已完成工作");
+  assert.match(activity.detail ?? "", /主线程\/子代理 1/);
+  assert.equal(buildProcessJournal([spawn, activity]).length, 2);
 });
