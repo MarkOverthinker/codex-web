@@ -53,6 +53,32 @@ test("LaTeX bracket math delimiters render as KaTeX", () => {
   assert.match(bareBrackets, /mfrac/);
 });
 
+test("display math inside ordered lists keeps the list indentation", () => {
+  const md = [
+    "1. 定义变量",
+    "2. 写出方程",
+    "3. 化简",
+    "4. 推导公式：",
+    "   \\[",
+    "   L_d = \\frac{d}{2}",
+    "   \\]",
+    "   后面还有说明 $L $d 这里应该正常",
+    "5. 结束",
+  ].join("\n");
+  const html = renderMarkdown(md);
+  assert.match(html, /katex-display/);
+  assert.match(html, /mfrac/);
+  assert.ok(!html.includes("katex-error"));
+  assert.match(html, /后面还有说明/);
+});
+
+test("single-line display math inside a list keeps the continuation indent", () => {
+  const html = renderMarkdown("4. 公式：\n   \\[L_d\\]\n   后面 $L $d");
+  assert.match(html, /katex-display/);
+  assert.ok(!html.includes("katex-error"));
+  assert.match(html, /L_d/);
+});
+
 test("math normalization leaves code blocks and inline code untouched", () => {
   const fenced = renderMarkdown("```tex\n\\[\nx^2\n\\]\n```");
   assert.ok(!fenced.includes("katex-display"));
