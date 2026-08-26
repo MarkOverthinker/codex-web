@@ -9,6 +9,11 @@
  * - a line containing only `[` followed by content and a line containing only
  *   `]` -> `$$ ... $$` (bare-bracket display math)
  *
+ * Indentation is preserved when converting display math, so formulas inside
+ * ordered lists, nested lists, or blockquotes keep the continuation indent
+ * that Markdown requires. Without it, the closing `$$` would detach from the
+ * container and the parser would treat the following text as math content.
+ *
  * Fenced code blocks and inline code are left untouched so LaTeX-looking text
  * inside code stays readable as code.
  */
@@ -78,6 +83,19 @@ function restoreInlineCode(text: string, parts: string[]): string {
 function convertEscapedDelimiters(text: string): string {
   const protectedInline = protectInlineCode(text);
   const converted = protectedInline.text
+    .replace(
+      /^((?:[ \t]*>)*[ \t]*)\\\[([\s\S]*?)\\\]/gm,
+      (_match, indent: string, body: string) => {
+        const bodyLines = body.split("\n");
+        const isBlankContainerLine = (line: string) => line.replace(/[ \t>]/g, "") === "";
+        while (bodyLines.length > 0 && isBlankContainerLine(bodyLines[0])) bodyLines.shift();
+        while (bodyLines.length > 0 && isBlankContainerLine(bodyLines[bodyLines.length - 1])) bodyLines.pop();
+        const content = bodyLines
+          .map((line) => (/^[ \t>]/.test(line) ? line : `${indent}${line}`))
+          .join("\n");
+        return `${indent}$$\n${content ? `${content}\n` : ""}${indent}$$`;
+      },
+    )
     .replace(/\\\[([\s\S]*?)\\\]/g, (_match, body: string) => `$$\n${body.trim()}\n$$`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_match, body: string) => `$${body.trim()}$`);
   return restoreInlineCode(converted, protectedInline.parts);
@@ -88,7 +106,9 @@ function convertBareBracketBlocks(lines: string[]): string[] {
   let index = 0;
 
   while (index < lines.length) {
-    if (lines[index].trim() === "[") {
+    const open = lines[index];
+    const openIndent = open.match(/^[ \t]*/)?.[0] ?? "";
+    if (open.trim() === "[") {
       const content: string[] = [];
       let cursor = index + 1;
       let found = false;
@@ -106,9 +126,9 @@ function convertBareBracketBlocks(lines: string[]): string[] {
       }
 
       if (found && content.length > 0) {
-        out.push("$$");
+        out.push(`${openIndent}$$`);
         out.push(...content);
-        out.push("$$");
+        out.push(`${openIndent}$$`);
         index = cursor + 1;
         continue;
       }

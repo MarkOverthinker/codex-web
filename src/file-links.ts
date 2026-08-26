@@ -49,9 +49,11 @@ export function localPathText(href: string | undefined): string {
 }
 
 export function isBrowserPreviewable(file: WorkFile): boolean {
-  return file.mime_type.startsWith("image/")
-    || file.mime_type === "application/pdf"
-    || isTextPreviewMime(file.mime_type);
+  const mime = normalizedMimeType(file.mime_type);
+  return mime.startsWith("image/")
+    || mime === "application/pdf"
+    || isMarkdownFile(file)
+    || isTextPreviewMime(mime);
 }
 
 export type FilePreviewKind = "image" | "pdf" | "markdown" | "text";
@@ -59,11 +61,22 @@ export type FilePreviewKind = "image" | "pdf" | "markdown" | "text";
 export const FILE_PREVIEW_TEXT_LIMIT_BYTES = 5 * 1024 * 1024;
 
 export function filePreviewKind(file: WorkFile): FilePreviewKind | null {
-  if (file.mime_type.startsWith("image/")) return "image";
-  if (file.mime_type === "application/pdf") return "pdf";
-  if (file.mime_type === "text/markdown") return "markdown";
-  if (isTextPreviewMime(file.mime_type)) return "text";
+  const mime = normalizedMimeType(file.mime_type);
+  if (mime.startsWith("image/")) return "image";
+  if (mime === "application/pdf") return "pdf";
+  if (isMarkdownFile(file)) return "markdown";
+  if (isTextPreviewMime(mime)) return "text";
   return null;
+}
+
+function normalizedMimeType(mime: string): string {
+  return mime.toLowerCase().split(";", 1)[0].trim();
+}
+
+function isMarkdownFile(file: Pick<WorkFile, "mime_type" | "original_name" | "relative_path">): boolean {
+  return normalizedMimeType(file.mime_type) === "text/markdown"
+    || /\.(?:md|markdown)$/i.test(file.original_name ?? "")
+    || /\.(?:md|markdown)$/i.test(file.relative_path ?? "");
 }
 
 export function canPreviewInline(file: WorkFile): boolean {

@@ -1377,8 +1377,11 @@ test("browser preview is limited to formats browsers can display directly", () =
 });
 
 test("in-page preview distinguishes Markdown, text, images, and PDFs with a text size cap", () => {
-  const file = (mime_type: string, size = 10) => ({ mime_type, size } as WorkFile);
+  const file = (mime_type: string, size = 10, original_name = "file.txt") => ({ mime_type, size, original_name, relative_path: `uploads/${original_name}` } as WorkFile);
   assert.equal(filePreviewKind(file("text/markdown")), "markdown");
+  assert.equal(filePreviewKind(file("text/plain", 10, "report.md")), "markdown");
+  assert.equal(filePreviewKind(file("application/octet-stream", 10, "guide.markdown")), "markdown");
+  assert.equal(filePreviewKind(file("text/markdown; charset=utf-8")), "markdown");
   assert.equal(filePreviewKind(file("text/plain")), "text");
   assert.equal(filePreviewKind(file("text/csv")), "text");
   assert.equal(filePreviewKind(file("text/x-python")), "text");
