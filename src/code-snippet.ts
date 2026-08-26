@@ -98,7 +98,7 @@ export function parseCodexSnippetUrl(href: string | undefined): FileLineRef | nu
   return { path: normalized, line: Number(match[2]) };
 }
 
-/** Whether a local file path should render as Markdown instead of a line-based code preview. */
-export function isMarkdownSnippetPath(path: string, line?: number): boolean {
-  return !line && /\.(?:md|markdown)$/i.test(path);
+/** Whether a local Markdown file should render as a full Markdown preview. */
+export function isMarkdownSnippetPath(path: string, _line?: number): boolean {
+  return /\.(?:md|markdown)$/i.test(path);
 }
