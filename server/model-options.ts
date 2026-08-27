@@ -39,7 +39,13 @@ export type AgentModelOption = {
   displayName?: string;
 };
 
+export type AgentProviderOption = {
+  id: string;
+  name: string;
+};
+
 export type AgentOptions = {
+  providers: AgentProviderOption[];
   models: AgentModelOption[];
   reasoningEfforts: Array<{ id: ModelReasoningEffort; label: string }>;
   sandboxModes: SandboxModeOption[];
@@ -154,6 +160,12 @@ function strongestModel(models: AgentModelOption[]): string {
 }
 
 export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome, db?: AppDatabase, userId = LEGACY_USER_ID): AgentOptions {
+  const managedProviders = db && providerManaged(db, userId)
+    ? db.listProviders(userId)
+      .filter((provider) => provider.enabled)
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+      .map((provider) => ({ id: provider.id, name: provider.name }))
+    : [];
   const models = db && providerManaged(db, userId)
     ? listCatalogModelOptions(db, userId)
     : catalogModels(config, codexHome);
@@ -170,6 +182,7 @@ export function loadAgentOptions(config: AppConfig, codexHome = config.codexHome
   const defaults: AgentOptions["defaults"] = { model: defaultModel, reasoningEffort: defaultReasoning, sandbox: "workspace-write" };
   if (defaultOption.provider) defaults.provider = defaultOption.provider;
   return {
+    providers: managedProviders,
     models: available,
     reasoningEfforts: offeredEfforts.map((id) => ({ id, label: EFFORT_LABELS[id] ?? id })),
     sandboxModes,

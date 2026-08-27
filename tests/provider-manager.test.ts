@@ -414,8 +414,10 @@ test("loadAgentOptions prefers the provider SSOT when providers exist", () => {
   const before = loadAgentOptions(config, codexHome);
   assert.ok(before.models.some((model) => model.id === "gpt-5.6-sol"));
   db.createProvider({ userId: LEGACY_USER_ID, id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com/" });
+  db.createProvider({ userId: LEGACY_USER_ID, id: "disabled", name: "Disabled", baseUrl: "https://disabled.example.com/", enabled: false });
   db.createProviderModel({ userId: LEGACY_USER_ID, id: "m1", providerId: "deepseek", modelId: "deepseek-v4-flash", slug: "deepseek-v4-flash", displayName: "Flash", priority: 1 });
   const after = loadAgentOptions(config, codexHome, db, LEGACY_USER_ID);
+  assert.deepEqual(after.providers, [{ id: "deepseek", name: "DeepSeek" }]);
   assert.deepEqual(after.models.map((model) => model.id), ["deepseek-v4-flash"]);
   assert.equal(after.defaults.provider, "deepseek");
   db.close();

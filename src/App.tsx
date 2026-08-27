@@ -6,12 +6,12 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
-  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   ChevronUp, ListChecks,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
-import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type SandboxMode, type Session, type WorkFile, type WorkingDirSettings } from "./api";
+import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentModelOption, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type SandboxMode, type Session, type WorkFile, type WorkingDirSettings } from "./api";
 import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, normalizeTaskCategoryVisibleCount, pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
@@ -3806,11 +3806,6 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(inputRef.current); } }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
-  const modelOptions = agentOptions?.models.map((model) => ({
-    id: model.id,
-    label: model.providerName ? `${model.providerName} · ${model.label}` : model.label,
-    description: model.description,
-  })) ?? [];
   const sandboxOptions = agentOptions?.sandboxModes.map((mode) => ({
     id: mode.id,
     label: mode.label,
@@ -3876,7 +3871,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     <div className="composer-actions"><div className="composer-primary-actions"><button className="attach-button" onClick={() => fileInput.current?.click()} disabled={submitting}><Paperclip size={17} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
       {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
-      <SettingMenu className="model" label="模型" value={selectedModel} options={modelOptions} placeholder="加载中" title={selectedModelOption?.description || "选择任务使用的模型"} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
+      <ProviderModelMenu agentOptions={agentOptions} selectedModel={selectedModel} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
       {sandboxOptions.length > 1 && <SettingMenu className={`permission ${sandboxMode === "danger-full-access" ? "danger-selected" : ""}`} label="权限" value={sandboxMode} options={sandboxOptions} placeholder="工作区写入" title="选择 Codex 的运行权限；完全访问会跳过沙箱" disabled={submitting || selectionSaving} onChange={(value) => onSandboxChange(value as SandboxMode)} />}
     </div>
@@ -3936,6 +3931,89 @@ function PresetMenu({ conversationId, presetPrompts, enabledPresetPromptIds, dis
           </label>
         ))}
       <button type="button" className="preset-menu-manage" onClick={() => { setOpen(false); onOpenManager(); }}><Settings2 size={13} />管理预设</button>
+    </div>}
+  </div>;
+}
+
+function ProviderModelMenu({ agentOptions, selectedModel, disabled, onChange }: {
+  agentOptions: AgentOptions | null;
+  selectedModel: string;
+  disabled: boolean;
+  onChange: (model: string) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [openProviderId, setOpenProviderId] = useState<string | null>(null);
+  const models = agentOptions?.models ?? [];
+  const providers = agentOptions?.providers ?? [];
+  const selected = models.find((model) => model.id === selectedModel);
+  const menuId = "setting-menu-model";
+  const providerGroups = providers.map((provider) => ({
+    ...provider,
+    models: models.filter((model) => model.provider === provider.id),
+  }));
+  const unassignedModels = models.filter((model) => !model.provider || !providers.some((provider) => provider.id === model.provider));
+  if (unassignedModels.length > 0) providerGroups.push({ id: "__unassigned__", name: "其他模型", models: unassignedModels });
+  const menuDisabled = disabled || models.length === 0;
+
+  useEffect(() => {
+    if (disabled || models.length === 0) setOpen(false);
+  }, [disabled, models.length]);
+  useEffect(() => {
+    if (!open) return;
+    function closeFromOutside(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    window.addEventListener("pointerdown", closeFromOutside);
+    return () => window.removeEventListener("pointerdown", closeFromOutside);
+  }, [open]);
+
+  function choose(model: AgentModelOption) {
+    if (model.id !== selectedModel) onChange(model.id);
+    setOpen(false);
+    setOpenProviderId(null);
+  }
+
+  function keyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (menuDisabled) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setOpen((current) => !current);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      setOpenProviderId(null);
+    }
+  }
+
+  if (!agentOptions || providers.length === 0) {
+    const options = models.map((model) => ({
+      id: model.id,
+      label: model.providerName ? `${model.providerName} · ${model.label}` : model.label,
+      description: model.description,
+    }));
+    return <SettingMenu className="model" label="模型" value={selectedModel} options={options} placeholder="加载中" title={selected?.description || "选择任务使用的模型"} disabled={menuDisabled} onChange={onChange} />;
+  }
+
+  return <div ref={rootRef} className="setting-menu model provider-model-menu">
+    <button type="button" className="setting-select" aria-label="模型" aria-haspopup="true" aria-expanded={open} aria-controls={menuId} disabled={menuDisabled} title={selected?.description || "选择任务使用的模型"} onClick={() => setOpen((current) => !current)} onKeyDown={keyDown}>
+      <span>模型</span><strong className="setting-value">{selected ? `${selected.providerName || ""}${selected.providerName ? " · " : ""}${selected.label}` : "加载中"}</strong><ChevronDown size={13} />
+    </button>
+    {open && <div id={menuId} className="setting-menu-panel provider-model-panel" role="menu" aria-label="API 源和模型">
+      {providerGroups.map((provider) => <div key={provider.id} className={`model-provider-group ${openProviderId === provider.id ? "open" : ""}`} onMouseEnter={() => setOpenProviderId(provider.id)}>
+        <button type="button" className="model-provider-trigger" aria-haspopup="true" aria-expanded={openProviderId === provider.id} onFocus={() => setOpenProviderId(provider.id)} onClick={() => setOpenProviderId((current) => current === provider.id ? null : provider.id)}>
+          <span><strong>{provider.name}</strong><small>{provider.models.length > 0 ? `${provider.models.length} 个模型` : "暂无可用模型"}</small></span><ChevronRight size={14} />
+        </button>
+        <div className="model-provider-submenu" role="listbox" aria-label={`${provider.name} 模型`}>
+          {provider.models.length > 0
+            ? provider.models.map((model) => <button key={model.id} type="button" role="option" aria-selected={model.id === selectedModel} className={model.id === selectedModel ? "selected" : ""} onClick={() => choose(model)}>
+              <span><strong>{model.label}</strong><small title={model.description}>{model.description}</small></span>{model.id === selectedModel && <Check size={14} />}
+            </button>)
+            : <div className="model-provider-empty">该源暂无可见模型</div>}
+        </div>
+      </div>)}
     </div>}
   </div>;
 }
