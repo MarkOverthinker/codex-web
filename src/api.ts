@@ -88,7 +88,9 @@ export type AgentModelOption = {
   upstreamModel?: string;
   displayName?: string;
 };
+export type AgentProviderOption = { id: string; name: string };
 export type AgentOptions = {
+  providers: AgentProviderOption[];
   models: AgentModelOption[];
   reasoningEfforts: Array<{ id: ReasoningEffort; label: string }>;
   sandboxModes: SandboxModeOption[];
