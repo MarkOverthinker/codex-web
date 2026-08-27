@@ -76,7 +76,7 @@ sudo node scripts/init-provider-sources.mjs \
 ## 限制与边界
 
 - 每个用户同一时间只允许一个启用中的官方 OAuth 源（该用户 Codex Home 内的 `auth.json` 只有一份）；其他官方账号可以改用 API key。
-- `chat` / `anthropic` 协议已可录入，但尚未内置协议转换代理，任务会失败；当前只保证 `responses` 源端到端可用。
+- 当前 Codex 只接受 `wire_api = "responses"`。数据库中的 `chat` / `anthropic` 值仍是历史占位，直接写入当前 Codex 配置会失败；在协议适配器完成前不要启用。设计见 [Chat Completions 协议适配](CHAT_COMPLETIONS_ADAPTER_DESIGN.md)。
 - 删除仍被会话或任务引用的源会被拒绝，请先禁用。
 - 任务运行期间不会重写配置：运行中的进程使用启动时的快照，新任务读到最新聚合配置。
 - 会话历史与 provider 无关：Codex 0.144+ 的线程按 `thread_id` 存储，切换 provider 后 resume 不会丢上下文。
