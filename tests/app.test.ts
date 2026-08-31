@@ -324,6 +324,24 @@ test("composer top edge resizes the input height by pointer drag", () => {
   assert.match(styles, /body\.resizing-composer \* \{[^}]*cursor: ns-resize !important;/);
 });
 
+test("side chat pane resizes independently by pointer and keyboard", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "side-chat-pane.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(appSource, /const SIDE_CHAT_WIDTH_KEY = "codex-web:side-chat-width"/);
+  assert.match(appSource, /const \[sideChatWidth, setSideChatWidth\]/);
+  assert.match(appSource, /SIDE_CHAT_WIDTH_MIN/);
+  assert.match(appSource, /SIDE_CHAT_WIDTH_MAX/);
+  assert.match(appSource, /onResizeStart=\{\(event\) => beginPaneResize\(event, sideChatWidth/);
+  assert.match(appSource, /onResizeKeyDown=\{\(event\) => handlePaneResizerKey\(event, "side-chat"\)\}/);
+  assert.match(paneSource, /className="side-chat-resizer"/);
+  assert.match(paneSource, /aria-label="调整侧边聊天宽度"/);
+  assert.match(paneSource, /onPointerDown=\{onResizeStart\}/);
+  assert.match(paneSource, /onKeyDown=\{onResizeKeyDown\}/);
+  assert.match(styles, /\.side-chat-resizer \{ display: none; \}/);
+  assert.match(styles, /\.side-chat-pane \{ width: 100vw !important; \}/);
+});
+
 test("chat font sizing keeps readable bounds and scales from the default", () => {
   assert.equal(normalizeChatFontSize(undefined), CHAT_FONT_SIZE_DEFAULT);
   assert.equal(normalizeChatFontSize("18"), 18);

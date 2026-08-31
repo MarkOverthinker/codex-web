@@ -50,11 +50,15 @@ const TASK_CATEGORY_VISIBLE_COUNTS_KEY = "codex-web:task-categories-visible-coun
 const TASK_VIEW_MODE_KEY = "codex-web:task-view-mode";
 const SIDEBAR_WIDTH_KEY = "codex-web:sidebar-width";
 const PREVIEW_WIDTH_KEY = "codex-web:preview-width";
+const SIDE_CHAT_WIDTH_KEY = "codex-web:side-chat-width";
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 220;
 const SIDEBAR_WIDTH_MAX = 460;
 const PREVIEW_WIDTH_MIN = 320;
 const PREVIEW_WIDTH_MAX = 960;
+const SIDE_CHAT_WIDTH_DEFAULT = 410;
+const SIDE_CHAT_WIDTH_MIN = 320;
+const SIDE_CHAT_WIDTH_MAX = 720;
 const COMPOSER_TEXT_HEIGHT_MIN = 72;
 const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
@@ -483,6 +487,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const pendingSourceFocusRef = useRef<{ conversationId: string; messageId: string } | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
   const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
+  const [sideChatWidth, setSideChatWidth] = useState(() => readPaneWidth(SIDE_CHAT_WIDTH_KEY, SIDE_CHAT_WIDTH_DEFAULT, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX));
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
   const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
@@ -798,6 +803,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const handleWindowResize = () => {
       setSidebarWidth((current) => clampPaneWidth(current, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
       setPreviewWidth((current) => clampPaneWidth(current, PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
+      setSideChatWidth((current) => clampPaneWidth(current, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX));
     };
     window.addEventListener("resize", handleWindowResize);
     return () => window.removeEventListener("resize", handleWindowResize);
@@ -1948,11 +1954,12 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     />;
   }
 
-  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview") {
+  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview" | "side-chat") {
     const isSidebar = kind === "sidebar";
-    const min = isSidebar ? SIDEBAR_WIDTH_MIN : PREVIEW_WIDTH_MIN;
-    const max = isSidebar ? SIDEBAR_WIDTH_MAX : PREVIEW_WIDTH_MAX;
-    const current = isSidebar ? sidebarWidth : previewWidth;
+    const isSideChat = kind === "side-chat";
+    const min = isSidebar ? SIDEBAR_WIDTH_MIN : isSideChat ? SIDE_CHAT_WIDTH_MIN : PREVIEW_WIDTH_MIN;
+    const max = isSidebar ? SIDEBAR_WIDTH_MAX : isSideChat ? SIDE_CHAT_WIDTH_MAX : PREVIEW_WIDTH_MAX;
+    const current = isSidebar ? sidebarWidth : isSideChat ? sideChatWidth : previewWidth;
     const step = event.shiftKey ? 40 : 16;
     let next: number | null = null;
     if (event.key === "ArrowLeft") next = isSidebar ? current - step : current + step;
@@ -1962,8 +1969,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     if (next === null) return;
     event.preventDefault();
     const clamped = clampPaneWidth(next, min, max);
-    if (isSidebar) setSidebarWidth(clamped); else setPreviewWidth(clamped);
-    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
+    if (isSidebar) setSidebarWidth(clamped);
+    else if (isSideChat) setSideChatWidth(clamped);
+    else setPreviewWidth(clamped);
+    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : isSideChat ? SIDE_CHAT_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
   }
 
   function renderCategoryView(category: TaskListCategoryView, style?: CSSProperties) {
@@ -2923,6 +2932,11 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onClose={() => { setSideChatOpen(false); setSideChatReferenceRequest(null); }}
       onError={setError}
       onOpenSourceReference={openSourceReference}
+      width={sideChatWidth}
+      widthMin={SIDE_CHAT_WIDTH_MIN}
+      widthMax={SIDE_CHAT_WIDTH_MAX}
+      onResizeStart={(event) => beginPaneResize(event, sideChatWidth, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX, "grow-left", setSideChatWidth, (width) => commitPaneWidth(SIDE_CHAT_WIDTH_KEY, width))}
+      onResizeKeyDown={(event) => handlePaneResizerKey(event, "side-chat")}
     />}
     {snippetPreview
       ? <CodeSnippetPane
