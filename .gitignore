@@ -20,3 +20,4 @@ coverage/
 tmp/
 *.bak
 *.backup
+bin/
