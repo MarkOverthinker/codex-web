@@ -15,7 +15,7 @@ The interaction borrows the Windows app's split-workspace idea: keep the main ta
    - source conversation and message IDs;
    - source thread ID;
    - rollout-relative JSONL path;
-   - one-based line number and byte offset;
+   - one-based line number and exact byte offset (including CRLF line endings);
    - JSON Pointer to the text field;
    - character offsets for the selected excerpt.
 5. Send the side question. The copied excerpt remains useful model context, while the locator provides an auditable path back to the exact JSONL record.

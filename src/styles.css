@@ -1643,6 +1643,81 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .preset-editor-cancel,
 :root[data-theme="dark"] .preset-manager-close { border-color: #45474f; color: #c9cad1; background: #2c2d33; }
 
+.side-chat-toggle {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid #d7dbe8;
+  border-radius: 9px;
+  color: #555b70;
+  background: rgba(255, 255, 255, .82);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 750;
+}
+.side-chat-toggle:hover, .side-chat-toggle.active { color: var(--indigo); border-color: #aeb7df; background: #f0f2fb; }
+.side-chat-pane {
+  position: relative;
+  z-index: 18;
+  width: min(410px, 36vw);
+  min-width: 340px;
+  flex: 0 0 min(410px, 36vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid rgba(15, 17, 32, .1);
+  background: #f7f8fb;
+  box-shadow: -14px 0 34px rgba(15, 17, 32, .08);
+}
+.side-chat-header { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #e0e3ec; background: rgba(255, 255, 255, .9); }
+.side-chat-header > div { min-width: 0; display: grid; gap: 3px; }
+.side-chat-header span { color: #8a8e9d; font-size: 8px; font-weight: 850; letter-spacing: .14em; }
+.side-chat-header strong { display: flex; align-items: center; gap: 7px; color: #252b4d; font-size: 14px; }
+.side-chat-header strong svg { color: var(--indigo); }
+.side-chat-settings { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(92px, .7fr); gap: 8px; padding: 10px 12px; border-bottom: 1px solid #e2e4ec; background: #fff; }
+.side-chat-settings label { min-width: 0; display: grid; gap: 4px; color: #7c8090; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.side-chat-settings select { width: 100%; min-width: 0; height: 34px; padding: 0 28px 0 9px; border: 1px solid #d7dbe8; border-radius: 9px; outline: none; color: #34384b; background: #f8f9fc; font-size: 11px; font-weight: 650; }
+.side-chat-settings select:focus { border-color: #8e99cc; box-shadow: 0 0 0 3px rgba(72, 85, 156, .1); }
+.side-chat-messages { min-height: 0; flex: 1; overflow-y: auto; padding: 18px 14px 24px; }
+.side-chat-empty { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 28px; color: #888d9d; text-align: center; font-size: 12px; line-height: 1.55; }
+.side-chat-empty svg { color: #6b77b1; }
+.side-chat-empty strong { color: #353b66; font-size: 13px; }
+.side-chat-message { display: grid; gap: 6px; margin-bottom: 15px; }
+.side-chat-message header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #858a9b; font-size: 9px; }
+.side-chat-message header span { color: #596079; font-weight: 800; }
+.side-chat-message > p, .side-chat-markdown { margin: 0; padding: 10px 11px; border: 1px solid #dfe2eb; border-radius: 12px; color: #353847; background: #fff; font-size: 12px; line-height: 1.62; overflow-wrap: anywhere; }
+.side-chat-message.user > p { color: #fff; border-color: #3b4684; background: #303b79; }
+.side-chat-markdown > :first-child { margin-top: 0; }
+.side-chat-markdown > :last-child { margin-bottom: 0; }
+.side-chat-markdown pre { max-width: 100%; overflow: auto; }
+.side-chat-reference { display: grid; gap: 7px; padding: 9px 10px; border: 1px solid #d7dcef; border-radius: 11px; background: #f1f3fa; }
+.side-chat-reference-heading { display: flex; align-items: center; gap: 6px; color: #3f4b87; font-size: 10px; }
+.side-chat-reference blockquote { max-height: 76px; margin: 0; overflow: hidden; color: #52586d; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+.side-chat-reference-location { min-width: 0; display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) 24px auto; align-items: center; gap: 5px; }
+.side-chat-reference-location > button:not(.icon-button) { min-width: 0; overflow: hidden; padding: 0; border: 0; color: var(--indigo); background: transparent; cursor: pointer; font-size: 10px; font-weight: 750; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.side-chat-reference-location code { min-width: 0; overflow: hidden; color: #777d91; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.side-chat-reference-location .icon-button { width: 24px; height: 24px; color: #73798f; }
+.side-chat-running { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; color: #6973a4; font-size: 11px; }
+.side-chat-composer { flex: 0 0 auto; display: grid; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid #dde0e9; background: rgba(255, 255, 255, .96); }
+.side-chat-composer textarea { width: 100%; min-height: 74px; max-height: 210px; resize: vertical; padding: 10px 11px; border: 1px solid #d4d8e6; border-radius: 12px; outline: none; color: var(--ink); background: #fff; font: inherit; font-size: 12px; line-height: 1.55; }
+.side-chat-composer textarea:focus { border-color: #8490c8; box-shadow: 0 0 0 3px rgba(72, 85, 156, .1); }
+.side-chat-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #8a8e9d; font-size: 9px; }
+.side-chat-send { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 9px; color: #fff; background: var(--indigo); cursor: pointer; }
+.side-chat-send.stop { color: #fff; background: #9d4646; }
+.side-chat-send:disabled { opacity: .45; cursor: default; }
+
+@media (max-width: 1100px) {
+  .side-chat-pane { position: fixed; inset: 0 0 0 auto; z-index: 90; width: min(430px, 92vw); min-width: 0; flex-basis: auto; box-shadow: -18px 0 42px rgba(15, 17, 32, .22); }
+}
+
+@media (max-width: 720px) {
+  .side-chat-toggle span { display: none; }
+  .side-chat-toggle { width: 34px; justify-content: center; padding: 0; }
+  .side-chat-pane { width: 100vw; }
+}
+
 @media (max-width: 720px) {
   .provider-manager-backdrop,
   .preset-manager-backdrop,
@@ -1665,3 +1740,27 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .provider-form > footer,
   .account-security-dialog-footer { min-height: calc(58px + env(safe-area-inset-bottom)); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
+
+:root[data-theme="dark"] .side-chat-toggle { color: #c7cad8; border-color: #40434e; background: #27292f; }
+:root[data-theme="dark"] .side-chat-toggle:hover,
+:root[data-theme="dark"] .side-chat-toggle.active { color: #d6dcff; border-color: #626b98; background: #303443; }
+:root[data-theme="dark"] .side-chat-pane { border-left-color: #383a43; background: #202126; box-shadow: -14px 0 34px rgba(0, 0, 0, .32); }
+:root[data-theme="dark"] .side-chat-header,
+:root[data-theme="dark"] .side-chat-settings,
+:root[data-theme="dark"] .side-chat-composer { border-color: #3b3e47; background: rgba(36, 38, 43, .97); }
+:root[data-theme="dark"] .side-chat-header strong,
+:root[data-theme="dark"] .side-chat-empty strong { color: #e1e3eb; }
+:root[data-theme="dark"] .side-chat-header span,
+:root[data-theme="dark"] .side-chat-message header,
+:root[data-theme="dark"] .side-chat-composer-footer { color: #9699a3; }
+:root[data-theme="dark"] .side-chat-settings select { color: #dedfe5; border-color: #454852; background: #1d1e22; }
+:root[data-theme="dark"] .side-chat-message header span { color: #c2c5d0; }
+:root[data-theme="dark"] .side-chat-message > p,
+:root[data-theme="dark"] .side-chat-markdown { color: #dedfe5; border-color: #3d4049; background: #27292f; }
+:root[data-theme="dark"] .side-chat-message.user > p { color: #fff; border-color: #5965a0; background: #38447f; }
+:root[data-theme="dark"] .side-chat-reference { border-color: #454a60; background: rgba(91, 104, 166, .14); }
+:root[data-theme="dark"] .side-chat-reference-heading,
+:root[data-theme="dark"] .side-chat-reference-location > button:not(.icon-button) { color: #bdc6fa; }
+:root[data-theme="dark"] .side-chat-reference blockquote { color: #c6c8d0; }
+:root[data-theme="dark"] .side-chat-reference-location code { color: #9699a3; }
+:root[data-theme="dark"] .side-chat-composer textarea { color: #e4e5e9; border-color: #484b56; background: #1d1e22; }
