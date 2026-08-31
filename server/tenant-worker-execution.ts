@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { startAppServerTurn, type AppServerTurnExecution } from "./app-server-turn.js";
@@ -5,6 +6,7 @@ import { buildCodexEnvironment, buildShellEnvironment, resolvePythonRuntime } fr
 import { summarizeEvent } from "./codex-events.js";
 import type { TenantWorkerRunRequest } from "./tenant-worker-protocol.js";
 import { isOptionalAgentCapabilities } from "./optional-capabilities.js";
+import { startCodexRelay } from "./codex-relay.js";
 
 type ExecutionCallbacks = {
   signal: AbortSignal;
@@ -28,7 +30,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
   if (process.platform === "win32") {
     codexEnvironment.CODEX_WINDOWS_SANDBOX = request.codexWindowsSandbox;
   }
-  return startAppServerTurn({
+  const baseOptions = {
     executablePath: process.env.CODEX_RUNTIME_PATH || undefined,
     cwd: request.workingDir ?? request.workspace,
     env: codexEnvironment,
@@ -48,7 +50,58 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     runtimeWorkspaceRoots: hostMode ? [request.workingDir ?? request.workspace, request.workspace, request.library] : undefined,
     uid: hostMode ? request.uid : undefined,
     gid: hostMode ? request.gid : undefined,
-  }, callbacks);
+  };
+  if (!request.modelAdapter) return startAppServerTurn(baseOptions, callbacks);
+  const modelAdapter = request.modelAdapter;
+
+  let activeTurn: AppServerTurnExecution | undefined;
+  let stopRelay: (() => Promise<void>) | undefined;
+  const ready = (async () => {
+    callbacks.onProgress({ kind: "status", label: "正在启动 Chat Completions 兼容代理" });
+    const historyDir = path.join(request.workspace, ".runtime", "codex-relay", modelAdapter.providerId);
+    const relay = await startCodexRelay({
+      executablePath: modelAdapter.executablePath,
+      upstreamBaseUrl: modelAdapter.upstreamBaseUrl,
+      apiKey: modelAdapter.apiKey,
+      historyDir,
+      env: codexEnvironment,
+      signal: callbacks.signal,
+    });
+    stopRelay = relay.stop;
+    const authEnvKey = "CODEX_WEB_RELAY_TOKEN";
+    const appServerEnvironment = {
+      ...codexEnvironment,
+      [authEnvKey]: crypto.randomBytes(32).toString("hex"),
+    };
+    activeTurn = startAppServerTurn({
+      ...baseOptions,
+      env: appServerEnvironment,
+      runtimeModelProvider: {
+        id: modelAdapter.providerId,
+        name: modelAdapter.providerName,
+        baseUrl: relay.baseUrl,
+        envKey: authEnvKey,
+      },
+    }, callbacks);
+    return activeTurn;
+  })();
+
+  const result = (async () => {
+    try {
+      return await (await ready).result;
+    } finally {
+      await stopRelay?.();
+    }
+  })();
+
+  return {
+    result,
+    steer: async (prompt, imagePaths) => (await ready).steer(prompt, imagePaths),
+    interrupt: () => {
+      activeTurn?.interrupt();
+      void stopRelay?.();
+    },
+  };
 }
 
 export async function consumeTenantTurnEvents(
@@ -85,6 +138,15 @@ export function validateTenantWorkerRequest(request: TenantWorkerRunRequest, exp
   if (request.sandboxMode !== "workspace-write" && request.sandboxMode !== "danger-full-access") throw new Error("Invalid worker sandbox mode");
   if (request.modelProvider !== undefined && request.modelProvider !== null && !/^[a-z0-9][a-z0-9._-]{1,80}$/i.test(request.modelProvider)) {
     throw new Error("Invalid worker model provider");
+  }
+  if (request.modelAdapter) {
+    if (request.modelAdapter.kind !== "codex-relay") throw new Error("Invalid worker model adapter");
+    if (request.modelAdapter.providerId !== request.modelProvider) throw new Error("Worker model adapter provider mismatch");
+    if (!request.modelAdapter.executablePath.trim() || !request.modelAdapter.providerName.trim()) throw new Error("Invalid worker model adapter configuration");
+    let upstream: URL;
+    try { upstream = new URL(request.modelAdapter.upstreamBaseUrl); }
+    catch { throw new Error("Invalid worker model adapter upstream URL"); }
+    if (upstream.protocol !== "http:" && upstream.protocol !== "https:") throw new Error("Invalid worker model adapter upstream protocol");
   }
   const tenantRoot = path.resolve(expectedTenantRoot);
   const expectedWorkspace = path.join(tenantRoot, "conversations", request.conversationId);

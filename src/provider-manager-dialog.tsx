@@ -319,17 +319,21 @@ export function ProviderManagerDialog({ open, onClose, onChanged }: {
         <div className="provider-form-fields">
           <label><span>名称</span><input value={providerDraftState.name} onChange={(event) => setProviderDraftState((current) => ({ ...current, name: event.target.value }))} placeholder="例如 deepseek" /></label>
           <label><span>Base URL</span><input value={providerDraftState.baseUrl} onChange={(event) => setProviderDraftState((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" /></label>
-          <label><span>API Key{providerDraftState.apiKey ? "（已填，保存将覆盖）" : editingProvider !== "new" ? "（留空保持不变）" : providerDraftState.requiresOpenaiAuth ? "（可选）" : ""}</span><input type="password" value={providerDraftState.apiKey} onChange={(event) => setProviderDraftState((current) => ({ ...current, apiKey: event.target.value }))} placeholder={providerDraftState.requiresOpenaiAuth ? "留空则使用官方 OAuth 登录" : editingProvider !== "new" ? "留空保持不变" : "粘贴 API Key"} /></label>
+          <label><span>API Key{providerDraftState.apiKey ? "（已填，保存将覆盖）" : editingProvider !== "new" ? "（留空保持不变）" : providerDraftState.requiresOpenaiAuth ? "（可选）" : ""}</span><input type="password" value={providerDraftState.apiKey} onChange={(event) => setProviderDraftState((current) => ({ ...current, apiKey: event.target.value }))} placeholder={providerDraftState.requiresOpenaiAuth ? "留空则使用官方 OAuth 登录" : providerDraftState.wireApi === "chat" ? "上游无鉴权时可留空" : editingProvider !== "new" ? "留空保持不变" : "粘贴 API Key"} /></label>
           <label><span>模型文件（codex-home 内文件名）</span><input value={providerDraftState.modelsFile} onChange={(event) => setProviderDraftState((current) => ({ ...current, modelsFile: event.target.value }))} placeholder="models.json 或 sssaicodeapi-models.json" /></label>
           <label><span>自动审核模型覆盖（auto_review_model_override）</span><input value={providerDraftState.autoReviewModelOverride} onChange={(event) => setProviderDraftState((current) => ({ ...current, autoReviewModelOverride: event.target.value }))} placeholder="留空则使用该模型默认的自动审核模型" /></label>
           <label><span>协议</span>
-            <select value={providerDraftState.wireApi} onChange={(event) => setProviderDraftState((current) => ({ ...current, wireApi: event.target.value as Provider["wireApi"] }))}>
+            <select value={providerDraftState.wireApi} onChange={(event) => setProviderDraftState((current) => {
+              const wireApi = event.target.value as Provider["wireApi"];
+              return { ...current, wireApi, requiresOpenaiAuth: wireApi === "responses" ? current.requiresOpenaiAuth : false };
+            })}>
               <option value="responses">Responses（原生支持）</option>
-              <option value="chat">Chat Completions（需代理，尚未内置）</option>
+              <option value="chat">Chat Completions（内置 codex-relay）</option>
               <option value="anthropic">Anthropic（需代理，尚未内置）</option>
             </select>
           </label>
-          <label className="provider-form-check"><input type="checkbox" checked={providerDraftState.requiresOpenaiAuth} onChange={(event) => setProviderDraftState((current) => ({ ...current, requiresOpenaiAuth: event.target.checked }))} /><span>使用官方 OAuth 登录（auth.json）</span></label>
+          {providerDraftState.wireApi === "chat" && <small className="provider-form-hint">任务运行时会在 tenant worker 内启动临时 relay，将 Codex Responses 请求转换为上游 `/chat/completions`。上游模型必须正确支持流式响应和结构化 `tool_calls`。</small>}
+          <label className="provider-form-check"><input type="checkbox" checked={providerDraftState.requiresOpenaiAuth} disabled={providerDraftState.wireApi !== "responses"} onChange={(event) => setProviderDraftState((current) => ({ ...current, requiresOpenaiAuth: event.target.checked }))} /><span>使用官方 OAuth 登录（仅原生 Responses）</span></label>
           <label className="provider-form-check"><input type="checkbox" checked={providerDraftState.enabled} onChange={(event) => setProviderDraftState((current) => ({ ...current, enabled: event.target.checked }))} /><span>启用此源</span></label>
         </div>
         <footer>

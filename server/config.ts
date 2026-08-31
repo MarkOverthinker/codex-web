@@ -18,6 +18,7 @@ export type AppConfig = {
   workspaceRoot: string;
   tenantRoot: string;
   pythonRuntimeRoot: string;
+  codexRelayPath: string;
   pythonVersion: string;
   codexWindowsSandbox: "elevated" | "unelevated";
   containerized: boolean;
@@ -66,6 +67,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     workspaceRoot: overrides.workspaceRoot ?? (process.env.WORKSPACE_ROOT || path.join(projectRoot, "workspaces")),
     tenantRoot: overrides.tenantRoot ?? (process.env.TENANT_ROOT || path.join(projectRoot, "tenants")),
     pythonRuntimeRoot: overrides.pythonRuntimeRoot ?? (process.env.PYTHON_RUNTIME_ROOT || path.join(projectRoot, "data", "python")),
+    codexRelayPath: overrides.codexRelayPath ?? (process.env.CODEX_RELAY_PATH || "codex-relay"),
     pythonVersion: overrides.pythonVersion ?? (process.env.PYTHON_VERSION || "3.12"),
     codexWindowsSandbox: overrides.codexWindowsSandbox ?? (process.env.CODEX_WINDOWS_SANDBOX === "unelevated" ? "unelevated" : "elevated"),
     containerized: overrides.containerized ?? process.env.CONTAINERIZED === "true",

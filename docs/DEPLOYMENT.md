@@ -220,6 +220,12 @@ user named `zzlei`) fail with `spawn .../codex EACCES`. Prefer a system-wide
 install such as `/usr/bin/codex` (the `npm install -g` prefix), or verify that
 every directory on the CLI path is world-searchable.
 
+If managed API sources use Chat Completions, `CODEX_RELAY_PATH` must likewise
+point to a `codex-relay` executable available to every tenant. Docker images
+and the Linux x86_64 offline bundle already set this path to their bundled
+binary; a source checkout running in host mode must install it separately or
+set the variable explicitly.
+
 Stop any manually started `node dist-server/server/index.js` process first,
 otherwise the new service fails to bind the port (the unit restarts and binds
 as soon as the port frees up). `TimeoutStopSec=1800` preserves the graceful
@@ -282,8 +288,8 @@ token.
 
 For a Linux x86_64 machine without a checkout or npm registry access, build a
 self-contained archive that includes the production build, production
-node_modules (with the bundled Codex CLI), a Node.js runtime, and the shared
-Python runtime:
+node_modules (with the bundled Codex CLI), a pinned `codex-relay` binary with
+its license and SBOM, a Node.js runtime, and the shared Python runtime:
 
 ```bash
 scripts/package-offline.sh --output-dir /path/to/outputs

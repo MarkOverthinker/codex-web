@@ -8,6 +8,13 @@ import type { SandboxMode } from "./model-options.js";
 
 type JsonObject = Record<string, unknown>;
 
+export type RuntimeModelProvider = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  envKey: string;
+};
+
 type AppServerCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
@@ -25,6 +32,7 @@ export type AppServerTurnOptions = {
   model: string;
   reasoningEffort: string;
   modelProvider?: string | null;
+  runtimeModelProvider?: RuntimeModelProvider;
   sandboxMode: SandboxMode;
   library: string;
   shellEnvironment: Record<string, string>;
@@ -105,6 +113,20 @@ class AppServerTurnClient {
       "-c", `approvals_reviewer="${APPROVALS_REVIEWER}"`,
       "-c", `sandbox_mode="${options.sandboxMode}"`,
     ];
+    if (options.runtimeModelProvider) {
+      const provider = options.runtimeModelProvider;
+      if (provider.id !== options.modelProvider || !/^[a-z0-9][a-z0-9._-]{1,80}$/i.test(provider.id)) {
+        throw new Error("Invalid runtime model provider");
+      }
+      appServerArgs.push(
+        "-c", `model_providers.${provider.id}.name=${JSON.stringify(provider.name)}`,
+        "-c", `model_providers.${provider.id}.base_url=${JSON.stringify(provider.baseUrl)}`,
+        "-c", `model_providers.${provider.id}.wire_api="responses"`,
+        "-c", `model_providers.${provider.id}.env_key=${JSON.stringify(provider.envKey)}`,
+        "-c", `model_providers.${provider.id}.requires_openai_auth=false`,
+        "-c", `model_providers.${provider.id}.supports_websockets=false`,
+      );
+    }
     const spawnOptions: SpawnOptionsWithoutStdio = {
       cwd: options.cwd,
       env: options.env,

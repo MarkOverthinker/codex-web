@@ -1,6 +1,15 @@
 import type { AgentSelection, SandboxMode } from "./model-options.js";
 import type { OptionalAgentCapabilities } from "./optional-capabilities.js";
 
+export type CodexRelayRequest = {
+  kind: "codex-relay";
+  executablePath: string;
+  providerId: string;
+  providerName: string;
+  upstreamBaseUrl: string;
+  apiKey: string | null;
+};
+
 export type TenantWorkerRunRequest = {
   jobId: string;
   userId: string;
@@ -19,6 +28,7 @@ export type TenantWorkerRunRequest = {
   outputSchema?: Record<string, unknown>;
   selection: AgentSelection;
   modelProvider?: string | null;
+  modelAdapter?: CodexRelayRequest;
   sandboxMode: SandboxMode;
   networkAccessEnabled: boolean;
   webSearchMode: "cached" | "live";
