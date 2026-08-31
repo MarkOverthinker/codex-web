@@ -32,8 +32,36 @@ test("source reference normalization keeps a safe client-visible snapshot", () =
   assert.equal(reference?.sourceConversationTitle, "来源任务");
   assert.equal(reference?.excerpt, "引用内容");
 
+  const located = normalizeMessageSourceReference({
+    sourceConversationId: "00000000-0000-4000-8000-000000000001",
+    sourceMessageId: "11111111-1111-4111-8111-111111111111",
+    sourceConversationTitle: "来源任务",
+    sourceRole: "assistant",
+    sourceCreatedAt: "2026-08-13T10:00:00.000Z",
+    excerpt: "引用内容",
+    sourceLocation: {
+      kind: "codex-rollout",
+      threadId: "22222222-2222-4222-8222-222222222222",
+      path: "sessions/2026/08/13/rollout.jsonl",
+      line: 12,
+      byteOffset: 345,
+      recordType: "response_item",
+      jsonPointer: "/payload/content/0/text",
+      itemId: "item-12",
+      textStart: 5,
+      textEnd: 9,
+    },
+  });
+  assert.equal(located?.sourceLocation?.line, 12);
+  assert.match(buildDerivedTaskPrompt("继续核对", located!), /sessions\/2026\/08\/13\/rollout\.jsonl:12/);
+  assert.match(buildDerivedTaskPrompt("继续核对", located!), /chars 5-9/);
+
   assert.equal(normalizeMessageSourceReference(null), null);
   assert.equal(normalizeMessageSourceReference({ sourceConversationId: "bad", excerpt: "x" }), null);
+  assert.equal(normalizeMessageSourceReference({
+    ...located,
+    sourceLocation: { ...located!.sourceLocation, path: "../outside.jsonl" },
+  }), null);
 });
 
 test("existing ask-agent draft builder remains unchanged for normal quotes", () => {

@@ -79,6 +79,7 @@ export type PendingPromptRow = {
   conversation_id: string;
   content: string;
   quote_excerpt: string | null;
+  source_reference: string | null;
   agent_model: string;
   reasoning_effort: string;
   agent_provider: string | null;
@@ -286,6 +287,11 @@ export class AppDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS conversation_side_chats (
+        parent_conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -300,6 +306,7 @@ export class AppDatabase {
         conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
         content TEXT NOT NULL,
         quote_excerpt TEXT,
+        source_reference TEXT,
         agent_model TEXT NOT NULL,
         reasoning_effort TEXT NOT NULL,
         sandbox_mode TEXT NOT NULL DEFAULT 'workspace-write',
@@ -441,6 +448,7 @@ export class AppDatabase {
     if (!composerDraftColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE composer_drafts ADD COLUMN source_reference TEXT");
     const pendingPromptColumns = this.columnNames("pending_prompts");
     if (!pendingPromptColumns.has("quote_excerpt")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN quote_excerpt TEXT");
+    if (!pendingPromptColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE pending_prompts ADD COLUMN source_reference TEXT");
     const sessionColumns = this.columnNames("sessions");
     if (!sessionColumns.has("user_id")) this.sqlite.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT REFERENCES users(id)");
     const jobColumns = this.columnNames("jobs");
@@ -502,6 +510,7 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS conversations_user_active_idx ON conversations(user_id, deleted_at, updated_at);
       CREATE INDEX IF NOT EXISTS conversations_user_archived_idx ON conversations(user_id, deleted_at, archived_at);
       CREATE INDEX IF NOT EXISTS conversations_working_dir_idx ON conversations(working_dir) WHERE working_dir IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS conversation_side_chats_child_idx ON conversation_side_chats(conversation_id);
       CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS files_conversation_idx ON files(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS files_pending_prompt_idx ON files(pending_prompt_id, created_at);
@@ -687,14 +696,23 @@ export class AppDatabase {
     return this.sqlite.prepare(`SELECT ${conversationSelect} FROM conversations WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY updated_at DESC`).all() as ConversationRow[];
   }
 
+  listPrimaryConversations(userId: string): ConversationRow[] {
+    return this.sqlite.prepare(`
+      SELECT ${conversationSelect} FROM conversations
+      WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM conversation_side_chats side WHERE side.conversation_id=conversations.id)
+      ORDER BY updated_at DESC
+    `).all(userId) as ConversationRow[];
+  }
+
   listArchivedConversations(userId: string, query = ""): ConversationRow[] {
     const normalized = query.trim().slice(0, 100);
     if (!normalized) {
-      return this.sqlite.prepare(`SELECT ${conversationSelect} FROM conversations WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY archived_at DESC,id LIMIT 100`)
+      return this.sqlite.prepare(`SELECT ${conversationSelect} FROM conversations WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM conversation_side_chats side WHERE side.conversation_id=conversations.id) ORDER BY archived_at DESC,id LIMIT 100`)
         .all(userId) as ConversationRow[];
     }
     const escaped = normalized.replace(/[\\%_]/g, "\\$&");
-    return this.sqlite.prepare(`SELECT ${conversationSelect} FROM conversations WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL AND title LIKE ? ESCAPE '\\' COLLATE NOCASE ORDER BY archived_at DESC,id LIMIT 100`)
+    return this.sqlite.prepare(`SELECT ${conversationSelect} FROM conversations WHERE user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM conversation_side_chats side WHERE side.conversation_id=conversations.id) AND title LIKE ? ESCAPE '\\' COLLATE NOCASE ORDER BY archived_at DESC,id LIMIT 100`)
       .all(userId, `%${escaped}%`) as ConversationRow[];
   }
 
@@ -716,6 +734,46 @@ export class AppDatabase {
       selection?.provider ?? null, selection?.sandbox ?? "workspace-write", now, now,
     );
     return this.getConversation(id)!;
+  }
+
+  getSideConversation(parentConversationId: string, userId: string): ConversationRow | undefined {
+    return this.sqlite.prepare(`
+      SELECT ${conversationSelect} FROM conversations
+      JOIN conversation_side_chats side ON side.conversation_id=conversations.id
+      WHERE side.parent_conversation_id=? AND conversations.user_id=? AND conversations.deleted_at IS NULL
+    `).get(parentConversationId, userId) as ConversationRow | undefined;
+  }
+
+  createSideConversation(parent: ConversationRow, id: string, selection: StoredAgentSelection): ConversationRow {
+    const existing = this.getSideConversation(parent.id, parent.user_id);
+    if (existing) return existing;
+    const now = new Date().toISOString();
+    const title = `侧边聊天 · ${parent.title}`.slice(0, 80);
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      this.sqlite.prepare(`
+        INSERT INTO conversations(id,user_id,title,title_source,working_dir,agent_model,reasoning_effort,agent_provider,sandbox_mode,status,created_at,updated_at)
+        VALUES(?,?,?,'manual',?,?,?,?,?,'idle',?,?)
+      `).run(
+        id, parent.user_id, title, parent.working_dir, selection.model, selection.reasoningEffort,
+        selection.provider ?? null, selection.sandbox ?? "workspace-write", now, now,
+      );
+      this.sqlite.prepare("INSERT INTO conversation_side_chats(parent_conversation_id,conversation_id,created_at) VALUES(?,?,?)")
+        .run(parent.id, id, now);
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getConversation(id)!;
+  }
+
+  getSideConversationParent(conversationId: string, userId: string): ConversationRow | undefined {
+    return this.sqlite.prepare(`
+      SELECT ${conversationSelect} FROM conversations
+      JOIN conversation_side_chats side ON side.parent_conversation_id=conversations.id
+      WHERE side.conversation_id=? AND conversations.user_id=? AND conversations.deleted_at IS NULL
+    `).get(conversationId, userId) as ConversationRow | undefined;
   }
 
   listCodexThreadIds(): string[] {
@@ -773,20 +831,52 @@ export class AppDatabase {
 
   archiveConversationForUser(id: string, userId: string): ConversationRow | undefined {
     const now = new Date().toISOString();
-    const result = this.sqlite.prepare(`
-      UPDATE conversations SET archived_at=?
-      WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL
-    `).run(now, id, userId);
-    return result.changes ? this.getConversationForUser(id, userId) : undefined;
+    let changed = false;
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.sqlite.prepare(`
+        UPDATE conversations SET archived_at=?
+        WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL
+      `).run(now, id, userId);
+      changed = result.changes > 0;
+      if (changed) {
+        this.sqlite.prepare(`
+          UPDATE conversations SET archived_at=?
+          WHERE id=(SELECT conversation_id FROM conversation_side_chats WHERE parent_conversation_id=?)
+            AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL
+        `).run(now, id, userId);
+      }
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return changed ? this.getConversationForUser(id, userId) : undefined;
   }
 
   restoreConversationForUser(id: string, userId: string): ConversationRow | undefined {
     const now = new Date().toISOString();
-    const result = this.sqlite.prepare(`
-      UPDATE conversations SET archived_at=NULL,updated_at=?
-      WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL
-    `).run(now, id, userId);
-    return result.changes ? this.getConversationForUser(id, userId) : undefined;
+    let changed = false;
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.sqlite.prepare(`
+        UPDATE conversations SET archived_at=NULL,updated_at=?
+        WHERE id=? AND user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL
+      `).run(now, id, userId);
+      changed = result.changes > 0;
+      if (changed) {
+        this.sqlite.prepare(`
+          UPDATE conversations SET archived_at=NULL,updated_at=?
+          WHERE id=(SELECT conversation_id FROM conversation_side_chats WHERE parent_conversation_id=?)
+            AND user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL
+        `).run(now, id, userId);
+      }
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return changed ? this.getConversationForUser(id, userId) : undefined;
   }
 
   setConversationRolloutBytes(id: string, bytes: number | null): void {
@@ -956,6 +1046,7 @@ export class AppDatabase {
     content: string,
     selection: StoredAgentSelection,
     quoteExcerpt: string | null,
+    sourceReference: string | null = null,
     status: PendingPromptRow["status"] = "queued",
   ): PendingPromptWithFiles {
     const now = new Date().toISOString();
@@ -963,9 +1054,9 @@ export class AppDatabase {
     try {
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),0)+1 AS value FROM pending_prompts WHERE conversation_id=? AND status='queued'").get(conversationId) as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,sandbox_mode,position,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-      `).run(pendingId, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, status, now, now);
+        INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,source_reference,agent_model,reasoning_effort,agent_provider,sandbox_mode,position,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(pendingId, conversationId, content, quoteExcerpt, sourceReference, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, status, now, now);
       this.sqlite.prepare("UPDATE files SET pending_prompt_id=?,composer_draft_id=NULL WHERE conversation_id=? AND composer_draft_id=?")
         .run(pendingId, conversationId, conversationId);
       this.sqlite.prepare("DELETE FROM composer_drafts WHERE conversation_id=?").run(conversationId);
@@ -1008,13 +1099,13 @@ export class AppDatabase {
     return this.getJob(jobId)!;
   }
 
-  createPendingPrompt(id: string, conversationId: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles {
+  createPendingPrompt(id: string, conversationId: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null, sourceReference: string | null = null): PendingPromptWithFiles {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(position),0)+1 AS value FROM pending_prompts WHERE conversation_id=? AND status='queued'").get(conversationId) as { value: number };
     this.sqlite.prepare(`
-      INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,agent_model,reasoning_effort,agent_provider,sandbox_mode,position,status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,'queued',?,?)
-    `).run(id, conversationId, content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, now, now);
+      INSERT INTO pending_prompts(id,conversation_id,content,quote_excerpt,source_reference,agent_model,reasoning_effort,agent_provider,sandbox_mode,position,status,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?,?)
+    `).run(id, conversationId, content, quoteExcerpt, sourceReference, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", next.value, now, now);
     return this.getPendingPrompt(id)!;
   }
 
@@ -1054,17 +1145,17 @@ export class AppDatabase {
     return this.getPendingPrompt(id);
   }
 
-  updatePendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles | undefined {
+  updatePendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null, sourceReference: string | null = null): PendingPromptWithFiles | undefined {
     const result = this.sqlite.prepare(`
-      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,sandbox_mode=?,status='queued',updated_at=? WHERE id=?
-    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", new Date().toISOString(), id);
+      UPDATE pending_prompts SET content=?,quote_excerpt=?,source_reference=?,agent_model=?,reasoning_effort=?,agent_provider=?,sandbox_mode=?,status='queued',updated_at=? WHERE id=?
+    `).run(content, quoteExcerpt, sourceReference, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", new Date().toISOString(), id);
     return result.changes ? this.getPendingPrompt(id) : undefined;
   }
 
-  updateEditingPendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null): PendingPromptWithFiles | undefined {
+  updateEditingPendingPrompt(id: string, content: string, selection: StoredAgentSelection, quoteExcerpt: string | null = null, sourceReference: string | null = null): PendingPromptWithFiles | undefined {
     const result = this.sqlite.prepare(`
-      UPDATE pending_prompts SET content=?,quote_excerpt=?,agent_model=?,reasoning_effort=?,agent_provider=?,sandbox_mode=?,updated_at=? WHERE id=? AND status='editing'
-    `).run(content, quoteExcerpt, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", new Date().toISOString(), id);
+      UPDATE pending_prompts SET content=?,quote_excerpt=?,source_reference=?,agent_model=?,reasoning_effort=?,agent_provider=?,sandbox_mode=?,updated_at=? WHERE id=? AND status='editing'
+    `).run(content, quoteExcerpt, sourceReference, selection.model, selection.reasoningEffort, selection.provider ?? null, selection.sandbox ?? "workspace-write", new Date().toISOString(), id);
     return result.changes ? this.getPendingPrompt(id) : undefined;
   }
 
@@ -1122,15 +1213,15 @@ export class AppDatabase {
     const now = new Date().toISOString();
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
-      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,'user',?,?,?)")
-        .run(messageId, prompt.conversation_id, prompt.content, prompt.quote_excerpt, now);
+      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,created_at) VALUES(?,?,'user',?,?,?,?)")
+        .run(messageId, prompt.conversation_id, prompt.content, prompt.quote_excerpt, prompt.source_reference, now);
       this.sqlite.prepare("UPDATE files SET message_id=?,pending_prompt_id=NULL WHERE pending_prompt_id=?").run(messageId, pendingId);
       this.sqlite.prepare("DELETE FROM pending_prompts WHERE id=?").run(pendingId);
       const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
       this.sqlite.prepare(`
-        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,sandbox_mode,queue_seq,status,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,'queued',?,?)
-      `).run(jobId, prompt.conversation_id, messageId, prompt.agent_model, prompt.reasoning_effort, prompt.sandbox_mode, next.value, now, now);
+        INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,sandbox_mode,queue_seq,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,'queued',?,?)
+      `).run(jobId, prompt.conversation_id, messageId, prompt.agent_model, prompt.reasoning_effort, prompt.agent_provider, prompt.sandbox_mode, next.value, now, now);
       this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, prompt.conversation_id);
       this.sqlite.exec("COMMIT");
     } catch (error) {
@@ -1146,8 +1237,8 @@ export class AppDatabase {
     const now = new Date().toISOString();
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
-      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,'user',?,?,?)")
-        .run(messageId, prompt.conversation_id, prompt.content, prompt.quote_excerpt, now);
+      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,created_at) VALUES(?,?,'user',?,?,?,?)")
+        .run(messageId, prompt.conversation_id, prompt.content, prompt.quote_excerpt, prompt.source_reference, now);
       this.sqlite.prepare("UPDATE files SET message_id=?,pending_prompt_id=NULL WHERE pending_prompt_id=?").run(messageId, pendingId);
       this.sqlite.prepare("DELETE FROM pending_prompts WHERE id=?").run(pendingId);
       this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, prompt.conversation_id);

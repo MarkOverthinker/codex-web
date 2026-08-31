@@ -1619,6 +1619,130 @@ test("quote-derived task creates an independent draft and sends a source-linked 
   assert.equal(detail.body.messages[0].source_reference.excerpt, "选中的来源文本");
 });
 
+test("side chat keeps an independent model and persists exact JSONL references", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-side-chat-api-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot,
+    username: "owner",
+    passwordHash: bcrypt.hashSync("Side-Chat-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Side-Chat-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const parentId = created.body.conversation.id as string;
+  const parentSelection = created.body.agentSelection as { model: string; reasoningEffort: string; sandbox: string; provider?: string | null };
+  const sourceMessageId = crypto.randomUUID();
+  const threadId = crypto.randomUUID();
+  const sourceCreatedAt = "2026-08-31T08:00:01.000Z";
+  const sourceContent = "第一段\n需要在侧边核对的语句\n最后一段";
+  instance.db.updateConversation(parentId, { codexThreadId: threadId });
+  instance.db.addMessage({
+    id: sourceMessageId,
+    conversation_id: parentId,
+    role: "assistant",
+    content: sourceContent,
+    created_at: sourceCreatedAt,
+  });
+  const codexHome = ensureTenant(tenantRoot, LEGACY_USER_ID).codexHome;
+  const rolloutDirectory = path.join(codexHome, "sessions", "2026", "08", "31");
+  fs.mkdirSync(rolloutDirectory, { recursive: true });
+  const rolloutPath = path.join(rolloutDirectory, `rollout-${threadId}.jsonl`);
+  const metaLine = JSON.stringify({ timestamp: "2026-08-31T08:00:00.000Z", type: "session_meta", payload: { id: threadId } });
+  const messageLine = JSON.stringify({
+    timestamp: sourceCreatedAt,
+    type: "response_item",
+    payload: { id: "assistant-item", type: "message", role: "assistant", content: [{ type: "output_text", text: sourceContent }] },
+  });
+  fs.writeFileSync(rolloutPath, `${metaLine}\n${messageLine}\n`, "utf8");
+
+  const sideCreated = await agent.post(`/codex-web/api/conversations/${parentId}/side-chat`).set("X-CSRF-Token", csrf).expect(201);
+  const sideId = sideCreated.body.conversation.id as string;
+  assert.notEqual(sideId, parentId);
+  assert.equal(sideCreated.body.agentSelection.model, parentSelection.model);
+  assert.deepEqual((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations.map((item: { id: string }) => item.id), [parentId]);
+  assert.equal((await agent.get(`/codex-web/api/conversations/${parentId}/side-chat`).expect(200)).body.conversation.id, sideId);
+
+  const options = await agent.get("/codex-web/api/agent-options").expect(200);
+  const alternateModel = options.body.models.find((model: { id: string }) => model.id !== parentSelection.model);
+  assert.ok(alternateModel);
+  const alternateEffort = alternateModel.reasoningEfforts[0] as string;
+  await agent.put(`/codex-web/api/conversations/${sideId}/agent-selection`)
+    .set("X-CSRF-Token", csrf)
+    .send({ model: alternateModel.id, reasoningEffort: alternateEffort, sandbox: parentSelection.sandbox, provider: alternateModel.provider ?? null })
+    .expect(200);
+  assert.equal((await agent.get(`/codex-web/api/conversations/${sideId}`).expect(200)).body.agentSelection.model, alternateModel.id);
+  assert.equal((await agent.get(`/codex-web/api/conversations/${parentId}`).expect(200)).body.agentSelection.model, parentSelection.model);
+
+  const referenced = await agent.post(`/codex-web/api/conversations/${parentId}/side-chat/reference`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceMessageId, excerpt: "需要在侧边核对的语句", content: "请检查这段判断" })
+    .expect(200);
+  assert.equal(referenced.body.conversation.id, sideId);
+  assert.equal(referenced.body.reference.sourceMessageId, sourceMessageId);
+  assert.deepEqual(referenced.body.reference.sourceLocation, {
+    kind: "codex-rollout",
+    threadId,
+    path: `sessions/2026/08/31/rollout-${threadId}.jsonl`,
+    line: 2,
+    byteOffset: Buffer.byteLength(`${metaLine}\n`, "utf8"),
+    recordType: "response_item",
+    jsonPointer: "/payload/content/0/text",
+    itemId: "assistant-item",
+    textStart: 4,
+    textEnd: 14,
+  });
+  assert.equal(referenced.body.composerDraft.source_reference.sourceLocation.line, 2);
+
+  await agent.post(`/codex-web/api/conversations/${sideId}/messages`)
+    .set("X-CSRF-Token", csrf)
+    .field("message", "请检查这段判断")
+    .field("quoteExcerpt", "需要在侧边核对的语句")
+    .field("useComposerDraft", "true")
+    .expect(202);
+  const firstSideMessage = instance.db.listMessages(sideId)[0];
+  assert.equal(JSON.parse(firstSideMessage.source_reference ?? "{}").sourceLocation.line, 2);
+
+  await agent.post(`/codex-web/api/conversations/${parentId}/side-chat/reference`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceMessageId, excerpt: "需要在侧边核对的语句", content: "再检查一次" })
+    .expect(200);
+  const queued = await agent.post(`/codex-web/api/conversations/${sideId}/messages`)
+    .set("X-CSRF-Token", csrf)
+    .field("message", "再检查一次")
+    .field("quoteExcerpt", "需要在侧边核对的语句")
+    .field("useComposerDraft", "true")
+    .expect(202);
+  assert.equal(queued.body.pendingPrompt.source_reference.sourceLocation.line, 2);
+  const sideDetail = await agent.get(`/codex-web/api/conversations/${sideId}`).expect(200);
+  assert.equal(sideDetail.body.pendingPrompts[0].source_reference.sourceMessageId, sourceMessageId);
+
+  await agent.post(`/codex-web/api/conversations/${sideId}/cancel`).set("X-CSRF-Token", csrf).expect(200);
+  await agent.delete(`/codex-web/api/conversations/${sideId}/pending-prompts/${queued.body.pendingPrompt.id}`).set("X-CSRF-Token", csrf).expect(204);
+  await agent.post(`/codex-web/api/conversations/${sideId}/archive`).set("X-CSRF-Token", csrf).expect(404);
+
+  await agent.post(`/codex-web/api/conversations/${parentId}/archive`).set("X-CSRF-Token", csrf).expect(200);
+  assert.ok(instance.db.getConversation(sideId)?.archived_at);
+  await agent.post(`/codex-web/api/conversations/${parentId}/restore`).set("X-CSRF-Token", csrf).expect(200);
+  assert.equal(instance.db.getConversation(sideId)?.archived_at, null);
+
+  const parentWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, parentId);
+  const sideWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, sideId);
+  await agent.delete(`/codex-web/api/conversations/${parentId}`).set("X-CSRF-Token", csrf).expect(204);
+  assert.ok(instance.db.getConversation(parentId)?.deleted_at);
+  assert.ok(instance.db.getConversation(sideId)?.deleted_at);
+  assert.equal(fs.existsSync(parentWorkspace), false);
+  assert.equal(fs.existsSync(sideWorkspace), false);
+  assert.equal(fs.existsSync(rolloutPath), false);
+});
+
 test("host mode restore derives a missing working directory from the rollout and recategorizes", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-restore-working-dir-test-"));
   const project = path.join(root, "projects", "restored-project");
