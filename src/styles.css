@@ -1609,6 +1609,8 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .provider-form-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 700; color: #4d5265; }
 .provider-form-fields input, .provider-form-fields select { height: 36px; padding: 0 10px; border: 1px solid #d8dbe7; border-radius: 9px; color: #34384b; background: #fff; font-size: 12px; }
 .provider-form-fields input:focus, .provider-form-fields select:focus { outline: none; border-color: #8f9ce8; box-shadow: 0 0 0 2px rgba(118, 134, 230, .16); }
+.provider-form-fields input:disabled { cursor: not-allowed; opacity: .58; }
+.provider-form-hint { padding: 9px 10px; border-radius: 9px; color: #666b7d; background: #f3f5fa; font-size: 11px; line-height: 1.55; }
 .provider-form-fields label.provider-form-check { flex-direction: row; align-items: center; gap: 8px; font-weight: 600; }
 .provider-form > footer { flex: 0 0 auto; min-height: 58px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 10px 15px; border-top: 1px solid #e5e7ee; }
 .provider-form > footer .primary-button { min-width: 110px; min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
@@ -1625,6 +1627,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .provider-form { border-color: #464852; background: #28292e; }
 :root[data-theme="dark"] .provider-form-fields input,
 :root[data-theme="dark"] .provider-form-fields select { border-color: #4a4c55; color: var(--ink); background: #212227; }
+:root[data-theme="dark"] .provider-form-hint { color: #b8bbc7; background: #22242a; }
 :root[data-theme="dark"] .provider-models-actions button { border-color: #4a4c55; color: #c9cad1; background: #26272c; }
 :root[data-theme="dark"] .preset-manager { border-color: #464852; background: #28292e; }
 :root[data-theme="dark"] .preset-manager > header,

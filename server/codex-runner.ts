@@ -19,6 +19,7 @@ import { latestUserCancellationContext } from "./cancellation-summary.js";
 import { hostTenantFor } from "./host-mode.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 import { mimeTypeForPath } from "./mime.js";
+import { resolveModelAdapter } from "./provider-manager.js";
 
 type Publish = (jobId: string, eventType: string, payload: unknown) => void;
 
@@ -188,6 +189,12 @@ export class CodexRunner {
         isolationReason: taskPolicy.isolated ? taskPolicy.reason : undefined,
         workingDirContext: workingDir ? { path: workingDir, workspace } : undefined,
       });
+      const modelAdapter = resolveModelAdapter(
+        this.db,
+        conversation.user_id,
+        selection.provider,
+        this.config.codexRelayPath,
+      );
       const request: TenantWorkerRunRequest = {
         jobId,
         userId: conversation.user_id,
@@ -208,6 +215,7 @@ export class CodexRunner {
         outputSchema: shouldGenerateTitle ? AUTO_TITLE_OUTPUT_SCHEMA : undefined,
         selection,
         modelProvider: selection.provider ?? null,
+        modelAdapter,
         sandboxMode: selection.sandbox ?? "workspace-write",
         networkAccessEnabled: taskPolicy.networkAccessEnabled,
         webSearchMode: taskPolicy.isolated ? "cached" : "live",

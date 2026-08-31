@@ -77,6 +77,13 @@ input.on("line", (line) => {
     imagePaths: [],
     model: "test-model",
     reasoningEffort: "medium",
+    modelProvider: "chat-provider",
+    runtimeModelProvider: {
+      id: "chat-provider",
+      name: "Chat Provider",
+      baseUrl: "http://127.0.0.1:43123/v1",
+      envKey: "CODEX_WEB_RELAY_TOKEN",
+    },
     sandboxMode: "workspace-write",
     library,
     shellEnvironment: {},
@@ -101,8 +108,15 @@ input.on("line", (line) => {
     "-c", 'approval_policy="on-request"',
     "-c", 'approvals_reviewer="auto_review"',
     "-c", 'sandbox_mode="workspace-write"',
+    "-c", 'model_providers.chat-provider.name="Chat Provider"',
+    "-c", 'model_providers.chat-provider.base_url="http://127.0.0.1:43123/v1"',
+    "-c", 'model_providers.chat-provider.wire_api="responses"',
+    "-c", 'model_providers.chat-provider.env_key="CODEX_WEB_RELAY_TOKEN"',
+    "-c", 'model_providers.chat-provider.requires_openai_auth=false',
+    "-c", 'model_providers.chat-provider.supports_websockets=false',
   ]);
   const threadStart = capture.messages.find((message) => message.method === "thread/start")?.params;
+  assert.equal(threadStart?.modelProvider, "chat-provider");
   assert.equal(threadStart?.approvalPolicy, "on-request");
   assert.equal(threadStart?.approvalsReviewer, "auto_review");
   assert.equal(threadStart?.sandbox, "workspace-write");

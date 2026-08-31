@@ -27,7 +27,7 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 - 按模型开关可见性、编辑模型 ID / 显示名 / 思考深度 / 输入模态 / 优先级；
 - 整体启用或禁用源。
 
-每次保存只读取当前登录用户的 provider 数据，用 `smol-toml` 原子重写该用户 Codex Home 的 `config.toml`，并全量重写该用户的 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理后，其配置段由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token`、`auto_review_model_override` 以及导入时保留的扩展字段。API 的查询、修改、删除和引用检查都带当前 Web 用户 ID，不能访问其他用户的源或模型。
+每次保存只读取当前登录用户的 provider 数据，用 `smol-toml` 原子重写该用户 Codex Home 的 `config.toml`，并全量重写该用户的 `models_cache.json`。未纳入管理的 provider 段会原样保留；纳入管理的原生 Responses 源由数据库生成并合并 `name`、`base_url`、`wire_api`、`requires_openai_auth`、`experimental_bearer_token`、`auto_review_model_override` 以及导入时保留的扩展字段。Chat/Anthropic 源不会写入持久 Codex 配置，避免当前 Codex 拒绝旧协议值；它们的可见模型仍会进入聚合目录，由任务运行时决定是否注入适配器。API 的查询、修改、删除和引用检查都带当前 Web 用户 ID，不能访问其他用户的源或模型。
 
 从旧版全局 provider 表升级时，数据库会把已有记录复制到升级时已存在的每个 Web 用户名下，再转为用户级复合主键。旧数据无法可靠判断最初由哪个用户创建，因此迁移优先保持各用户升级前可用的配置；迁移完成后，每份记录独立演进，新建用户不会继承这些源。
 
@@ -76,7 +76,9 @@ sudo node scripts/init-provider-sources.mjs \
 ## 限制与边界
 
 - 每个用户同一时间只允许一个启用中的官方 OAuth 源（该用户 Codex Home 内的 `auth.json` 只有一份）；其他官方账号可以改用 API key。
-- 当前 Codex 只接受 `wire_api = "responses"`。数据库中的 `chat` / `anthropic` 值仍是历史占位，直接写入当前 Codex 配置会失败；在协议适配器完成前不要启用。设计见 [Chat Completions 协议适配](CHAT_COMPLETIONS_ADAPTER_DESIGN.md)。
+- 当前 Codex 只接受 Responses。选择 `chat` 时，tenant worker 会按任务启动内置 `codex-relay`，把 Codex 的 `/responses` 请求转换到上游 `/chat/completions`；该源不能使用官方 OAuth，可配置上游 API key，也可连接明确允许无鉴权的本地端点。
+- Chat 模型必须正确支持流式响应和结构化 `tool_calls`。当前没有自动能力探测，也没有模型级协议覆盖；同一 provider 内不要混合 Responses-only 与 Chat-only 模型。
+- `anthropic` 适配尚未实现，选中后任务会明确拒绝执行。Legacy `/v1/completions` 不具备完整 Agent 工具协议，不支持接入。
 - 删除仍被会话或任务引用的源会被拒绝，请先禁用。
 - 任务运行期间不会重写配置：运行中的进程使用启动时的快照，新任务读到最新聚合配置。
 - 会话历史与 provider 无关：Codex 0.144+ 的线程按 `thread_id` 存储，切换 provider 后 resume 不会丢上下文。

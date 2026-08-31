@@ -24,6 +24,16 @@ ARG CODEX_CLI_VERSION=latest
 RUN npm install --global --prefix /opt/codex-baked "@openai/codex@${CODEX_CLI_VERSION}" \
     && /opt/codex-baked/bin/codex --version
 
+FROM python:3.12-slim AS codex-relay-baked
+ARG CODEX_RELAY_VERSION=0.5.8
+ADD https://files.pythonhosted.org/packages/82/e1/74e3a0bbb80984ad7911304c249848c1b873b2161569689b9fa51a9a0363/codex_relay-0.5.8-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl /tmp/codex-relay.whl
+RUN printf '%s  %s\n' 'd493b4fc30cbb3fe99f9c3cc367d44a121d43ae5478f2d9791d7bab11b2c8f9f' /tmp/codex-relay.whl | sha256sum -c - \
+    && python -m zipfile -e /tmp/codex-relay.whl /tmp/codex-relay \
+    && install -D -m 0755 "/tmp/codex-relay/codex_relay-${CODEX_RELAY_VERSION}.data/scripts/codex-relay" /opt/codex-relay/bin/codex-relay \
+    && install -D -m 0644 "/tmp/codex-relay/codex_relay-${CODEX_RELAY_VERSION}.dist-info/licenses/LICENSE" /opt/codex-relay/licenses/LICENSE \
+    && install -D -m 0644 "/tmp/codex-relay/codex_relay-${CODEX_RELAY_VERSION}.dist-info/sboms/codex-relay.cyclonedx.json" /opt/codex-relay/licenses/codex-relay.cyclonedx.json \
+    && /opt/codex-relay/bin/codex-relay --version
+
 FROM node:22-bookworm-slim AS runtime
 
 ARG UV_VERSION=0.11.28
@@ -38,6 +48,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=codex-baked /opt/codex-baked /opt/codex-baked
+COPY --from=codex-relay-baked /opt/codex-relay /opt/codex-relay
 COPY package.json ./
 COPY python-runtime ./python-runtime
 COPY scripts ./scripts
@@ -46,6 +57,7 @@ COPY skills ./skills
 ENV NODE_ENV=production \
     HOME=/home/cww \
     CODEX_HOME=/home/cww/.codex \
+    CODEX_RELAY_PATH=/opt/codex-relay/bin/codex-relay \
     PYTHON_RUNTIME_ROOT=/opt/cww-python \
     PYTHON_VERSION=3.12 \
     TZ=Asia/Shanghai

@@ -20,6 +20,19 @@ Codex app-server
 
 不建议恢复 Codex 已删除的 Chat Completions 客户端，也不建议通过降级 Codex 获得旧协议支持。外部 LiteLLM 一类网关可作为快速验证或高级部署选项，但不应作为默认硬依赖。
 
+## 实现状态（2026-08-31）
+
+当前已实现 provider 级 MVP，采用 `codex-relay 0.5.8` 作为 tenant worker 内的任务级 sidecar：
+
+- `wire_api = "responses"` 的源继续按原路径直连，行为不变。
+- `wire_api = "chat"` 的源保存在 codex-web 数据库和聚合模型目录中，但不再写入持久 `config.toml`。
+- 任务开始时，worker 在 `127.0.0.1` 随机端口启动 relay，并通过 Codex app-server 的 `-c model_providers.<id>...` 参数注入临时 Responses provider。
+- 上游 API key 只进入 relay 子进程环境；Codex 仅看到随机生成的本地 token。
+- relay 历史保存在会话工作区的 `.runtime/codex-relay/<providerId>`，用于同一会话后续任务恢复 `previous_response_id`。
+- Docker 镜像和 Linux x86_64 离线包均内置固定版本、固定 SHA256 的 relay 二进制；host mode 可通过 `CODEX_RELAY_PATH` 指向独立安装。
+
+当前仍是 **provider 级协议选择**，尚未实现模型级覆盖、自动能力探测和 UI 中的 Agent-ready 探测状态。Chat 模型必须实际支持流式 Chat Completions 与结构化 `tool_calls`；不满足条件的模型可能在工具调用阶段失败。`anthropic` 仍明确拒绝执行，Legacy Completions `/v1/completions` 不在支持范围内。
+
 ## 先澄清“Completions”
 
 需要区分两个完全不同的接口：
@@ -46,11 +59,11 @@ Codex app-server
 ### codex-web 侧事实
 
 - `Provider.wireApi` 当前允许 `responses | chat | anthropic`。
-- Provider 保存后会把该值原样写入用户 Codex Home 的 `config.toml`。
-- 文档已经注明 `chat` / `anthropic` 只能录入，任务会失败。
+- 原生 Responses provider 会写入用户 Codex Home 的 `config.toml`；Chat/Anthropic provider 只进入 codex-web 的模型目录，避免当前 Codex 拒绝旧 `wire_api` 值。
+- Chat provider 由任务级 `codex-relay` 转换；Anthropic provider 仍只能录入，任务会明确失败。
 - 当前协议配置是 provider 级；无法表达“同一 API 源中模型 A 支持 Responses、模型 B 只支持 Chat Completions”。
 
-这意味着当前 UI 中的 `chat` / `anthropic` 不是可工作的功能开关，而且在 Codex `0.149.1` 下可能导致整个配置加载失败，而不仅是选中该模型时失败。
+因此当前实现先保证 Chat provider 可用且不会污染持久 Codex 配置，模型级混合协议和 Anthropic 转换留待后续阶段。
 
 ## 目标与非目标
 

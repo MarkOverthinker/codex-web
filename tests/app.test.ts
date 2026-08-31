@@ -463,12 +463,22 @@ test("host working directory picker exposes favorites, manual paths, and per-con
 });
 test("offline bundle packaging ships the in-place upgrade script", () => {
   const packageScript = fs.readFileSync(path.join(process.cwd(), "scripts", "package-offline.sh"), "utf8");
+  const dockerfile = fs.readFileSync(path.join(process.cwd(), "Dockerfile"), "utf8");
   const upgradeScript = fs.readFileSync(path.join(process.cwd(), "scripts", "upgrade.sh"), "utf8");
   assert.match(packageScript, /copying upgrade script/);
   assert.match(packageScript, /cp "\$REPO_ROOT\/scripts\/upgrade.sh" "\$STAGING\/upgrade.sh"/);
   assert.match(packageScript, /升级已部署的实例/);
   assert.match(packageScript, /env_runtime_path="\$\(sed -n 's\/\^CODEX_RUNTIME_PATH=\/\/p'/);
   assert.match(packageScript, /export CODEX_RUNTIME_PATH="\$\{CODEX_RUNTIME_PATH:-\$\{env_runtime_path:-\$PACKAGE_ROOT\/bin\/codex\}\}"/);
+  assert.match(packageScript, /CODEX_RELAY_VERSION="0\.5\.8"/);
+  assert.match(packageScript, /CODEX_RELAY_WHEEL_SHA256="d493b4fc30cbb3fe99f9c3cc367d44a121d43ae5478f2d9791d7bab11b2c8f9f"/);
+  assert.match(packageScript, /install -m 0755 .*codex-relay.* "\$STAGING\/bin\/codex-relay"/);
+  assert.match(packageScript, /export CODEX_RELAY_PATH="\$\{CODEX_RELAY_PATH:-\$\{env_relay_path:-\$PACKAGE_ROOT\/bin\/codex-relay\}\}"/);
+  assert.match(dockerfile, /ARG CODEX_RELAY_VERSION=0\.5\.8/);
+  assert.match(dockerfile, /d493b4fc30cbb3fe99f9c3cc367d44a121d43ae5478f2d9791d7bab11b2c8f9f/);
+  assert.match(dockerfile, /sha256sum -c -/);
+  assert.match(dockerfile, /COPY --from=codex-relay-baked \/opt\/codex-relay \/opt\/codex-relay/);
+  assert.match(dockerfile, /CODEX_RELAY_PATH=\/opt\/codex-relay\/bin\/codex-relay/);
   assert.match(upgradeScript, /\.\/upgrade\.sh <离线包\.tar\.zst> \[部署根\] \[--no-start\]/);
   assert.match(upgradeScript, /备份运行数据到:/);
   assert.match(upgradeScript, /只同步程序文件/);
@@ -975,6 +985,23 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
     optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
   };
   assert.doesNotThrow(() => validateTenantWorkerRequest(request, owner.userId, tenantRoot));
+  const relayRequest: TenantWorkerRunRequest = {
+    ...request,
+    modelProvider: "chat-provider",
+    modelAdapter: {
+      kind: "codex-relay",
+      executablePath: "/opt/codex-relay/bin/codex-relay",
+      providerId: "chat-provider",
+      providerName: "Chat Provider",
+      upstreamBaseUrl: "https://chat.example.com/v1",
+      apiKey: "sk-chat",
+    },
+  };
+  assert.doesNotThrow(() => validateTenantWorkerRequest(relayRequest, owner.userId, tenantRoot));
+  assert.throws(
+    () => validateTenantWorkerRequest({ ...relayRequest, modelProvider: "other-provider" }, owner.userId, tenantRoot),
+    /adapter provider mismatch/,
+  );
   assert.throws(() => validateTenantWorkerRequest({ ...request, sandboxMode: "read-only" as never }, owner.userId, tenantRoot), /Invalid worker sandbox mode/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, tenantRoot: path.join(os.tmpdir(), "other") }, owner.userId, tenantRoot), /path mismatch/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, imagePaths: [path.join(tenantRoot, "..", "secret.png")] }, owner.userId, tenantRoot), /escapes workspace/);

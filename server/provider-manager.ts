@@ -6,6 +6,7 @@ import type { AppConfig } from "./config.js";
 import type { AppDatabase, ProviderModelRow, ProviderRow } from "./db.js";
 import { newId } from "./paths.js";
 import type { AgentModelOption, ModelReasoningEffort } from "./model-options.js";
+import type { CodexRelayRequest } from "./tenant-worker-protocol.js";
 
 const MODEL_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{1,80}$/i;
 const DEFAULT_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
@@ -198,12 +199,45 @@ export function listProvidersPublic(db: AppDatabase, userId: string): ProviderPu
   return db.listProviders(userId).map(publicProvider);
 }
 
+export function resolveModelAdapter(
+  db: AppDatabase,
+  userId: string,
+  providerId: string | null | undefined,
+  codexRelayPath: string,
+): CodexRelayRequest | undefined {
+  if (!providerId) return undefined;
+  const provider = db.getProvider(userId, providerId);
+  if (!provider?.enabled) throw new Error("所选 API 源当前不可用，请刷新页面后重试。");
+  if (provider.wire_api === "responses") return undefined;
+  if (provider.wire_api === "anthropic") throw new Error("Anthropic 协议适配尚未实现，请选择 Responses 或 Chat Completions 源。");
+  if (provider.requires_openai_auth) {
+    throw new Error("Chat Completions 适配源不能使用官方 OAuth，请改用上游 API Key 或无鉴权端点。");
+  }
+  return {
+    kind: "codex-relay",
+    executablePath: codexRelayPath,
+    providerId: provider.id,
+    providerName: provider.name,
+    upstreamBaseUrl: provider.base_url,
+    apiKey: provider.api_key,
+  };
+}
+
 export function listProviderModelsPublic(db: AppDatabase, userId: string, providerId?: string): ProviderModelPublic[] {
   return db.listProviderModels(userId, providerId).map(publicModel);
 }
 
 export function providerManaged(db: AppDatabase, userId: string): boolean {
   return db.listProviders(userId).length > 0;
+}
+
+export function assertProviderProtocolConfiguration(next: {
+  wireApi: ProviderRow["wire_api"];
+  requiresOpenaiAuth: boolean;
+}): void {
+  if (next.wireApi !== "responses" && next.requiresOpenaiAuth) {
+    throw new Error("只有原生 Responses 源支持官方 OAuth；Chat Completions 适配源请使用上游 API Key 或无鉴权端点。");
+  }
 }
 
 export function assertOfficialOAuthLimit(db: AppDatabase, userId: string, next: { id?: string; requiresOpenaiAuth?: boolean; enabled?: boolean }): void {
@@ -461,8 +495,9 @@ export function writeProviderConfig(codexHome: string, db: AppDatabase, userId: 
     const catalogPath = path.join(codexHome, "models_cache.json");
     config.model_catalog_json = catalogPath;
   }
-  if (enabled.length > 0) {
-    const providerEntries = enabled.map((provider) => {
+  const nativeResponsesProviders = enabled.filter((provider) => provider.wire_api === "responses");
+  if (nativeResponsesProviders.length > 0) {
+    const providerEntries = nativeResponsesProviders.map((provider) => {
       const definition: Record<string, unknown> = {
         name: provider.name,
         base_url: provider.base_url,

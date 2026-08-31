@@ -39,6 +39,7 @@ import {
 } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentExecutionSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
 import {
+  assertProviderProtocolConfiguration,
   assertOfficialOAuthLimit,
   ensureProviderConfig,
   importCatalogModels,
@@ -883,6 +884,7 @@ export function createApp(overrides: AppOverrides = {}) {
       ? raw.autoReviewModelOverride.trim().slice(0, 200)
       : null;
     try {
+      assertProviderProtocolConfiguration({ wireApi, requiresOpenaiAuth });
       assertOfficialOAuthLimit(db, session.user_id, { requiresOpenaiAuth, enabled: raw?.enabled !== false });
       const provider = db.createProvider({
         userId: session.user_id,
@@ -939,6 +941,10 @@ export function createApp(overrides: AppOverrides = {}) {
     if (typeof raw?.requiresOpenaiAuth === "boolean") fields.requiresOpenaiAuth = raw.requiresOpenaiAuth;
     if (typeof raw?.enabled === "boolean") fields.enabled = raw.enabled;
     try {
+      assertProviderProtocolConfiguration({
+        wireApi: fields.wireApi ?? provider.wire_api,
+        requiresOpenaiAuth: fields.requiresOpenaiAuth ?? Boolean(provider.requires_openai_auth),
+      });
       assertOfficialOAuthLimit(db, session.user_id, { id, ...fields });
       const updated = db.updateProvider(session.user_id, id, fields);
       if (!updated) return res.status(404).json({ error: "源不存在。" });

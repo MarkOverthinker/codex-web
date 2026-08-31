@@ -9,12 +9,14 @@ import { AppDatabase, LEGACY_USER_ID } from "../server/db.js";
 import type { AppConfig } from "../server/config.js";
 import { loadAgentOptions, resolveAgentExecutionSelection, resolveAgentSelection } from "../server/model-options.js";
 import {
+  assertProviderProtocolConfiguration,
   assertOfficialOAuthLimit,
   importCatalogModels,
   importProvidersFromConfig,
   listCatalogModelOptions,
   listProviderModelsPublic,
   reassignProviderModelSlugs,
+  resolveModelAdapter,
   writeProviderConfig,
 } from "../server/provider-manager.js";
 
@@ -437,5 +439,40 @@ test("importCatalogModels imports provider-specific model files", () => {
   assert.deepEqual(listProviderModelsPublic(db, LEGACY_USER_ID, "deepseek").map((model) => model.slug).sort(), ["deepseek-v4-flash", "gpt-5.6-sol"]);
   importCatalogModels("deepseek", codexHome, db, LEGACY_USER_ID);
   assert.equal(db.listProviderModels(LEGACY_USER_ID, "deepseek").length, 2, "re-import skips existing models");
+  db.close();
+});
+
+test("chat providers use codex-relay at runtime and stay out of persistent Codex config", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const db = testDb(root);
+  db.createProvider({ userId: LEGACY_USER_ID, id: "native", name: "Native", baseUrl: "https://responses.example.com/v1", wireApi: "responses" });
+  db.createProvider({ userId: LEGACY_USER_ID, id: "chat", name: "Chat", baseUrl: "https://chat.example.com/v1", apiKey: "sk-chat", wireApi: "chat" });
+  db.createProvider({ userId: LEGACY_USER_ID, id: "anthropic", name: "Anthropic", baseUrl: "https://anthropic.example.com", wireApi: "anthropic" });
+  db.createProviderModel({ userId: LEGACY_USER_ID, id: "native-model", providerId: "native", modelId: "native-model", slug: "native-model", displayName: "Native" });
+  db.createProviderModel({ userId: LEGACY_USER_ID, id: "chat-model", providerId: "chat", modelId: "chat-model", slug: "chat-model", displayName: "Chat" });
+  writeProviderConfig(codexHome, db, LEGACY_USER_ID);
+
+  const config = parseToml(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8")) as Record<string, unknown>;
+  const providers = config.model_providers as Record<string, unknown>;
+  assert.ok(providers.native);
+  assert.equal(providers.chat, undefined);
+  assert.equal(providers.anthropic, undefined);
+  assert.deepEqual(resolveModelAdapter(db, LEGACY_USER_ID, "chat", "/opt/codex-relay"), {
+    kind: "codex-relay",
+    executablePath: "/opt/codex-relay",
+    providerId: "chat",
+    providerName: "Chat",
+    upstreamBaseUrl: "https://chat.example.com/v1",
+    apiKey: "sk-chat",
+  });
+  assert.equal(resolveModelAdapter(db, LEGACY_USER_ID, "native", "/opt/codex-relay"), undefined);
+  assert.throws(() => resolveModelAdapter(db, LEGACY_USER_ID, "anthropic", "/opt/codex-relay"), /Anthropic 协议适配尚未实现/);
+  assert.doesNotThrow(() => assertProviderProtocolConfiguration({ wireApi: "chat", requiresOpenaiAuth: false }));
+  assert.throws(
+    () => assertProviderProtocolConfiguration({ wireApi: "chat", requiresOpenaiAuth: true }),
+    /只有原生 Responses 源支持官方 OAuth/,
+  );
   db.close();
 });

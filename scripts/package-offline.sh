@@ -4,6 +4,7 @@
 # The bundle includes:
 #   - the production build (dist + dist-server)
 #   - production node_modules (including the bundled Codex CLI for linux-x64)
+#   - the pinned codex-relay binary, license, and SBOM
 #   - a bundled Node.js runtime (optional, enabled by default)
 #   - the shared Python runtime (uv + managed Python + wheels cache)
 #   - start.sh, which generates .env, repairs the Python runtime offline, and
@@ -16,6 +17,9 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLATFORM="linux-x64"
 NODE_VERSION="${NODE_VERSION:-22.21.0}"
+CODEX_RELAY_VERSION="0.5.8"
+CODEX_RELAY_WHEEL_URL="https://files.pythonhosted.org/packages/82/e1/74e3a0bbb80984ad7911304c249848c1b873b2161569689b9fa51a9a0363/codex_relay-0.5.8-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+CODEX_RELAY_WHEEL_SHA256="d493b4fc30cbb3fe99f9c3cc367d44a121d43ae5478f2d9791d7bab11b2c8f9f"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/tmp/offline-package-output}"
 PACKAGE_DIR="codex-web"
 
@@ -122,8 +126,19 @@ else
   rmdir "$STAGING/node"
 fi
 
+echo "==> bundling codex-relay $CODEX_RELAY_VERSION ($PLATFORM)"
+relay_wheel="$WORK/codex-relay.whl"
+relay_extract="$WORK/codex-relay-wheel"
+curl -fsSL -o "$relay_wheel" "$CODEX_RELAY_WHEEL_URL"
+printf '%s  %s\n' "$CODEX_RELAY_WHEEL_SHA256" "$relay_wheel" | sha256sum -c -
+mkdir -p "$relay_extract"
+"$REPO_ROOT/data/python/shared/bin/python" -m zipfile -e "$relay_wheel" "$relay_extract"
+mkdir -p "$STAGING/bin" "$STAGING/licenses/codex-relay"
+install -m 0755 "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.data/scripts/codex-relay" "$STAGING/bin/codex-relay"
+cp "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.dist-info/licenses/LICENSE" "$STAGING/licenses/codex-relay/LICENSE"
+cp "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.dist-info/sboms/codex-relay.cyclonedx.json" "$STAGING/licenses/codex-relay/codex-relay.cyclonedx.json"
+
 echo "==> writing launchers"
-mkdir -p "$STAGING/bin"
 cat > "$STAGING/autostart.sh" <<'EOF'
 #!/usr/bin/env bash
 # Rootless background daemon entry point. Delegates to the bundled launcher.
@@ -212,6 +227,8 @@ export APP_USERNAME="${APP_USERNAME:-$(id -un)}"
 # bundled CLI when neither the shell environment nor .env provides a path.
 env_runtime_path="$(sed -n 's/^CODEX_RUNTIME_PATH=//p' "$APP_ROOT/.env" 2>/dev/null | tail -n 1)"
 export CODEX_RUNTIME_PATH="${CODEX_RUNTIME_PATH:-${env_runtime_path:-$PACKAGE_ROOT/bin/codex}}"
+env_relay_path="$(sed -n 's/^CODEX_RELAY_PATH=//p' "$APP_ROOT/.env" 2>/dev/null | tail -n 1)"
+export CODEX_RELAY_PATH="${CODEX_RELAY_PATH:-${env_relay_path:-$PACKAGE_ROOT/bin/codex-relay}}"
 
 echo "Starting codex-web at http://127.0.0.1:${PORT:-37821}${BASE_PATH:-/codex-web}/"
 cd "$APP_ROOT"
@@ -227,7 +244,7 @@ cat > "$STAGING/README-OFFLINE.md" <<'EOF'
 # Codex Web 离线便携包
 
 本目录是 codex-web 的 Linux x86_64 便携包：解压后运行 `./start.sh` 即可启动
-Web 服务。包内已内置 Node.js、生产依赖（含 Codex CLI）和共享 Python 运行时；
+Web 服务。包内已内置 Node.js、生产依赖（含 Codex CLI）、codex-relay 和共享 Python 运行时；
 首次启动会生成 `.env`、引导设置登录密码，并在必要时用包内 wheels 缓存离线重建
 Python 运行时。
 
@@ -369,6 +386,9 @@ scripts/package-offline.sh --output-dir /path/to/outputs
 启动并等待健康检查就绪。部署根不是当前目录时可作为第二个参数传入；只想
 同步文件、由你手动启动时加 `--no-start`。升级完成后会输出备份路径与回滚命令。
 EOF
+
+echo "==> checking bundled codex-relay"
+"$STAGING/bin/codex-relay" --version
 
 echo "==> checking bundled Codex CLI"
 if [[ "$SKIP_NODE" -ne 1 ]]; then
