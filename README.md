@@ -9,7 +9,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 ## What it includes
 
 - A responsive React chat interface for Codex CLI
-- A persistent side chat per primary conversation, with an independent Codex thread, per-side model/reasoning selection, and one-click source quotes resolved to rollout JSONL path, line, byte offset, JSON Pointer, item ID, and character range
+- A persistent side chat per primary conversation, with an independently resizable desktop pane, an independent Codex thread, per-side model/reasoning selection, and one-click source quotes resolved to rollout JSONL path, line, byte offset, JSON Pointer, item ID, and character range
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions; queued jobs can also be promoted to start immediately
 - Persistent attachments and generated deliverables
 - Side-by-side in-page previews for Markdown, code, config (JSON/YAML/TOML/XML and other text-based formats), text, CSV, PDF, and image outputs, with a per-conversation output-file strip; uploaded `.md` attachments are recognized by extension and rendered as Markdown in the same panel; every attachment and output shows its real server path with a copy button, including referenced local files that were not registered as attachments

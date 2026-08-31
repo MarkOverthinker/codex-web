@@ -38,7 +38,7 @@ If the source message has not reached a persisted Codex rollout yet, creating a 
 
 ## Interface
 
-- Desktop: a fixed-width right pane beside the main conversation.
+- Desktop: a right pane beside the main conversation; drag its left edge to adjust the width, and preserve the setting locally for the next visit.
 - Mobile: a full-height overlay pane.
 - Header: close action, independent model and reasoning selectors, and running state.
 - Body: compact message history using the existing Markdown safety/rendering rules.

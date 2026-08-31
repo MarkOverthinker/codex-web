@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -34,6 +34,11 @@ type SideChatPaneProps = {
   onClose: () => void;
   onError: (message: string) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
+  width: number;
+  widthMin: number;
+  widthMax: number;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
 };
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
@@ -82,7 +87,7 @@ function SideMessage({ message, citationFiles, onOpenSourceReference }: { messag
   </article>;
 }
 
-export function SideChatPane({ parentConversation, agentOptions, referenceRequest, onReferenceHandled, onClose, onError, onOpenSourceReference }: SideChatPaneProps) {
+export function SideChatPane({ parentConversation, agentOptions, referenceRequest, onReferenceHandled, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [input, setInput] = useState("");
   const [reference, setReference] = useState<MessageSourceReference | null>(null);
@@ -230,7 +235,19 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
   const busy = Boolean(detail?.activeJob || detail?.pendingPrompts.length);
   const citationFiles = detail ? [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)] : [];
 
-  return <aside className="side-chat-pane" aria-label="侧边聊天">
+  return <aside className="side-chat-pane" style={{ width }} aria-label="侧边聊天">
+    <div
+      className="side-chat-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="调整侧边聊天宽度"
+      aria-valuemin={widthMin}
+      aria-valuemax={widthMax}
+      aria-valuenow={Math.round(width)}
+      tabIndex={0}
+      onPointerDown={onResizeStart}
+      onKeyDown={onResizeKeyDown}
+    />
     <header className="side-chat-header">
       <div><span>SECONDARY THREAD</span><strong><Bot size={16} />侧边聊天</strong></div>
       <button type="button" className="icon-button" onClick={onClose} aria-label="关闭侧边聊天"><X size={18} /></button>
