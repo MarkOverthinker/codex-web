@@ -342,6 +342,19 @@ test("side chat pane resizes independently by pointer and keyboard", () => {
   assert.match(styles, /\.side-chat-pane \{ width: 100vw !important; \}/);
 });
 
+test("side chat offers a one-click primary conversation context reference", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "side-chat-pane.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
+  assert.match(paneSource, /引用主对话上下文/);
+  assert.match(paneSource, /api\.setSideChatContext\(parentConversation\.id\)/);
+  assert.match(apiSource, /setSideChatContext:/);
+  assert.match(serverSource, /side-chat\/context/);
+  assert.match(serverSource, /buildConversationContextExcerpt\(messages\)/);
+  assert.match(appSource, /<SideChatPane/);
+});
+
 test("chat font sizing keeps readable bounds and scales from the default", () => {
   assert.equal(normalizeChatFontSize(undefined), CHAT_FONT_SIZE_DEFAULT);
   assert.equal(normalizeChatFontSize("18"), 18);
@@ -1727,6 +1740,15 @@ test("side chat keeps an independent model and persists exact JSONL references",
     .expect(202);
   const firstSideMessage = instance.db.listMessages(sideId)[0];
   assert.equal(JSON.parse(firstSideMessage.source_reference ?? "{}").sourceLocation.line, 2);
+
+  const contextReferenced = await agent.post(`/codex-web/api/conversations/${parentId}/side-chat/context`)
+    .set("X-CSRF-Token", csrf)
+    .expect(200);
+  assert.equal(contextReferenced.body.conversation.id, sideId);
+  assert.equal(contextReferenced.body.reference.kind, "conversation-context");
+  assert.equal(contextReferenced.body.reference.messageCount, 1);
+  assert.match(contextReferenced.body.reference.excerpt, /Codex/);
+  assert.equal(contextReferenced.body.composerDraft.source_reference.kind, "conversation-context");
 
   await agent.post(`/codex-web/api/conversations/${parentId}/side-chat/reference`)
     .set("X-CSRF-Token", csrf)

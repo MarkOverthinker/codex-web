@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, Bot, Copy, CornerUpLeft, LoaderCircle, Square, X } from "lucide-react";
+import { ArrowUp, Bot, Copy, CornerUpLeft, LoaderCircle, Quote, Square, X } from "lucide-react";
 import {
   api,
   type AgentModelOption,
@@ -49,7 +49,7 @@ function modelLabel(model: AgentModelOption): string {
   return model.providerName ? `${model.providerName} · ${model.label}` : model.label;
 }
 
-function sourceLocationText(reference: MessageSourceReference): string {
+function sourceLocationText(reference: Extract<MessageSourceReference, { sourceMessageId: string }>): string {
   return reference.sourceLocation
     ? `thread ${reference.sourceLocation.threadId} · ${formatSourceLocation(reference.sourceLocation)}`
     : "JSONL 位置不可用";
@@ -57,17 +57,18 @@ function sourceLocationText(reference: MessageSourceReference): string {
 
 function SourceReferenceCard({ reference, onOpen, onClear }: {
   reference: MessageSourceReference;
-  onOpen: () => void;
+  onOpen?: () => void;
   onClear?: () => void;
 }) {
-  const location = sourceLocationText(reference);
-  return <div className="side-chat-reference">
-    <div className="side-chat-reference-heading"><CornerUpLeft size={14} /><strong>主对话引用</strong></div>
+  const isContext = reference.kind === "conversation-context";
+  const location = isContext ? `当前主对话 · ${reference.messageCount} 条消息` : sourceLocationText(reference);
+  return <div className={`side-chat-reference${isContext ? " context" : ""}`}>
+    <div className="side-chat-reference-heading"><CornerUpLeft size={14} /><strong>{isContext ? "主对话上下文" : "主对话引用"}</strong></div>
     <blockquote>{reference.excerpt}</blockquote>
     <div className="side-chat-reference-location">
-      <button type="button" onClick={onOpen} title="跳转到主对话原消息">{reference.sourceConversationTitle}</button>
+      {onOpen ? <button type="button" onClick={onOpen} title="跳转到主对话原消息">{reference.sourceConversationTitle}</button> : <span>{reference.sourceConversationTitle}</span>}
       <code title={location}>{location}</code>
-      <button type="button" className="icon-button" onClick={() => void copyText(location)} aria-label="复制 JSONL 定位" title="复制 JSONL 定位"><Copy size={13} /></button>
+      {!isContext && <button type="button" className="icon-button" onClick={() => void copyText(location)} aria-label="复制 JSONL 定位" title="复制 JSONL 定位"><Copy size={13} /></button>}
       {onClear && <button type="button" className="icon-button" onClick={onClear} aria-label="移除引用" title="移除引用"><X size={13} /></button>}
     </div>
   </div>;
@@ -76,7 +77,7 @@ function SourceReferenceCard({ reference, onOpen, onClear }: {
 function SideMessage({ message, citationFiles, onOpenSourceReference }: { message: Message; citationFiles: Message["files"]; onOpenSourceReference: (reference: MessageSourceReference) => void }) {
   return <article className={`side-chat-message ${message.role}`}>
     <header><span>{message.role === "assistant" ? "Codex" : "你"}</span><time dateTime={message.created_at}>{DATE_FORMATTER.format(new Date(message.created_at))}</time></header>
-    {message.source_reference && <SourceReferenceCard reference={message.source_reference} onOpen={() => onOpenSourceReference(message.source_reference!)} />}
+    {message.source_reference && <SourceReferenceCard reference={message.source_reference} onOpen={message.source_reference.kind === "conversation-context" ? undefined : () => onOpenSourceReference(message.source_reference!)} />}
     {message.role === "assistant"
       ? <div className="side-chat-markdown"><ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}
@@ -94,6 +95,7 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [selectionSaving, setSelectionSaving] = useState(false);
+  const [contextSaving, setContextSaving] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef(input);
   const hydratedConversationRef = useRef<string | null>(null);
@@ -204,6 +206,21 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
     }
   }
 
+  async function citeConversationContext() {
+    if (contextSaving || !detail) return;
+    setContextSaving(true);
+    try {
+      const result = await api.setSideChatContext(parentConversation.id);
+      setReference(result.reference);
+      await refresh(result.conversation.id, false);
+      window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".side-chat-composer textarea")?.focus(), 0);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "主对话上下文引用失败");
+    } finally {
+      setContextSaving(false);
+    }
+  }
+
   function changeModel(modelId: string) {
     if (!detail || !agentOptions) return;
     const model = agentOptions.models.find((candidate) => candidate.id === modelId);
@@ -269,11 +286,14 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
       {loading && !detail ? <div className="side-chat-empty"><LoaderCircle className="spin" size={20} /><span>正在准备侧边线程…</span></div>
         : detail?.messages.length
           ? detail.messages.map((message) => <SideMessage key={message.id} message={message} citationFiles={citationFiles} onOpenSourceReference={onOpenSourceReference} />)
-          : <div className="side-chat-empty"><Bot size={24} /><strong>独立上下文，随时追问</strong><span>选中主对话内容后点“侧边提问”，或直接输入问题。</span></div>}
+          : <div className="side-chat-empty"><Bot size={24} /><strong>独立上下文，随时追问</strong><span>点击“引用主对话上下文”，或选中主消息内容后点“侧边提问”。</span></div>}
       {busy && <div className="side-chat-running"><LoaderCircle className="spin" size={14} /><span>{detail?.activeJob?.status === "running" ? "正在处理" : "等待执行"}</span></div>}
     </div>
     <form className="side-chat-composer" onSubmit={submit}>
-      {reference && <SourceReferenceCard reference={reference} onOpen={() => onOpenSourceReference(reference)} onClear={() => setReference(null)} />}
+      <div className="side-chat-context-actions">
+        <button type="button" onClick={() => void citeConversationContext()} disabled={!detail || contextSaving || submitting} title="引用当前主对话中的全部用户和 Codex 消息"><Quote size={13} />{contextSaving ? "正在整理主对话…" : "引用主对话上下文"}</button>
+      </div>
+      {reference && <SourceReferenceCard reference={reference} onOpen={reference.kind === "conversation-context" ? undefined : () => onOpenSourceReference(reference)} onClear={() => setReference(null)} />}
       <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={reference ? "基于这段引用继续提问…" : "在侧边线程中提问…"} rows={3} disabled={!detail || submitting} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
       }} />

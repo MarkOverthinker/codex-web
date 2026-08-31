@@ -1209,6 +1209,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   }
 
   function openSourceReference(reference: MessageSourceReference) {
+    if (reference.kind === "conversation-context") return;
     pendingSourceFocusRef.current = {
       conversationId: reference.sourceConversationId,
       messageId: reference.sourceMessageId,

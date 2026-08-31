@@ -39,6 +39,7 @@ If the source message has not reached a persisted Codex rollout yet, creating a 
 ## Interface
 
 - Desktop: a right pane beside the main conversation; drag its left edge to adjust the width, and preserve the setting locally for the next visit.
+- Context shortcut: click **引用主对话上下文** to snapshot all persisted user and assistant messages from the primary conversation into the side composer; this is separate from selecting text in one message.
 - Mobile: a full-height overlay pane.
 - Header: close action, independent model and reasoning selectors, and running state.
 - Body: compact message history using the existing Markdown safety/rendering rules.

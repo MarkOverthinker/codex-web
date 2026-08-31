@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
-import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt } from "../src/message-source.js";
+import { buildConversationContextExcerpt, buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt } from "../src/message-source.js";
 
 test("derived task prompt carries only the quoted excerpt and user instruction", () => {
   assert.equal(
@@ -62,6 +62,25 @@ test("source reference normalization keeps a safe client-visible snapshot", () =
     ...located,
     sourceLocation: { ...located!.sourceLocation, path: "../outside.jsonl" },
   }), null);
+});
+
+test("conversation context references preserve all messages in the derived prompt", () => {
+  const excerpt = buildConversationContextExcerpt([
+    { role: "user", content: "请检查这个任务" },
+    { role: "assistant", content: "我会检查相关文件" },
+  ]);
+  const reference = normalizeMessageSourceReference({
+    kind: "conversation-context",
+    sourceConversationId: "00000000-0000-4000-8000-000000000001",
+    sourceConversationTitle: "主任务",
+    excerpt,
+    messageCount: 2,
+  });
+  assert.equal(reference?.kind, "conversation-context");
+  assert.match(buildDerivedTaskPrompt("继续处理", reference!), /请基于以下主对话上下文执行我的任务/);
+  assert.match(buildDerivedTaskPrompt("继续处理", reference!), /用户：\n请检查这个任务/);
+  assert.match(buildDerivedTaskPrompt("继续处理", reference!), /Codex：\n我会检查相关文件/);
+  assert.match(buildDerivedTaskPrompt("继续处理", reference!), /主对话中的 2 条消息/);
 });
 
 test("existing ask-agent draft builder remains unchanged for normal quotes", () => {
