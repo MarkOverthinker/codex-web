@@ -223,8 +223,15 @@ every directory on the CLI path is world-searchable.
 If managed API sources use Chat Completions, `CODEX_RELAY_PATH` must likewise
 point to a `codex-relay` executable available to every tenant. Docker images
 and the Linux x86_64 offline bundle already set this path to their bundled
-binary; a source checkout running in host mode must install it separately or
-set the variable explicitly.
+binary. A source checkout running in host mode must install the binary
+separately. The pinned release is the manylinux x86_64 wheel from
+`files.pythonhosted.org` for `codex-relay 0.5.8`; after extracting it, place
+the `codex-relay` script somewhere every tenant can traverse and execute, for
+example `/usr/local/bin/codex-relay`, and set `CODEX_RELAY_PATH` in `.env` to
+that absolute path. If the path is missing, Chat Completions tasks fail with
+"找不到 codex-relay 可执行文件". A path under a tenant user's home directory
+or behind a `0700` directory will fail with `EACCES` for the same reason as a
+private Codex CLI.
 
 Stop any manually started `node dist-server/server/index.js` process first,
 otherwise the new service fails to bind the port (the unit restarts and binds
