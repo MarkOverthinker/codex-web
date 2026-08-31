@@ -19,7 +19,7 @@ import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
-import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt, type MessageSourceReference } from "../src/message-source.js";
+import { buildConversationContextExcerpt, buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt, type MessageSourceReference } from "../src/message-source.js";
 import {
   AppDatabase,
   MAX_CONVERSATION_PRESET_PROMPTS,
@@ -1476,6 +1476,35 @@ export function createApp(overrides: AppOverrides = {}) {
     const conversation = db.createSideConversation(parent, id, selection);
     db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
     return res.status(201).json({ conversation, agentSelection: selection });
+  });
+
+  api.post("/conversations/:id/side-chat/context", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再引用。" });
+    const messages = db.listMessages(parent.id)
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map((message) => ({ role: message.role as "user" | "assistant", content: message.content }));
+    const reference = normalizeMessageSourceReference({
+      kind: "conversation-context",
+      sourceConversationId: parent.id,
+      sourceConversationTitle: parent.title,
+      excerpt: buildConversationContextExcerpt(messages),
+      messageCount: messages.length,
+    });
+    if (!reference || reference.kind !== "conversation-context") return res.status(409).json({ error: "当前主对话没有可引用的上下文。" });
+    let conversation = db.getSideConversation(parent.id, session.user_id);
+    if (!conversation) {
+      const id = newId();
+      workspaceFor(session.user_id, id);
+      const selection = conversationAgentSelection(parent);
+      conversation = db.createSideConversation(parent, id, selection);
+      db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
+    }
+    const currentDraft = db.getComposerDraft(conversation.id);
+    const composerDraft = db.saveComposerDraft(conversation.id, currentDraft?.content ?? "", reference.excerpt, JSON.stringify(reference));
+    return res.json({ conversation, agentSelection: conversationAgentSelection(conversation), composerDraft: composerDraftForClient(composerDraft, session.user_id), reference });
   });
 
   api.post("/conversations/:id/side-chat/reference", async (req, res) => {

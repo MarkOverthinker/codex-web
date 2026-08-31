@@ -1691,7 +1691,12 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .side-chat-markdown > :first-child { margin-top: 0; }
 .side-chat-markdown > :last-child { margin-bottom: 0; }
 .side-chat-markdown pre { max-width: 100%; overflow: auto; }
+.side-chat-context-actions { display: flex; }
+.side-chat-context-actions button { min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #d7dcef; border-radius: 8px; color: #56618f; background: #f1f3fa; cursor: pointer; font-size: 10px; font-weight: 750; }
+.side-chat-context-actions button:hover { border-color: #aeb7df; color: var(--indigo); background: #eef1fa; }
+.side-chat-context-actions button:disabled { opacity: .55; cursor: default; }
 .side-chat-reference { display: grid; gap: 7px; padding: 9px 10px; border: 1px solid #d7dcef; border-radius: 11px; background: #f1f3fa; }
+.side-chat-reference.context blockquote { max-height: 150px; }
 .side-chat-reference-heading { display: flex; align-items: center; gap: 6px; color: #3f4b87; font-size: 10px; }
 .side-chat-reference blockquote { max-height: 76px; margin: 0; overflow: hidden; color: #52586d; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
 .side-chat-reference-location { min-width: 0; display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) 24px auto; align-items: center; gap: 5px; }
@@ -1758,6 +1763,8 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .side-chat-message > p,
 :root[data-theme="dark"] .side-chat-markdown { color: #dedfe5; border-color: #3d4049; background: #27292f; }
 :root[data-theme="dark"] .side-chat-message.user > p { color: #fff; border-color: #5965a0; background: #38447f; }
+:root[data-theme="dark"] .side-chat-context-actions button { border-color: #454a60; color: #bdc6fa; background: rgba(91, 104, 166, .14); }
+:root[data-theme="dark"] .side-chat-context-actions button:hover { border-color: #626b98; background: rgba(91, 104, 166, .24); }
 :root[data-theme="dark"] .side-chat-reference { border-color: #454a60; background: rgba(91, 104, 166, .14); }
 :root[data-theme="dark"] .side-chat-reference-heading,
 :root[data-theme="dark"] .side-chat-reference-location > button:not(.icon-button) { color: #bdc6fa; }

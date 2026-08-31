@@ -339,6 +339,11 @@ export const api = {
       `/conversations/${parentConversationId}/side-chat/reference`,
       { method: "POST", body: JSON.stringify({ sourceMessageId, excerpt, content }) },
     ),
+  setSideChatContext: (parentConversationId: string) =>
+    request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft; reference: MessageSourceReference }>(
+      `/conversations/${parentConversationId}/side-chat/context`,
+      { method: "POST" },
+    ),
   updateConversationWorkingDir: (id: string, workingDir: string | null, confirm = false) =>
     request<{ conversation: Conversation }>(`/conversations/${id}/working-dir`, { method: "PUT", body: JSON.stringify({ workingDir, confirm }) }),
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
