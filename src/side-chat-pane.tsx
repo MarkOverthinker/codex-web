@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, Bot, Copy, CornerUpLeft, LoaderCircle, Quote, Square, X } from "lucide-react";
+import { ArrowUp, Bot, Copy, CornerUpLeft, LoaderCircle, Plus, Quote, Square, X } from "lucide-react";
 import {
   api,
   type AgentModelOption,
@@ -15,6 +15,7 @@ import {
   type Message,
   type MessageSourceReference,
   type ReasoningEffort,
+  type SideChatSummary,
 } from "./api";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { formatSourceLocation } from "./message-source";
@@ -22,12 +23,13 @@ import { copyText } from "./copy-path";
 
 export type SideChatReferenceRequest = {
   id: number;
+  sourceConversation: Conversation;
   sourceMessageId: string;
   excerpt: string;
 };
 
 type SideChatPaneProps = {
-  parentConversation: Conversation;
+  currentConversation: Conversation;
   agentOptions: AgentOptions | null;
   referenceRequest: SideChatReferenceRequest | null;
   onReferenceHandled: (requestId: number) => void;
@@ -61,7 +63,7 @@ function SourceReferenceCard({ reference, onOpen, onClear }: {
   onClear?: () => void;
 }) {
   const isContext = reference.kind === "conversation-context";
-  const location = isContext ? `当前主对话 · ${reference.messageCount} 条消息` : sourceLocationText(reference);
+  const location = isContext ? `${reference.sourceConversationTitle} · ${reference.messageCount} 条消息` : sourceLocationText(reference);
   return <div className={`side-chat-reference${isContext ? " context" : ""}`}>
     <div className="side-chat-reference-heading"><CornerUpLeft size={14} /><strong>{isContext ? "主对话上下文" : "主对话引用"}</strong></div>
     <blockquote>{reference.excerpt}</blockquote>
@@ -88,50 +90,118 @@ function SideMessage({ message, citationFiles, onOpenSourceReference }: { messag
   </article>;
 }
 
-export function SideChatPane({ parentConversation, agentOptions, referenceRequest, onReferenceHandled, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
+export function SideChatPane({ currentConversation, agentOptions, referenceRequest, onReferenceHandled, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
+  const [history, setHistory] = useState<SideChatSummary[]>([]);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [input, setInput] = useState("");
   const [reference, setReference] = useState<MessageSourceReference | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [contextSaving, setContextSaving] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef(input);
-  const hydratedConversationRef = useRef<string | null>(null);
+  const detailRef = useRef(detail);
+  const historyRef = useRef(history);
+  const initialParentIdRef = useRef(currentConversation.id);
   inputRef.current = input;
+  detailRef.current = detail;
+  historyRef.current = history;
 
   async function refresh(conversationId: string, hydrateDraft = false) {
     const next = await api.conversation(conversationId);
     setDetail(next);
-    if (hydrateDraft || hydratedConversationRef.current !== conversationId) {
-      hydratedConversationRef.current = conversationId;
+    detailRef.current = next;
+    if (hydrateDraft) {
       setInput(next.composerDraft?.content ?? "");
       setReference(next.composerDraft?.source_reference ?? null);
     }
     return next;
   }
 
-  useEffect(() => {
-    if (referenceRequest || hydratedConversationRef.current) return;
-    let cancelled = false;
-    setDetail(null); setInput(""); setReference(null); setLoading(true);
-    void api.createSideChat(parentConversation.id)
-      .then((result) => refresh(result.conversation.id, true))
-      .catch((reason) => { if (!cancelled) onError(reason instanceof Error ? reason.message : "侧边聊天加载失败"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [parentConversation.id, referenceRequest?.id]);
+  async function refreshHistory() {
+    const result = await api.sideChats();
+    setHistory(result.sideChats);
+    historyRef.current = result.sideChats;
+    return result.sideChats;
+  }
+
+  async function persistCurrentDraft() {
+    const current = detailRef.current;
+    if (!current) return;
+    await api.saveConversationDraft(current.conversation.id, inputRef.current, reference?.excerpt ?? "", reference, true).catch(() => undefined);
+  }
+
+  async function openSideConversation(conversationId: string) {
+    if (detailRef.current?.conversation.id === conversationId) return detailRef.current;
+    setLoading(true);
+    try {
+      await persistCurrentDraft();
+      await api.openSideChat(conversationId);
+      const next = await refresh(conversationId, true);
+      await refreshHistory();
+      return next;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createSideConversation(parent: Conversation, hydrateDraft = true) {
+    if (parent.archived_at) throw new Error("已归档任务不能新建侧边对话。");
+    setLoading(true);
+    try {
+      await persistCurrentDraft();
+      const result = await api.createNewSideChat(parent.id);
+      const next = await refresh(result.conversation.id, hydrateDraft);
+      await refreshHistory();
+      return next;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function ensureActiveSideConversation(source: Conversation) {
+    if (detailRef.current) return detailRef.current;
+    const preferred = historyRef.current.find((item) => item.parentConversationId === source.id);
+    return preferred ? openSideConversation(preferred.conversation.id) : createSideConversation(source, false);
+  }
 
   useEffect(() => {
-    if (!referenceRequest) return;
     let cancelled = false;
     setLoading(true);
-    void api.setSideChatReference(parentConversation.id, referenceRequest.sourceMessageId, referenceRequest.excerpt, inputRef.current)
+    void api.sideChats()
+      .then(async (result) => {
+        if (cancelled) return;
+        setHistory(result.sideChats);
+        historyRef.current = result.sideChats;
+        const preferred = result.sideChats.find((item) => item.parentConversationId === initialParentIdRef.current);
+        if (preferred) {
+          await api.openSideChat(preferred.conversation.id);
+          if (!cancelled) await refresh(preferred.conversation.id, true);
+        }
+      })
+      .catch((reason) => { if (!cancelled) onError(reason instanceof Error ? reason.message : "侧边聊天加载失败"); })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setInitialized(true);
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!initialized || !referenceRequest) return;
+    let cancelled = false;
+    setLoading(true);
+    void ensureActiveSideConversation(referenceRequest.sourceConversation)
+      .then((target) => api.setSelectedSideChatReference(target.conversation.id, referenceRequest.sourceConversation.id, referenceRequest.sourceMessageId, referenceRequest.excerpt, inputRef.current))
       .then(async (result) => {
         if (cancelled) return;
         setReference(result.reference);
         await refresh(result.conversation.id, false);
+        await refreshHistory();
         window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".side-chat-composer textarea")?.focus(), 0);
       })
       .catch((reason) => { if (!cancelled) onError(reason instanceof Error ? reason.message : "引用到侧边聊天失败"); })
@@ -142,7 +212,7 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
         }
       });
     return () => { cancelled = true; };
-  }, [parentConversation.id, referenceRequest?.id]);
+  }, [initialized, referenceRequest?.id]);
 
   useEffect(() => {
     const conversationId = detail?.conversation.id;
@@ -159,7 +229,10 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
     let cancelled = false;
     const timer = window.setInterval(() => {
       void api.conversation(conversationId).then((next) => {
-        if (!cancelled) setDetail(next);
+        if (!cancelled) {
+          setDetail(next);
+          detailRef.current = next;
+        }
       }).catch(() => undefined);
     }, detail.activeJob || detail.pendingPrompts.length > 0 ? 1_200 : 4_000);
     return () => { cancelled = true; window.clearInterval(timer); };
@@ -207,12 +280,14 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
   }
 
   async function citeConversationContext() {
-    if (contextSaving || !detail) return;
+    if (contextSaving || currentConversation.archived_at) return;
     setContextSaving(true);
     try {
-      const result = await api.setSideChatContext(parentConversation.id);
+      const target = await ensureActiveSideConversation(currentConversation);
+      const result = await api.setSelectedSideChatContext(target.conversation.id, currentConversation.id);
       setReference(result.reference);
       await refresh(result.conversation.id, false);
+      await refreshHistory();
       window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".side-chat-composer textarea")?.focus(), 0);
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : "主对话上下文引用失败");
@@ -235,13 +310,15 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!detail || submitting || (!input.trim() && !reference)) return;
+    if (submitting || (!input.trim() && !reference)) return;
     setSubmitting(true);
     try {
-      await api.saveConversationDraft(detail.conversation.id, input, reference?.excerpt ?? "", reference);
-      await api.sendMessage(detail.conversation.id, input, [], reference?.excerpt ?? "", true);
+      const target = await ensureActiveSideConversation(currentConversation);
+      await api.saveConversationDraft(target.conversation.id, input, reference?.excerpt ?? "", reference);
+      await api.sendMessage(target.conversation.id, input, [], reference?.excerpt ?? "", true);
       setInput(""); setReference(null);
-      await refresh(detail.conversation.id, false);
+      await refresh(target.conversation.id, false);
+      await refreshHistory();
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : "侧边消息发送失败");
     } finally {
@@ -251,6 +328,8 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
 
   const busy = Boolean(detail?.activeJob || detail?.pendingPrompts.length);
   const citationFiles = detail ? [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)] : [];
+  const activeSummary = history.find((item) => item.conversation.id === detail?.conversation.id);
+  const canCreateForCurrent = !currentConversation.archived_at;
 
   return <aside className="side-chat-pane" style={{ width }} aria-label="侧边聊天">
     <div
@@ -266,9 +345,19 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
       onKeyDown={onResizeKeyDown}
     />
     <header className="side-chat-header">
-      <div><span>SECONDARY THREAD</span><strong><Bot size={16} />侧边聊天</strong></div>
+      <div><span>SECONDARY THREAD</span><strong><Bot size={16} />侧边聊天</strong><small>{activeSummary ? `来源任务：${activeSummary.parentConversationTitle}` : `当前任务：${currentConversation.title}`}</small></div>
       <button type="button" className="icon-button" onClick={onClose} aria-label="关闭侧边聊天"><X size={18} /></button>
     </header>
+    <div className="side-chat-thread-picker">
+      <label><span>历史侧边对话</span><select value={detail?.conversation.id ?? ""} disabled={loading} onChange={(event) => {
+        if (!event.target.value) return;
+        void openSideConversation(event.target.value).catch((reason) => onError(reason instanceof Error ? reason.message : "侧边对话加载失败"));
+      }}>
+        <option value="">当前任务尚无侧边对话</option>
+        {history.map((item) => <option key={item.conversation.id} value={item.conversation.id}>{item.parentConversationTitle} · {DATE_FORMATTER.format(new Date(item.lastOpenedAt))}</option>)}
+      </select></label>
+      <button type="button" onClick={() => void createSideConversation(currentConversation).catch((reason) => onError(reason instanceof Error ? reason.message : "新建侧边聊天失败"))} disabled={!canCreateForCurrent || loading} title="为当前任务新建侧边对话"><Plus size={14} />新建</button>
+    </div>
     <div className="side-chat-settings">
       <label><span>模型</span><select value={selectedModel} disabled={!detail || selectionSaving || !agentOptions} onChange={(event) => changeModel(event.target.value)}>
         {modelGroups.map((provider) => <optgroup key={provider.id} label={provider.name}>
@@ -283,25 +372,25 @@ export function SideChatPane({ parentConversation, agentOptions, referenceReques
       </select></label>
     </div>
     <div ref={messagesRef} className="side-chat-messages">
-      {loading && !detail ? <div className="side-chat-empty"><LoaderCircle className="spin" size={20} /><span>正在准备侧边线程…</span></div>
+      {loading && !detail ? <div className="side-chat-empty"><LoaderCircle className="spin" size={20} /><span>正在加载侧边对话…</span></div>
         : detail?.messages.length
           ? detail.messages.map((message) => <SideMessage key={message.id} message={message} citationFiles={citationFiles} onOpenSourceReference={onOpenSourceReference} />)
-          : <div className="side-chat-empty"><Bot size={24} /><strong>独立上下文，随时追问</strong><span>点击“引用主对话上下文”，或选中主消息内容后点“侧边提问”。</span></div>}
+          : <div className="side-chat-empty"><Bot size={24} /><strong>{detail ? "独立上下文，随时追问" : "当前任务还没有侧边对话"}</strong><span>{detail ? "可继续当前历史，或从上方切换、新建其他侧边对话。" : "直接输入、引用当前主对话，或点击“新建”开始。"}</span></div>}
       {busy && <div className="side-chat-running"><LoaderCircle className="spin" size={14} /><span>{detail?.activeJob?.status === "running" ? "正在处理" : "等待执行"}</span></div>}
     </div>
     <form className="side-chat-composer" onSubmit={submit}>
       <div className="side-chat-context-actions">
-        <button type="button" onClick={() => void citeConversationContext()} disabled={!detail || contextSaving || submitting} title="引用当前主对话中的全部用户和 Codex 消息"><Quote size={13} />{contextSaving ? "正在整理主对话…" : "引用主对话上下文"}</button>
+        <button type="button" onClick={() => void citeConversationContext()} disabled={!canCreateForCurrent || contextSaving || submitting} title="引用当前主对话中的全部用户和 Codex 消息"><Quote size={13} />{contextSaving ? "正在整理主对话…" : "引用当前主对话上下文"}</button>
       </div>
       {reference && <SourceReferenceCard reference={reference} onOpen={reference.kind === "conversation-context" ? undefined : () => onOpenSourceReference(reference)} onClear={() => setReference(null)} />}
-      <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={reference ? "基于这段引用继续提问…" : "在侧边线程中提问…"} rows={3} disabled={!detail || submitting} onKeyDown={(event) => {
+      <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={reference ? "基于这段引用继续提问…" : "在侧边线程中提问…"} rows={3} disabled={submitting || (!detail && !canCreateForCurrent)} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
       }} />
       <div className="side-chat-composer-footer">
-        <span>{busy ? `${detail?.pendingPrompts.length ?? 0} 条等待中` : "独立线程，不改变主对话"}</span>
+        <span>{busy ? `${detail?.pendingPrompts.length ?? 0} 条等待中` : detail ? "独立线程，不随主任务切换" : "发送时自动创建侧边对话"}</span>
         {detail?.activeJob
           ? <button type="button" className="side-chat-send stop" onClick={() => void api.cancelConversation(detail.conversation.id).then(() => refresh(detail.conversation.id, false))} title="停止"><Square size={14} /></button>
-          : <button type="submit" className="side-chat-send" disabled={!detail || submitting || (!input.trim() && !reference)} title="发送">{submitting ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={16} />}</button>}
+          : <button type="submit" className="side-chat-send" disabled={submitting || (!detail && !canCreateForCurrent) || (!input.trim() && !reference)} title="发送">{submitting ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={16} />}</button>}
       </div>
     </form>
   </aside>;

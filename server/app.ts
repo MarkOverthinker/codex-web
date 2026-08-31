@@ -34,6 +34,7 @@ import {
   type PendingPromptWithFiles,
   type PresetPromptRow,
   type SessionRow,
+  type SideConversationRow,
   type WorkingDirectoryFavorite,
 } from "./db.js";
 import { loadAgentOptions, repairAgentSelection, resolveAgentExecutionSelection, resolveAgentSelection, type AgentOptions, type AgentSelection } from "./model-options.js";
@@ -303,6 +304,17 @@ export function createApp(overrides: AppOverrides = {}) {
       defaultEnabled: preset.default_enabled === 1,
       createdAt: preset.created_at,
       updatedAt: preset.updated_at,
+    };
+  }
+
+  function sideConversationForClient(sideChat: SideConversationRow) {
+    const { parent_conversation_id, parent_title, side_created_at, last_opened_at, ...conversation } = sideChat;
+    return {
+      conversation,
+      parentConversationId: parent_conversation_id,
+      parentConversationTitle: parent_title,
+      createdAt: side_created_at,
+      lastOpenedAt: last_opened_at,
     };
   }
 
@@ -1456,11 +1468,38 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.status(201).json({ conversation, agentSelection, composerDraft: composerDraftForClient(composerDraft, session.user_id) });
   });
 
+  function createSideChatFor(parent: ConversationRow) {
+    const id = newId();
+    workspaceFor(parent.user_id, id);
+    const selection = conversationAgentSelection(parent);
+    const conversation = db.createSideConversation(parent, id, selection);
+    db.setConversationPresetPrompts(conversation.id, parent.user_id, db.getConversationPresetPromptIds(parent.id));
+    return { conversation, agentSelection: selection };
+  }
+
+  api.get("/side-chats", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    return res.json({ sideChats: db.listSideConversations(session.user_id).filter((sideChat) => !sideChat.archived_at).map(sideConversationForClient) });
+  });
+
+  api.post("/side-chats/:id/open", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.touchSideConversation(String(req.params.id), session.user_id);
+    return conversation ? res.json({ conversation }) : res.status(404).json({ error: "侧边对话不存在。" });
+  });
+
   api.get("/conversations/:id/side-chat", (req, res) => {
     const session = res.locals.session as SessionRow;
     const parent = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
     return res.json({ conversation: db.getSideConversation(parent.id, session.user_id) ?? null });
+  });
+
+  api.get("/conversations/:id/side-chats", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    return res.json({ sideChats: db.listSideConversations(session.user_id, parent.id).map(sideConversationForClient) });
   });
 
   api.post("/conversations/:id/side-chat", (req, res) => {
@@ -1470,12 +1509,60 @@ export function createApp(overrides: AppOverrides = {}) {
     if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再打开侧边聊天。" });
     const existing = db.getSideConversation(parent.id, session.user_id);
     if (existing) return res.json({ conversation: existing, agentSelection: conversationAgentSelection(existing) });
-    const id = newId();
-    workspaceFor(session.user_id, id);
-    const selection = conversationAgentSelection(parent);
-    const conversation = db.createSideConversation(parent, id, selection);
-    db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
-    return res.status(201).json({ conversation, agentSelection: selection });
+    return res.status(201).json(createSideChatFor(parent));
+  });
+
+  api.post("/conversations/:id/side-chats", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再新建侧边聊天。" });
+    return res.status(201).json(createSideChatFor(parent));
+  });
+
+  api.post("/side-chats/:id/context", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation || !db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "侧边对话不存在。" });
+    const source = db.getConversationForUser(String(req.body?.sourceConversationId ?? ""), session.user_id);
+    if (!source || db.getSideConversationParent(source.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (source.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再引用。" });
+    const messages = db.listMessages(source.id)
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .map((message) => ({ role: message.role as "user" | "assistant", content: message.content }));
+    const reference = normalizeMessageSourceReference({
+      kind: "conversation-context",
+      sourceConversationId: source.id,
+      sourceConversationTitle: source.title,
+      excerpt: buildConversationContextExcerpt(messages),
+      messageCount: messages.length,
+    });
+    if (!reference || reference.kind !== "conversation-context") return res.status(409).json({ error: "当前主对话没有可引用的上下文。" });
+    const currentDraft = db.getComposerDraft(conversation.id);
+    const composerDraft = db.saveComposerDraft(conversation.id, currentDraft?.content ?? "", reference.excerpt, JSON.stringify(reference));
+    db.touchSideConversation(conversation.id, session.user_id);
+    return res.json({ conversation, agentSelection: conversationAgentSelection(conversation), composerDraft: composerDraftForClient(composerDraft, session.user_id), reference });
+  });
+
+  api.post("/side-chats/:id/reference", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation || !db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "侧边对话不存在。" });
+    const source = db.getConversationForUser(String(req.body?.sourceConversationId ?? ""), session.user_id);
+    if (!source || db.getSideConversationParent(source.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (source.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再引用。" });
+    const sourceMessageId = typeof req.body?.sourceMessageId === "string" ? req.body.sourceMessageId : "";
+    const excerpt = normalizeSourceExcerpt(req.body?.excerpt);
+    if (!/^[0-9a-f-]{36}$/i.test(sourceMessageId) || !excerpt) return res.status(400).json({ error: "引用来源无效。" });
+    const sourceMessage = db.getMessage(sourceMessageId);
+    if (!sourceMessage || sourceMessage.conversation_id !== source.id) return res.status(404).json({ error: "来源消息不存在。" });
+    const reference = await sourceReferenceFor(source, sourceMessage, excerpt, true);
+    if (!reference) return res.status(409).json({ error: "这段内容尚未写入 Codex rollout JSONL，请等待当前任务完成后重试。", code: "source-jsonl-pending" });
+    const currentDraft = db.getComposerDraft(conversation.id);
+    const draftContent = typeof req.body?.content === "string" ? req.body.content.slice(0, 100_000) : currentDraft?.content ?? "";
+    const composerDraft = db.saveComposerDraft(conversation.id, draftContent, excerpt, JSON.stringify(reference));
+    db.touchSideConversation(conversation.id, session.user_id);
+    return res.json({ conversation, agentSelection: conversationAgentSelection(conversation), composerDraft: composerDraftForClient(composerDraft, session.user_id), reference });
   });
 
   api.post("/conversations/:id/side-chat/context", (req, res) => {
@@ -1600,7 +1687,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
     if (db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
     if (conversation.archived_at) return res.json({ conversation });
-    const family = [conversation, db.getSideConversation(conversation.id, session.user_id)].filter((item): item is ConversationRow => Boolean(item));
+    const family = [conversation, ...db.listSideConversations(session.user_id, conversation.id)];
     const hasWork = family.some((item) => item.status === "running"
       || db.listActiveJobsForConversation(item.id).length > 0
       || db.listPendingPrompts(item.id).length > 0
@@ -1786,7 +1873,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
     if (db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
-    const family = [db.getSideConversation(conversation.id, session.user_id), conversation].filter((item): item is ConversationRow => Boolean(item));
+    const family = [...db.listSideConversations(session.user_id, conversation.id), conversation];
     if (family.some((item) => deletingConversations.has(item.id))) return res.status(409).json({ error: "会话正在删除。" });
     for (const item of family) deletingConversations.add(item.id);
     try {

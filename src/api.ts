@@ -10,6 +10,13 @@ export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
   working_dir: string | null;
 };
+export type SideChatSummary = {
+  conversation: Conversation;
+  parentConversationId: string;
+  parentConversationTitle: string;
+  createdAt: string;
+  lastOpenedAt: string;
+};
 export type WorkingDirFavorite = { path: string; label: string; added_at: string };
 export type WorkingDirSettings = { enabled: boolean; favorites: WorkingDirFavorite[]; defaultWorkingDir: string | null };
 export type HostPathEntryType = "dir" | "file" | "link" | "other";
@@ -331,9 +338,27 @@ export const api = {
       { method: "POST", body: JSON.stringify({ sourceConversationId, sourceMessageId, excerpt }) },
     ),
   sideChat: (parentConversationId: string) => request<{ conversation: Conversation | null }>(`/conversations/${parentConversationId}/side-chat`),
+  sideChats: () => request<{ sideChats: SideChatSummary[] }>("/side-chats"),
+  sideChatsForConversation: (parentConversationId: string) => request<{ sideChats: SideChatSummary[] }>(`/conversations/${parentConversationId}/side-chats`),
   createSideChat: (parentConversationId: string) => request<{ conversation: Conversation; agentSelection: AgentSelection }>(
     `/conversations/${parentConversationId}/side-chat`, { method: "POST" },
   ),
+  createNewSideChat: (parentConversationId: string) => request<{ conversation: Conversation; agentSelection: AgentSelection }>(
+    `/conversations/${parentConversationId}/side-chats`, { method: "POST" },
+  ),
+  openSideChat: (sideConversationId: string) => request<{ conversation: Conversation }>(
+    `/side-chats/${sideConversationId}/open`, { method: "POST" },
+  ),
+  setSelectedSideChatReference: (sideConversationId: string, sourceConversationId: string, sourceMessageId: string, excerpt: string, content = "") =>
+    request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft; reference: MessageSourceReference }>(
+      `/side-chats/${sideConversationId}/reference`,
+      { method: "POST", body: JSON.stringify({ sourceConversationId, sourceMessageId, excerpt, content }) },
+    ),
+  setSelectedSideChatContext: (sideConversationId: string, sourceConversationId: string) =>
+    request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft; reference: MessageSourceReference }>(
+      `/side-chats/${sideConversationId}/context`,
+      { method: "POST", body: JSON.stringify({ sourceConversationId }) },
+    ),
   setSideChatReference: (parentConversationId: string, sourceMessageId: string, excerpt: string, content = "") =>
     request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft; reference: MessageSourceReference }>(
       `/conversations/${parentConversationId}/side-chat/reference`,

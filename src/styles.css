@@ -1675,6 +1675,14 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .side-chat-header span { color: #8a8e9d; font-size: 8px; font-weight: 850; letter-spacing: .14em; }
 .side-chat-header strong { display: flex; align-items: center; gap: 7px; color: #252b4d; font-size: 14px; }
 .side-chat-header strong svg { color: var(--indigo); }
+.side-chat-header small { min-width: 0; overflow: hidden; color: #74798b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.side-chat-thread-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #e2e4ec; background: #fbfbfd; }
+.side-chat-thread-picker label { min-width: 0; display: grid; gap: 4px; color: #7c8090; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.side-chat-thread-picker select { width: 100%; min-width: 0; height: 34px; padding: 0 28px 0 9px; border: 1px solid #d7dbe8; border-radius: 9px; outline: none; color: #34384b; background: #fff; font-size: 11px; font-weight: 650; }
+.side-chat-thread-picker select:focus { border-color: #8e99cc; box-shadow: 0 0 0 3px rgba(72, 85, 156, .1); }
+.side-chat-thread-picker > button { height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid #aeb7df; border-radius: 9px; color: var(--indigo); background: #eef1fa; cursor: pointer; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.side-chat-thread-picker > button:hover { border-color: #8996ce; background: #e7eaf7; }
+.side-chat-thread-picker > button:disabled { opacity: .5; cursor: default; }
 .side-chat-settings { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(92px, .7fr); gap: 8px; padding: 10px 12px; border-bottom: 1px solid #e2e4ec; background: #fff; }
 .side-chat-settings label { min-width: 0; display: grid; gap: 4px; color: #7c8090; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .side-chat-settings select { width: 100%; min-width: 0; height: 34px; padding: 0 28px 0 9px; border: 1px solid #d7dbe8; border-radius: 9px; outline: none; color: #34384b; background: #f8f9fc; font-size: 11px; font-weight: 650; }

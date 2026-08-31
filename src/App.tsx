@@ -568,12 +568,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   const askSideChatAbout = useCallback((selectedText: string, messageId: string) => {
     const excerpt = normalizeAskAgentSelection(selectedText);
-    if (!excerpt) return;
+    const sourceConversation = detailRef.current?.conversation;
+    if (!excerpt || !sourceConversation) return;
     setPreviewFile(null);
     setSnippetPreview(null);
     setSideChatOpen(true);
     sideChatReferenceSequenceRef.current += 1;
-    setSideChatReferenceRequest({ id: sideChatReferenceSequenceRef.current, sourceMessageId: messageId, excerpt });
+    setSideChatReferenceRequest({ id: sideChatReferenceSequenceRef.current, sourceConversation, sourceMessageId: messageId, excerpt });
   }, []);
 
   const openFilePreview = useCallback((file: WorkFile) => { setSideChatOpen(false); setPreviewFile(file); }, []);
@@ -881,8 +882,6 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     return () => window.removeEventListener("pointerdown", closeFromOutside);
   }, [newTaskDirPanelOpen]);
   useEffect(() => {
-    setSideChatOpen(false);
-    setSideChatReferenceRequest(null);
     autoFollowRef.current = true;
     lastScrollTopRef.current = 0;
     loadingOlderMessagesRef.current = false;
@@ -2457,6 +2456,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     ? categoryViews.reduce((sum, category) => sum + category.conversations.length, 0)
     : filtered.length;
   const currentDetail = detail?.conversation.id === selectedId ? detail : null;
+  const sideChatCurrentConversation = currentDetail?.conversation
+    ?? conversations.find((conversation) => conversation.id === selectedId)
+    ?? archivedConversations.find((conversation) => conversation.id === selectedId)
+    ?? null;
   const loadingConversation = Boolean(selectedId && !currentDetail);
   const composerPendingPrompts = currentDetail?.pendingPrompts ?? EMPTY_PENDING_PROMPTS;
   const composerDraftFiles = composerDraft?.files ?? EMPTY_WORK_FILES;
@@ -2924,9 +2927,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
-    {sideChatOpen && currentDetail && !currentDetail.conversation.archived_at && <SideChatPane
-      key={currentDetail.conversation.id}
-      parentConversation={currentDetail.conversation}
+    {sideChatOpen && sideChatCurrentConversation && <SideChatPane
+      currentConversation={sideChatCurrentConversation}
       agentOptions={agentOptions}
       referenceRequest={sideChatReferenceRequest}
       onReferenceHandled={(requestId) => setSideChatReferenceRequest((current) => current?.id === requestId ? null : current)}
