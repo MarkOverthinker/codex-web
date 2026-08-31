@@ -50,6 +50,7 @@ export type PendingPrompt = {
   conversation_id: string;
   content: string;
   quote_excerpt: string | null;
+  source_reference: MessageSourceReference | null;
   agent_model: string;
   reasoning_effort: string;
   sandbox_mode?: SandboxMode;
@@ -329,6 +330,15 @@ export const api = {
       "/conversations/from-source",
       { method: "POST", body: JSON.stringify({ sourceConversationId, sourceMessageId, excerpt }) },
     ),
+  sideChat: (parentConversationId: string) => request<{ conversation: Conversation | null }>(`/conversations/${parentConversationId}/side-chat`),
+  createSideChat: (parentConversationId: string) => request<{ conversation: Conversation; agentSelection: AgentSelection }>(
+    `/conversations/${parentConversationId}/side-chat`, { method: "POST" },
+  ),
+  setSideChatReference: (parentConversationId: string, sourceMessageId: string, excerpt: string, content = "") =>
+    request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft; reference: MessageSourceReference }>(
+      `/conversations/${parentConversationId}/side-chat/reference`,
+      { method: "POST", body: JSON.stringify({ sourceMessageId, excerpt, content }) },
+    ),
   updateConversationWorkingDir: (id: string, workingDir: string | null, confirm = false) =>
     request<{ conversation: Conversation }>(`/conversations/${id}/working-dir`, { method: "PUT", body: JSON.stringify({ workingDir, confirm }) }),
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
@@ -364,10 +374,11 @@ export const api = {
     `/conversations/${id}/draft/files/${fileId}`, { method: "DELETE" },
   ),
   deleteConversationDraft: (id: string) => request<void>(`/conversations/${id}/draft`, { method: "DELETE" }),
-  sendMessage: (id: string, message: string, files: File[], quoteExcerpt = "", useComposerDraft = false) => {
+  sendMessage: (id: string, message: string, files: File[], quoteExcerpt = "", useComposerDraft = false, sourceReference: MessageSourceReference | null = null) => {
     const body = new FormData();
     body.set("message", message);
     body.set("quoteExcerpt", quoteExcerpt);
+    if (sourceReference) body.set("sourceReference", JSON.stringify(sourceReference));
     if (useComposerDraft) body.set("useComposerDraft", "true");
     files.forEach((file) => body.append("files", file));
     return request<PendingMutationResponse>(`/conversations/${id}/messages`, { method: "POST", body });
@@ -390,10 +401,11 @@ export const api = {
   restorePendingPrompt: (conversationId: string, promptId: string) => request<{ pendingPrompt: PendingPrompt | null; activeJob: Job | null }>(
     `/conversations/${conversationId}/pending-prompts/${promptId}/restore`, { method: "POST" },
   ),
-  updatePendingPrompt: (conversationId: string, promptId: string, message: string, files: File[], removedFileIds: string[], quoteExcerpt = "") => {
+  updatePendingPrompt: (conversationId: string, promptId: string, message: string, files: File[], removedFileIds: string[], quoteExcerpt = "", sourceReference: MessageSourceReference | null = null) => {
     const body = new FormData();
     body.set("message", message);
     body.set("quoteExcerpt", quoteExcerpt);
+    if (sourceReference) body.set("sourceReference", JSON.stringify(sourceReference));
     body.set("removedFileIds", JSON.stringify(removedFileIds));
     files.forEach((file) => body.append("files", file));
     return request<PendingMutationResponse>(

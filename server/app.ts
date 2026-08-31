@@ -19,7 +19,7 @@ import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
-import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt } from "../src/message-source.js";
+import { buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt, type MessageSourceReference } from "../src/message-source.js";
 import {
   AppDatabase,
   MAX_CONVERSATION_PRESET_PROMPTS,
@@ -54,6 +54,7 @@ import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./sha
 import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
+import { locateMessageInCodexRollout } from "./message-source-locator.js";
 import {
   autoDirCategoryKey,
   customCategoryKey,
@@ -290,7 +291,7 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   function pendingPromptForClient(prompt: PendingPromptWithFiles, userId: string) {
-    return { ...prompt, files: prompt.files.map((file) => fileForClient(file, userId)) };
+    return { ...prompt, source_reference: parseStoredSourceReference(prompt.source_reference), files: prompt.files.map((file) => fileForClient(file, userId)) };
   }
 
   function presetPromptForClient(preset: PresetPromptRow) {
@@ -461,8 +462,36 @@ export function createApp(overrides: AppOverrides = {}) {
 
   function agentPrompt(content: string, quoteExcerpt?: string | null, sourceReference?: string | null): string {
     const parsedSource = parseStoredSourceReference(sourceReference);
-    if (parsedSource) return buildDerivedTaskPrompt(content, parsedSource.excerpt);
+    if (parsedSource) return buildDerivedTaskPrompt(content, parsedSource);
     return quoteExcerpt ? buildAskAgentDraft(content, quoteExcerpt) : content;
+  }
+
+  async function sourceReferenceFor(
+    sourceConversation: ConversationRow,
+    sourceMessage: MessageRow,
+    excerpt: string,
+    requireJsonlLocation = false,
+  ): Promise<MessageSourceReference | null> {
+    const sourceLocation = sourceConversation.codex_thread_id
+      ? await locateMessageInCodexRollout({
+          codexHome: codexHomeFor(sourceConversation.user_id),
+          threadId: sourceConversation.codex_thread_id,
+          role: sourceMessage.role === "assistant" ? "assistant" : "user",
+          messageContent: sourceMessage.content,
+          messageCreatedAt: sourceMessage.created_at,
+          excerpt,
+        })
+      : null;
+    if (requireJsonlLocation && !sourceLocation) return null;
+    return normalizeMessageSourceReference({
+      sourceConversationId: sourceConversation.id,
+      sourceMessageId: sourceMessage.id,
+      sourceConversationTitle: sourceConversation.title,
+      sourceRole: sourceMessage.role === "assistant" ? "assistant" : "user",
+      sourceCreatedAt: sourceMessage.created_at,
+      excerpt,
+      ...(sourceLocation ? { sourceLocation } : {}),
+    });
   }
 
   function recordUserCancelledJob(job: JobRow): void {
@@ -744,7 +773,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.get("/conversations", (_req, res) => {
     const session = res.locals.session as SessionRow;
-    return res.json({ conversations: db.listConversations(session.user_id) });
+    return res.json({ conversations: db.listPrimaryConversations(session.user_id) });
   });
 
   api.get("/conversations/archived", (req, res) => {
@@ -1386,7 +1415,7 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json({ enabledPresetPromptIds: enabled });
   });
 
-  api.post("/conversations/from-source", (req, res) => {
+  api.post("/conversations/from-source", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const sourceConversationId = typeof req.body?.sourceConversationId === "string" ? req.body.sourceConversationId : "";
     const sourceMessageId = typeof req.body?.sourceMessageId === "string" ? req.body.sourceMessageId : "";
@@ -1415,14 +1444,7 @@ export function createApp(overrides: AppOverrides = {}) {
       }
     }
 
-    const reference = normalizeMessageSourceReference({
-      sourceConversationId: sourceConversation.id,
-      sourceMessageId: sourceMessage.id,
-      sourceConversationTitle: sourceConversation.title,
-      sourceRole: sourceMessage.role === "assistant" ? "assistant" : "user",
-      sourceCreatedAt: sourceMessage.created_at,
-      excerpt,
-    });
+    const reference = await sourceReferenceFor(sourceConversation, sourceMessage, excerpt);
     if (!reference) return res.status(400).json({ error: "无法生成引用快照。" });
 
     const id = newId();
@@ -1432,6 +1454,54 @@ export function createApp(overrides: AppOverrides = {}) {
     db.applyDefaultPresetPrompts(conversation.id, session.user_id);
     const composerDraft = db.saveComposerDraft(id, "", excerpt, JSON.stringify(reference));
     return res.status(201).json({ conversation, agentSelection, composerDraft: composerDraftForClient(composerDraft, session.user_id) });
+  });
+
+  api.get("/conversations/:id/side-chat", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    return res.json({ conversation: db.getSideConversation(parent.id, session.user_id) ?? null });
+  });
+
+  api.post("/conversations/:id/side-chat", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再打开侧边聊天。" });
+    const existing = db.getSideConversation(parent.id, session.user_id);
+    if (existing) return res.json({ conversation: existing, agentSelection: conversationAgentSelection(existing) });
+    const id = newId();
+    workspaceFor(session.user_id, id);
+    const selection = conversationAgentSelection(parent);
+    const conversation = db.createSideConversation(parent, id, selection);
+    db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
+    return res.status(201).json({ conversation, agentSelection: selection });
+  });
+
+  api.post("/conversations/:id/side-chat/reference", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再引用。" });
+    const sourceMessageId = typeof req.body?.sourceMessageId === "string" ? req.body.sourceMessageId : "";
+    const excerpt = normalizeSourceExcerpt(req.body?.excerpt);
+    if (!/^[0-9a-f-]{36}$/i.test(sourceMessageId) || !excerpt) return res.status(400).json({ error: "引用来源无效。" });
+    const sourceMessage = db.getMessage(sourceMessageId);
+    if (!sourceMessage || sourceMessage.conversation_id !== parent.id) return res.status(404).json({ error: "来源消息不存在。" });
+    const reference = await sourceReferenceFor(parent, sourceMessage, excerpt, true);
+    if (!reference) return res.status(409).json({ error: "这段内容尚未写入 Codex rollout JSONL，请等待当前任务完成后重试。", code: "source-jsonl-pending" });
+    const draftContent = typeof req.body?.content === "string" ? req.body.content.slice(0, 100_000) : undefined;
+    let conversation = db.getSideConversation(parent.id, session.user_id);
+    if (!conversation) {
+      const id = newId();
+      workspaceFor(session.user_id, id);
+      const selection = conversationAgentSelection(parent);
+      conversation = db.createSideConversation(parent, id, selection);
+      db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
+    }
+    const currentDraft = db.getComposerDraft(conversation.id);
+    const composerDraft = db.saveComposerDraft(conversation.id, draftContent ?? currentDraft?.content ?? "", excerpt, JSON.stringify(reference));
+    return res.json({ conversation, agentSelection: conversationAgentSelection(conversation), composerDraft: composerDraftForClient(composerDraft, session.user_id), reference });
   });
 
   api.post("/conversations", (req, res) => {
@@ -1499,11 +1569,13 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    if (db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
     if (conversation.archived_at) return res.json({ conversation });
-    const hasWork = conversation.status === "running"
-      || db.listActiveJobsForConversation(conversation.id).length > 0
-      || db.listPendingPrompts(conversation.id).length > 0
-      || db.listPendingPrompts(conversation.id, "editing").length > 0;
+    const family = [conversation, db.getSideConversation(conversation.id, session.user_id)].filter((item): item is ConversationRow => Boolean(item));
+    const hasWork = family.some((item) => item.status === "running"
+      || db.listActiveJobsForConversation(item.id).length > 0
+      || db.listPendingPrompts(item.id).length > 0
+      || db.listPendingPrompts(item.id, "editing").length > 0);
     if (hasWork) return res.status(409).json({ error: "会话仍在运行或有待发送任务，请处理完成后再归档。" });
     const archived = db.archiveConversationForUser(conversation.id, session.user_id);
     return archived ? res.json({ conversation: archived }) : res.status(409).json({ error: "会话归档状态已经变化。" });
@@ -1513,6 +1585,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    if (db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
     if (!conversation.archived_at) return res.json({ conversation });
     if (config.hostMode && conversation.codex_thread_id && !conversation.working_dir) {
       try {
@@ -1683,29 +1756,35 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
-    if (deletingConversations.has(conversation.id)) return res.status(409).json({ error: "会话正在删除。" });
-    deletingConversations.add(conversation.id);
+    if (db.getSideConversationParent(conversation.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    const family = [db.getSideConversation(conversation.id, session.user_id), conversation].filter((item): item is ConversationRow => Boolean(item));
+    if (family.some((item) => deletingConversations.has(item.id))) return res.status(409).json({ error: "会话正在删除。" });
+    for (const item of family) deletingConversations.add(item.id);
     try {
-      for (const prompt of [...db.listPendingPrompts(conversation.id), ...db.listPendingPrompts(conversation.id, "editing")]) {
-        removePendingPromptFiles(prompt, session.user_id);
+      for (const item of family) {
+        for (const prompt of [...db.listPendingPrompts(item.id), ...db.listPendingPrompts(item.id, "editing")]) {
+          removePendingPromptFiles(prompt, session.user_id);
+        }
+        db.deletePendingPromptsForConversation(item.id);
       }
-      db.deletePendingPromptsForConversation(conversation.id);
       // Remove drafts before awaiting cancellation. A running job finishes its
       // queue pump during cancellation, so leaving drafts here could promote one
       // into a real message/job while the conversation is being deleted.
-      await stopConversationJobs(conversation.id, false);
-      for (const file of db.listFiles(conversation.id)) removePersistedDeliverable(config.dataRoot, file.relative_path);
+      for (const item of family) await stopConversationJobs(item.id, false);
       const tenant = storageFor(session.user_id);
-      if (conversation.codex_thread_id && !db.isCodexThreadUsedByAnotherActiveConversation(conversation.codex_thread_id, conversation.id)) {
-        removeCodexThreadFiles(codexHomeFor(session.user_id), conversation.codex_thread_id);
+      for (const item of family) {
+        for (const file of db.listFiles(item.id)) removePersistedDeliverable(config.dataRoot, file.relative_path);
+        if (item.codex_thread_id && !db.isCodexThreadUsedByAnotherActiveConversation(item.codex_thread_id, item.id)) {
+          removeCodexThreadFiles(codexHomeFor(session.user_id), item.codex_thread_id);
+        }
+        removeWorkspace(tenant.conversations, item.id);
       }
-      removeWorkspace(tenant.conversations, conversation.id);
-      db.softDeleteConversation(conversation.id);
+      for (const item of family) db.softDeleteConversation(item.id);
       return res.status(204).end();
     } catch (error) {
       return res.status(503).json({ error: error instanceof Error ? error.message : "删除失败。" });
     } finally {
-      deletingConversations.delete(conversation.id);
+      for (const item of family) deletingConversations.delete(item.id);
     }
   });
 
@@ -1954,8 +2033,8 @@ export function createApp(overrides: AppOverrides = {}) {
 
     if (!prompt && !quoteExcerpt) {
       if (useComposerDraft) {
-        const awaiting = db.materializeComposerDraftAsPending(newId(), conversation.id, "", selection, null, "editing");
-        return res.status(202).json({ pendingPrompt: awaiting, editingPrompt: awaiting, queued: false, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
+        const awaiting = db.materializeComposerDraftAsPending(newId(), conversation.id, "", selection, null, null, "editing");
+        return res.status(202).json({ pendingPrompt: awaiting ? pendingPromptForClient(awaiting, session.user_id) : null, editingPrompt: awaiting ? pendingPromptForClient(awaiting, session.user_id) : null, queued: false, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
       }
       if (editingPrompt?.content.trim() || editingPrompt?.quote_excerpt) {
         removeUnregisteredUploads(uploaded);
@@ -1969,7 +2048,7 @@ export function createApp(overrides: AppOverrides = {}) {
       if (!editingPrompt) db.beginEditingPendingPrompt(awaiting.id);
       registerPendingUploads(conversation.id, awaiting.id, storedUploads(uploaded));
       const persisted = db.updateEditingPendingPrompt(awaiting.id, "", selection);
-      return res.status(202).json({ pendingPrompt: persisted, editingPrompt: persisted, queued: false, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
+      return res.status(202).json({ pendingPrompt: persisted ? pendingPromptForClient(persisted, session.user_id) : null, editingPrompt: persisted ? pendingPromptForClient(persisted, session.user_id) : null, queued: false, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
     }
 
     if (editingPrompt) {
@@ -1982,20 +2061,22 @@ export function createApp(overrides: AppOverrides = {}) {
         return res.status(400).json({ error: "单条任务最多包含 12 个附件。" });
       }
       registerPendingUploads(conversation.id, editingPrompt.id, storedUploads(uploaded));
-      const updated = db.updatePendingPrompt(editingPrompt.id, prompt, selection, quoteExcerpt);
+      const updated = db.updatePendingPrompt(editingPrompt.id, prompt, selection, quoteExcerpt, sourceReference);
       if (!updated) return res.status(409).json({ error: "等待指令的文件状态已经变化，请刷新后重试。" });
       if (config.queueAutoStart) await pumpQueue();
-      return res.status(202).json({ pendingPrompt: db.getPendingPrompt(updated.id) ?? null, queued: true });
+      const stored = db.getPendingPrompt(updated.id);
+      return res.status(202).json({ pendingPrompt: stored ? pendingPromptForClient(stored, session.user_id) : null, queued: true });
     }
 
     if (db.listActiveJobsForConversation(conversation.id).length > 0 || db.listPendingPrompts(conversation.id).length > 0) {
       if (useComposerDraft) {
-        const pendingPrompt = db.materializeComposerDraftAsPending(newId(), conversation.id, prompt, selection, quoteExcerpt);
-        return res.status(202).json({ pendingPrompt, queued: true });
+        const pendingPrompt = db.materializeComposerDraftAsPending(newId(), conversation.id, prompt, selection, quoteExcerpt, sourceReference);
+        return res.status(202).json({ pendingPrompt: pendingPromptForClient(pendingPrompt, session.user_id), queued: true });
       }
-      const pendingPrompt = db.createPendingPrompt(newId(), conversation.id, prompt, selection, quoteExcerpt);
+      const pendingPrompt = db.createPendingPrompt(newId(), conversation.id, prompt, selection, quoteExcerpt, sourceReference);
       registerPendingUploads(conversation.id, pendingPrompt.id, storedUploads(uploaded));
-      return res.status(202).json({ pendingPrompt: db.getPendingPrompt(pendingPrompt.id), queued: true });
+      const stored = db.getPendingPrompt(pendingPrompt.id);
+      return res.status(202).json({ pendingPrompt: stored ? pendingPromptForClient(stored, session.user_id) : null, queued: true });
     }
 
     const messageId = newId();
@@ -2056,7 +2137,8 @@ export function createApp(overrides: AppOverrides = {}) {
     const restored = db.restorePendingPrompt(prompt.id);
     if (!restored) return res.status(409).json({ error: "该任务当前不在编辑状态。" });
     if (config.queueAutoStart) await pumpQueue();
-    return res.json({ pendingPrompt: db.getPendingPrompt(prompt.id) ?? null, activeJob: db.getActiveJobForConversation(conversation.id) ?? null });
+    const stored = db.getPendingPrompt(prompt.id);
+    return res.json({ pendingPrompt: stored ? pendingPromptForClient(stored, session.user_id) : null, activeJob: db.getActiveJobForConversation(conversation.id) ?? null });
   });
 
   api.put("/conversations/:id/pending-prompts/:promptId", rejectDuringCodexUpdate, upload.array("files", 12), async (req, res) => {
@@ -2069,6 +2151,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (pending.status !== "editing") { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "请先点击编辑。" }); }
     const prompt = typeof req.body?.message === "string" ? req.body.message.trim().slice(0, 100_000) : "";
     const quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
+    const sourceReference = req.body?.sourceReference === undefined ? pending.source_reference : submittedSourceReference(req.body.sourceReference);
     let removedFileIds: string[] = [];
     try {
       const raw = typeof req.body?.removedFileIds === "string" ? JSON.parse(req.body.removedFileIds) : [];
@@ -2092,14 +2175,16 @@ export function createApp(overrides: AppOverrides = {}) {
     registerPendingUploads(conversation.id, pending.id, storedUploads(uploaded));
     const selection = conversationAgentSelection(conversation);
     const updated = prompt || quoteExcerpt
-      ? db.updatePendingPrompt(pending.id, prompt, selection, quoteExcerpt)
-      : db.updateEditingPendingPrompt(pending.id, "", selection);
+      ? db.updatePendingPrompt(pending.id, prompt, selection, quoteExcerpt, sourceReference)
+      : db.updateEditingPendingPrompt(pending.id, "", selection, null, sourceReference);
     if (!updated) return res.status(409).json({ error: "待发送队列已经变化，请刷新后重试。" });
     if (!prompt && !quoteExcerpt) {
-      return res.status(202).json({ pendingPrompt: db.getPendingPrompt(pending.id) ?? null, activeJob: db.getActiveJobForConversation(conversation.id) ?? null, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
+      const stored = db.getPendingPrompt(pending.id);
+      return res.status(202).json({ pendingPrompt: stored ? pendingPromptForClient(stored, session.user_id) : null, activeJob: db.getActiveJobForConversation(conversation.id) ?? null, needsInstruction: true, guidance: FILE_INSTRUCTION_GUIDANCE });
     }
     if (config.queueAutoStart) await pumpQueue();
-    return res.json({ pendingPrompt: db.getPendingPrompt(pending.id) ?? null, activeJob: db.getActiveJobForConversation(conversation.id) ?? null });
+    const stored = db.getPendingPrompt(pending.id);
+    return res.json({ pendingPrompt: stored ? pendingPromptForClient(stored, session.user_id) : null, activeJob: db.getActiveJobForConversation(conversation.id) ?? null });
   });
 
   api.delete("/conversations/:id/pending-prompts/:promptId", async (req, res) => {
@@ -2123,7 +2208,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const running = db.listActiveJobsForConversation(conversation.id).find((job) => job.status === "running");
     if (!running) return res.status(409).json({ error: "当前任务尚未进入可引导状态。" });
     try {
-      const turnId = await runner.steer(running.id, agentPrompt(pending.content, pending.quote_excerpt), pending.files);
+      const turnId = await runner.steer(running.id, agentPrompt(pending.content, pending.quote_excerpt, pending.source_reference), pending.files);
       const message = db.materializeSteeredPrompt(pending.id, newId());
       if (!message) throw new Error("引导已送达，但本地记录队列发生变化，请刷新确认。 ");
       return res.json({ ok: true, turnId, message });
