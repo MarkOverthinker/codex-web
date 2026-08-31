@@ -342,17 +342,21 @@ test("side chat pane resizes independently by pointer and keyboard", () => {
   assert.match(styles, /\.side-chat-pane \{ width: 100vw !important; \}/);
 });
 
-test("side chat offers a one-click primary conversation context reference", () => {
+test("side chat keeps history available while primary tasks change", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "side-chat-pane.tsx"), "utf8");
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
-  assert.match(paneSource, /引用主对话上下文/);
-  assert.match(paneSource, /api\.setSideChatContext\(parentConversation\.id\)/);
-  assert.match(apiSource, /setSideChatContext:/);
-  assert.match(serverSource, /side-chat\/context/);
+  assert.match(paneSource, /历史侧边对话/);
+  assert.match(paneSource, /api\.sideChats\(\)/);
+  assert.match(paneSource, /api\.createNewSideChat\(parent\.id\)/);
+  assert.match(paneSource, /api\.setSelectedSideChatContext\(target\.conversation\.id, currentConversation\.id\)/);
+  assert.match(apiSource, /setSelectedSideChatContext:/);
+  assert.match(serverSource, /api\.get\("\/side-chats"/);
+  assert.match(serverSource, /api\.post\("\/conversations\/:id\/side-chats"/);
   assert.match(serverSource, /buildConversationContextExcerpt\(messages\)/);
-  assert.match(appSource, /<SideChatPane/);
+  assert.match(appSource, /sideChatOpen && sideChatCurrentConversation && <SideChatPane/);
+  assert.doesNotMatch(appSource, /key=\{currentDetail\.conversation\.id\}[\s\S]*currentConversation=/);
 });
 
 test("chat font sizing keeps readable bounds and scales from the default", () => {
@@ -1650,6 +1654,40 @@ test("quote-derived task creates an independent draft and sends a source-linked 
   assert.equal(detail.body.messages[0].source_reference.excerpt, "选中的来源文本");
 });
 
+test("side chat migration preserves legacy links and allows multiple threads", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-side-chat-migration-test-"));
+  const selection = { model: "test-model", reasoningEffort: "medium", sandbox: "workspace-write" as const };
+  const first = new AppDatabase(root, undefined, false);
+  const parent = first.createConversation(crypto.randomUUID(), "主任务", selection);
+  const originalSide = first.createSideConversation(parent, crypto.randomUUID(), selection);
+  first.close();
+
+  const legacy = new DatabaseSync(path.join(root, "codex-web.sqlite"));
+  legacy.exec("PRAGMA foreign_keys=OFF");
+  legacy.exec(`
+    ALTER TABLE conversation_side_chats RENAME TO conversation_side_chats_current;
+    CREATE TABLE conversation_side_chats (
+      parent_conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO conversation_side_chats(parent_conversation_id,conversation_id,created_at)
+    SELECT parent_conversation_id,conversation_id,created_at FROM conversation_side_chats_current;
+    DROP TABLE conversation_side_chats_current;
+  `);
+  legacy.close();
+
+  const migrated = new AppDatabase(root, undefined, false);
+  const secondSide = migrated.createSideConversation(parent, crypto.randomUUID(), selection);
+  assert.deepEqual(new Set(migrated.listSideConversations(LEGACY_USER_ID, parent.id).map((item) => item.id)), new Set([originalSide.id, secondSide.id]));
+  const columns = migrated.sqlite.prepare("PRAGMA table_info(conversation_side_chats)").all() as Array<{ name: string; pk: number }>;
+  assert.equal(columns.find((column) => column.name === "parent_conversation_id")?.pk, 0);
+  assert.equal(columns.find((column) => column.name === "conversation_id")?.pk, 1);
+  assert.ok(columns.some((column) => column.name === "last_opened_at"));
+  migrated.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test("side chat keeps an independent model and persists exact JSONL references", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-side-chat-api-test-"));
   const tenantRoot = path.join(root, "tenants");
@@ -1768,18 +1806,41 @@ test("side chat keeps an independent model and persists exact JSONL references",
   await agent.delete(`/codex-web/api/conversations/${sideId}/pending-prompts/${queued.body.pendingPrompt.id}`).set("X-CSRF-Token", csrf).expect(204);
   await agent.post(`/codex-web/api/conversations/${sideId}/archive`).set("X-CSRF-Token", csrf).expect(404);
 
+  const secondSideCreated = await agent.post(`/codex-web/api/conversations/${parentId}/side-chats`).set("X-CSRF-Token", csrf).expect(201);
+  const secondSideId = secondSideCreated.body.conversation.id as string;
+  assert.notEqual(secondSideId, sideId);
+  const sideHistory = await agent.get("/codex-web/api/side-chats").expect(200);
+  assert.deepEqual(new Set(sideHistory.body.sideChats.map((item: { conversation: { id: string } }) => item.conversation.id)), new Set([sideId, secondSideId]));
+  assert.ok(sideHistory.body.sideChats.every((item: { parentConversationId: string }) => item.parentConversationId === parentId));
+  assert.equal((await agent.get(`/codex-web/api/conversations/${parentId}/side-chats`).expect(200)).body.sideChats.length, 2);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await agent.post(`/codex-web/api/side-chats/${sideId}/open`).set("X-CSRF-Token", csrf).expect(200);
+  assert.equal((await agent.get(`/codex-web/api/conversations/${parentId}/side-chat`).expect(200)).body.conversation.id, sideId);
+
+  const selectedContext = await agent.post(`/codex-web/api/side-chats/${secondSideId}/context`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceConversationId: parentId })
+    .expect(200);
+  assert.equal(selectedContext.body.conversation.id, secondSideId);
+  assert.equal(selectedContext.body.reference.sourceConversationId, parentId);
+
   await agent.post(`/codex-web/api/conversations/${parentId}/archive`).set("X-CSRF-Token", csrf).expect(200);
   assert.ok(instance.db.getConversation(sideId)?.archived_at);
+  assert.ok(instance.db.getConversation(secondSideId)?.archived_at);
   await agent.post(`/codex-web/api/conversations/${parentId}/restore`).set("X-CSRF-Token", csrf).expect(200);
   assert.equal(instance.db.getConversation(sideId)?.archived_at, null);
+  assert.equal(instance.db.getConversation(secondSideId)?.archived_at, null);
 
   const parentWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, parentId);
   const sideWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, sideId);
+  const secondSideWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, secondSideId);
   await agent.delete(`/codex-web/api/conversations/${parentId}`).set("X-CSRF-Token", csrf).expect(204);
   assert.ok(instance.db.getConversation(parentId)?.deleted_at);
   assert.ok(instance.db.getConversation(sideId)?.deleted_at);
+  assert.ok(instance.db.getConversation(secondSideId)?.deleted_at);
   assert.equal(fs.existsSync(parentWorkspace), false);
   assert.equal(fs.existsSync(sideWorkspace), false);
+  assert.equal(fs.existsSync(secondSideWorkspace), false);
   assert.equal(fs.existsSync(rolloutPath), false);
 });
 

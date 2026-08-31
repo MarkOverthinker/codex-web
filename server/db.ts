@@ -44,6 +44,13 @@ export type ConversationRow = {
 
 export type ConversationTitleSource = "default" | "ai" | "manual" | "legacy";
 
+export type SideConversationRow = ConversationRow & {
+  parent_conversation_id: string;
+  parent_title: string;
+  side_created_at: string;
+  last_opened_at: string;
+};
+
 export type MessageRow = {
   id: string;
   conversation_id: string;
@@ -288,9 +295,10 @@ export class AppDatabase {
         updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS conversation_side_chats (
-        parent_conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-        conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
-        created_at TEXT NOT NULL
+        parent_conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        last_opened_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
@@ -475,6 +483,7 @@ export class AppDatabase {
     if (!fileColumns.has("composer_draft_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN composer_draft_id TEXT REFERENCES composer_drafts(conversation_id) ON DELETE CASCADE");
     const presetPromptColumns = this.columnNames("preset_prompts");
     if (!presetPromptColumns.has("default_enabled")) this.sqlite.exec("ALTER TABLE preset_prompts ADD COLUMN default_enabled INTEGER NOT NULL DEFAULT 0");
+    this.migrateSideChats();
     this.sqlite.prepare("UPDATE jobs SET queue_seq=rowid WHERE queue_seq IS NULL").run();
 
     const now = new Date().toISOString();
@@ -511,6 +520,7 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS conversations_user_archived_idx ON conversations(user_id, deleted_at, archived_at);
       CREATE INDEX IF NOT EXISTS conversations_working_dir_idx ON conversations(working_dir) WHERE working_dir IS NOT NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS conversation_side_chats_child_idx ON conversation_side_chats(conversation_id);
+      CREATE INDEX IF NOT EXISTS conversation_side_chats_parent_idx ON conversation_side_chats(parent_conversation_id, last_opened_at DESC);
       CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS files_conversation_idx ON files(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS files_pending_prompt_idx ON files(pending_prompt_id, created_at);
@@ -536,6 +546,39 @@ export class AppDatabase {
 
   private columnNames(table: string): Set<string> {
     return new Set((this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+  }
+
+  private migrateSideChats(): void {
+    const columns = this.sqlite.prepare("PRAGMA table_info(conversation_side_chats)").all() as Array<{ name: string; pk: number }>;
+    const parentIsPrimaryKey = columns.some((column) => column.name === "parent_conversation_id" && column.pk > 0);
+    const hasLastOpenedAt = columns.some((column) => column.name === "last_opened_at");
+    if (!parentIsPrimaryKey && hasLastOpenedAt) return;
+
+    this.sqlite.exec("PRAGMA foreign_keys=OFF");
+    try {
+      this.sqlite.exec("BEGIN IMMEDIATE");
+      this.sqlite.exec("ALTER TABLE conversation_side_chats RENAME TO conversation_side_chats_legacy");
+      this.sqlite.exec(`
+        CREATE TABLE conversation_side_chats (
+          parent_conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+          created_at TEXT NOT NULL,
+          last_opened_at TEXT NOT NULL
+        )
+      `);
+      this.sqlite.exec(`
+        INSERT INTO conversation_side_chats(parent_conversation_id,conversation_id,created_at,last_opened_at)
+        SELECT parent_conversation_id,conversation_id,created_at,${hasLastOpenedAt ? "last_opened_at" : "created_at"}
+        FROM conversation_side_chats_legacy
+      `);
+      this.sqlite.exec("DROP TABLE conversation_side_chats_legacy");
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys=ON");
+    }
   }
 
   private migrateLegacyTaskCategoryOrders(): void {
@@ -741,12 +784,32 @@ export class AppDatabase {
       SELECT ${conversationSelect} FROM conversations
       JOIN conversation_side_chats side ON side.conversation_id=conversations.id
       WHERE side.parent_conversation_id=? AND conversations.user_id=? AND conversations.deleted_at IS NULL
+      ORDER BY side.last_opened_at DESC,side.created_at DESC
+      LIMIT 1
     `).get(parentConversationId, userId) as ConversationRow | undefined;
   }
 
+  listSideConversations(userId: string, parentConversationId?: string): SideConversationRow[] {
+    const parentFilter = parentConversationId ? "AND side.parent_conversation_id=?" : "";
+    const params = parentConversationId ? [userId, parentConversationId] : [userId];
+    return this.sqlite.prepare(`
+      SELECT ${conversationSelect},
+        side.parent_conversation_id,
+        parent.title AS parent_title,
+        side.created_at AS side_created_at,
+        side.last_opened_at
+      FROM conversations
+      JOIN conversation_side_chats side ON side.conversation_id=conversations.id
+      JOIN conversations parent ON parent.id=side.parent_conversation_id
+      WHERE conversations.user_id=?
+        ${parentFilter}
+        AND conversations.deleted_at IS NULL
+        AND parent.deleted_at IS NULL
+      ORDER BY side.last_opened_at DESC,side.created_at DESC,conversations.id
+    `).all(...params) as SideConversationRow[];
+  }
+
   createSideConversation(parent: ConversationRow, id: string, selection: StoredAgentSelection): ConversationRow {
-    const existing = this.getSideConversation(parent.id, parent.user_id);
-    if (existing) return existing;
     const now = new Date().toISOString();
     const title = `侧边聊天 · ${parent.title}`.slice(0, 80);
     this.sqlite.exec("BEGIN IMMEDIATE");
@@ -758,14 +821,22 @@ export class AppDatabase {
         id, parent.user_id, title, parent.working_dir, selection.model, selection.reasoningEffort,
         selection.provider ?? null, selection.sandbox ?? "workspace-write", now, now,
       );
-      this.sqlite.prepare("INSERT INTO conversation_side_chats(parent_conversation_id,conversation_id,created_at) VALUES(?,?,?)")
-        .run(parent.id, id, now);
+      this.sqlite.prepare("INSERT INTO conversation_side_chats(parent_conversation_id,conversation_id,created_at,last_opened_at) VALUES(?,?,?,?)")
+        .run(parent.id, id, now, now);
       this.sqlite.exec("COMMIT");
     } catch (error) {
       this.sqlite.exec("ROLLBACK");
       throw error;
     }
     return this.getConversation(id)!;
+  }
+
+  touchSideConversation(conversationId: string, userId: string): ConversationRow | undefined {
+    const conversation = this.getConversationForUser(conversationId, userId);
+    if (!conversation || !this.getSideConversationParent(conversationId, userId)) return undefined;
+    this.sqlite.prepare("UPDATE conversation_side_chats SET last_opened_at=? WHERE conversation_id=?")
+      .run(new Date().toISOString(), conversationId);
+    return conversation;
   }
 
   getSideConversationParent(conversationId: string, userId: string): ConversationRow | undefined {
@@ -842,7 +913,7 @@ export class AppDatabase {
       if (changed) {
         this.sqlite.prepare(`
           UPDATE conversations SET archived_at=?
-          WHERE id=(SELECT conversation_id FROM conversation_side_chats WHERE parent_conversation_id=?)
+          WHERE id IN (SELECT conversation_id FROM conversation_side_chats WHERE parent_conversation_id=?)
             AND user_id=? AND deleted_at IS NULL AND archived_at IS NULL
         `).run(now, id, userId);
       }
@@ -867,7 +938,7 @@ export class AppDatabase {
       if (changed) {
         this.sqlite.prepare(`
           UPDATE conversations SET archived_at=NULL,updated_at=?
-          WHERE id=(SELECT conversation_id FROM conversation_side_chats WHERE parent_conversation_id=?)
+          WHERE id IN (SELECT conversation_id FROM conversation_side_chats WHERE parent_conversation_id=?)
             AND user_id=? AND deleted_at IS NULL AND archived_at IS NOT NULL
         `).run(now, id, userId);
       }
