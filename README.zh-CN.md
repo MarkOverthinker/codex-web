@@ -4,6 +4,8 @@ Codex Web 是一个非官方、自托管的 OpenAI Codex CLI 网页工作台。�
 
 > 本项目由社区独立开发，与 OpenAI 没有关联，也未获得 OpenAI 的背书或支持。
 
+每个主会话都可以打开一个持久化侧边聊天：侧边聊天使用独立的 Codex thread，可单独选择模型和思考级别，不会改变主会话上下文。选中主消息文本后点击“侧边提问”，服务端会把引用解析到对应 Codex rollout JSONL，保存相对路径、行号、字节偏移、JSON Pointer、item ID 与字符区间；引用卡可跳回原消息并复制完整定位。侧边草稿、消息、排队任务和结构化引用都由服务器持久化，主会话归档、恢复或删除时会同步处理其侧边线程。详细设计见 [docs/SIDE_CHAT_DESIGN.md](docs/SIDE_CHAT_DESIGN.md)。
+
 ## 快速开始
 
 环境要求：Docker Engine、Docker Compose v2，以及可登录 Codex CLI 的账号。

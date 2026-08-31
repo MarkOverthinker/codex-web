@@ -35,6 +35,7 @@ import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { ProviderManagerDialog } from "./provider-manager-dialog";
+import { SideChatPane, type SideChatReferenceRequest } from "./side-chat-pane";
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
@@ -394,6 +395,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [selectedId, setSelectedId] = useState<string | null>(() => readLocalStorageValue(SELECTED_CONVERSATION_KEY));
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sideChatOpen, setSideChatOpen] = useState(false);
+  const [sideChatReferenceRequest, setSideChatReferenceRequest] = useState<SideChatReferenceRequest | null>(null);
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
   const [composerInputRevision, setComposerInputRevision] = useState(0);
@@ -531,6 +534,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const taskMenuRef = useRef(taskMenu);
   const dismissedReloadSignatureRef = useRef<string | null>(null);
   const currentReloadSignatureRef = useRef("");
+  const sideChatReferenceSequenceRef = useRef(0);
   selectedIdRef.current = selectedId;
   detailRef.current = detail;
   currentConversationIdRef.current = detail?.conversation.id === selectedId ? detail.conversation.id : null;
@@ -551,11 +555,28 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const newConversationFromSourceRef = useRef<(sourceMessageId: string, excerpt: string) => void>(() => undefined);
   newConversationFromSourceRef.current = newConversationFromSource;
 
-  const openFilePreview = useCallback((file: WorkFile) => setPreviewFile(file), []);
+  const toggleSideChat = useCallback(() => {
+    setPreviewFile(null);
+    setSnippetPreview(null);
+    setSideChatOpen((open) => !open);
+  }, []);
+
+  const askSideChatAbout = useCallback((selectedText: string, messageId: string) => {
+    const excerpt = normalizeAskAgentSelection(selectedText);
+    if (!excerpt) return;
+    setPreviewFile(null);
+    setSnippetPreview(null);
+    setSideChatOpen(true);
+    sideChatReferenceSequenceRef.current += 1;
+    setSideChatReferenceRequest({ id: sideChatReferenceSequenceRef.current, sourceMessageId: messageId, excerpt });
+  }, []);
+
+  const openFilePreview = useCallback((file: WorkFile) => { setSideChatOpen(false); setPreviewFile(file); }, []);
   const closeFilePreview = useCallback(() => setPreviewFile(null), []);
   const openCodeSnippet = useCallback((target: FileLineRef) => {
     const conversation = detailRef.current;
     if (!conversation) return;
+    setSideChatOpen(false);
     setPreviewFile(null);
     setSnippetPreview({ conversationId: conversation.conversation.id, path: target.path, line: target.line });
   }, []);
@@ -854,6 +875,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     return () => window.removeEventListener("pointerdown", closeFromOutside);
   }, [newTaskDirPanelOpen]);
   useEffect(() => {
+    setSideChatOpen(false);
+    setSideChatReferenceRequest(null);
     autoFollowRef.current = true;
     lastScrollTopRef.current = 0;
     loadingOlderMessagesRef.current = false;
@@ -968,21 +991,6 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     return () => window.cancelAnimationFrame(frame);
   }, [detail?.messages.length, activities, sending]);
 
-  useEffect(() => {
-    const target = pendingSourceFocusRef.current;
-    if (!target || detail?.conversation.id !== target.conversationId) return;
-    const container = messagesRef.current;
-    const message = container?.querySelector<HTMLElement>(`[data-message-id="${target.messageId}"]`);
-    if (!container || !message) return;
-    pendingSourceFocusRef.current = null;
-    const containerTop = container.getBoundingClientRect().top;
-    const messageTop = message.getBoundingClientRect().top;
-    const top = messageTop - containerTop + container.scrollTop;
-    container.scrollTo({ top: Math.max(0, top - (container.clientHeight - message.clientHeight) / 2), behavior: "smooth" });
-    message.classList.add("message-highlight");
-    window.setTimeout(() => message.classList.remove("message-highlight"), 2200);
-  }, [detail?.conversation.id, detail?.messages.length]);
-
   const loadOlderMessages = useCallback(async () => {
     const current = detailRef.current;
     const conversationId = current?.conversation.id;
@@ -1014,6 +1022,23 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       }
     }
   }, []);
+
+  useEffect(() => {
+    const target = pendingSourceFocusRef.current;
+    if (!target || detail?.conversation.id !== target.conversationId) return;
+    const container = messagesRef.current;
+    const message = container?.querySelector<HTMLElement>(`[data-message-id="${target.messageId}"]`);
+    if (container && message) {
+      pendingSourceFocusRef.current = null;
+      scrollToMessage(target.messageId, container);
+      return;
+    }
+    if (detail.messagePage.hasMore && !loadingOlderMessagesRef.current) {
+      void loadOlderMessages();
+      return;
+    }
+    if (!detail.messagePage.hasMore) pendingSourceFocusRef.current = null;
+  }, [detail?.conversation.id, detail?.messages.length, detail?.messagePage.hasMore, historyLoadVersion, loadOlderMessages]);
 
   const handleMessagesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const messages = event.currentTarget;
@@ -1177,20 +1202,22 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     autoFollowRef.current = false;
   }
 
-  function scrollToSourceMessage(messageId: string) {
-    const container = messagesRef.current;
-    if (container) scrollToMessage(messageId, container);
-  }
-
   function openSourceReference(reference: MessageSourceReference) {
-    if (reference.sourceConversationId === selectedIdRef.current) {
-      scrollToSourceMessage(reference.sourceMessageId);
-      return;
-    }
     pendingSourceFocusRef.current = {
       conversationId: reference.sourceConversationId,
       messageId: reference.sourceMessageId,
     };
+    if (reference.sourceConversationId === selectedIdRef.current) {
+      const container = messagesRef.current;
+      const message = container?.querySelector<HTMLElement>(`[data-message-id="${reference.sourceMessageId}"]`);
+      if (container && message) {
+        pendingSourceFocusRef.current = null;
+        scrollToMessage(reference.sourceMessageId, container);
+      } else {
+        setHistoryLoadVersion((version) => version + 1);
+      }
+      return;
+    }
     setSidebarOpen(false);
     setSelectedId(reference.sourceConversationId);
   }
@@ -1411,7 +1438,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         selectedIdRef.current = id; setSelectedId(id);
       }
       if (editingPending) {
-        const result = await api.updatePendingPrompt(id, editingPending.id, content, files, removedEditingFileIds, askAgentQuote);
+        const result = await api.updatePendingPrompt(id, editingPending.id, content, files, removedEditingFileIds, askAgentQuote, sourceReferenceRef.current);
         if (result.needsInstruction) {
           const persisted = result.editingPrompt ?? result.pendingPrompt ?? editingPending;
           editingPendingRef.current = persisted; setEditingPending(persisted); setRemovedEditingFileIds([]);
@@ -1454,7 +1481,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       }
       const result = await api.editPendingPrompt(selectedId, prompt.id);
       editingPendingRef.current = result.editingPrompt;
-      setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setSourceReference(null); applyExternalComposerText(result.editingPrompt.content);
+      setEditingPending(result.editingPrompt); setRemovedEditingFileIds([]); setFiles([]); setAskAgentQuote(result.editingPrompt.quote_excerpt ?? ""); setSourceReference(result.editingPrompt.source_reference); applyExternalComposerText(result.editingPrompt.content);
       draftLoadedConversationRef.current = null;
       if (selectedModel !== prompt.agent_model || reasoningEffort !== prompt.reasoning_effort || sandboxMode !== (prompt.sandbox_mode ?? "workspace-write")) {
         await persistAgentSelection({ model: prompt.agent_model, reasoningEffort: prompt.reasoning_effort, sandbox: prompt.sandbox_mode ?? "workspace-write" });
@@ -2873,7 +2900,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => applyExternalComposerText(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -2887,6 +2914,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
+    {sideChatOpen && currentDetail && !currentDetail.conversation.archived_at && <SideChatPane
+      key={currentDetail.conversation.id}
+      parentConversation={currentDetail.conversation}
+      agentOptions={agentOptions}
+      referenceRequest={sideChatReferenceRequest}
+      onReferenceHandled={(requestId) => setSideChatReferenceRequest((current) => current?.id === requestId ? null : current)}
+      onClose={() => { setSideChatOpen(false); setSideChatReferenceRequest(null); }}
+      onError={setError}
+      onOpenSourceReference={openSourceReference}
+    />}
     {snippetPreview
       ? <CodeSnippetPane
           key={`${snippetPreview.conversationId}:${snippetPreview.path}:${snippetPreview.line}`}
@@ -3156,8 +3193,8 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
   </article>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail]);
@@ -3218,6 +3255,13 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
     window.getSelection()?.removeAllRanges();
   }
 
+  function useSelectedTextInSideChat() {
+    if (!askSelection) return;
+    onAskSideChat(askSelection.text, askSelection.messageId);
+    setAskSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }
+
   function useSelectedTextAsNewTask() {
     if (!askSelection) return;
     onNewConversationFromSource(askSelection.messageId, askSelection.text);
@@ -3242,7 +3286,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
         if (value === "__browse__") { onBrowseWorkingDir(detail.conversation.working_dir ?? undefined); return; }
         onWorkingDirChange(value || null);
       }}
-    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
+    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
     {detail.outputFiles.length > 0 && <div className="chat-outputs" aria-label="输出文件">
       <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
       <div className="chat-outputs-list">{detail.outputFiles.map((file) => {
@@ -3276,8 +3320,9 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       onSkipQueue={onSkipQueue}
       skipQueueBusy={skipQueueBusy}
     />{askSelection && <div className={`ask-agent-selection selection-actions ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }}>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedTextInSideChat(); }} onClick={(event) => { if (event.detail === 0) useSelectedTextInSideChat(); }}><Bot size={14} /><span>侧边提问</span></button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedText(); }} onClick={(event) => { if (event.detail === 0) useSelectedText(); }}><Zap size={14} /><span>询问 Agent</span></button>
-      <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedTextAsNewTask(); }} onClick={(event) => { if (event.detail === 0) useSelectedTextAsNewTask(); }}><Plus size={14} /><span>引用并新建任务</span></button>
+      <button type="button" onPointerDown={(event) => { event.preventDefault(); useSelectedTextAsNewTask(); }} onClick={(event) => { if (event.detail === 0) useSelectedTextAsNewTask(); }}><Plus size={14} /><span>新建任务</span></button>
     </div>}
   </section>;
 });
