@@ -363,6 +363,16 @@ test("side chat pane resizes independently by pointer and keyboard", () => {
   assert.match(styles, /\.side-chat-pane \{ width: 100vw !important; \}/);
 });
 
+test("primary chat exposes a persistent latest-fork action and answer-level fork actions", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  assert.match(appSource, /latestForkableMessage/);
+  assert.match(appSource, /aria-label="从最新回答 Fork 到侧边聊天"/);
+  assert.match(appSource, /message\.role === "assistant" && forkSourceMessageId/);
+  assert.match(appSource, /onForkSideChat\(forkSourceMessageId\)/);
+  assert.match(appSource, /previousUserMessage\?\.can_fork/);
+  assert.match(appSource, /title=\{forkEnabled \? "保留到此回答，Fork 到侧边聊天"/);
+});
+
 test("file explorer shows visible nesting and expanded directory states", () => {
   const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "file-explorer-pane.tsx"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
