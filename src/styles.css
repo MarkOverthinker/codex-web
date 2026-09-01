@@ -693,13 +693,18 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .copy-path-button.failed { color: #b3404a; }
 .file-card > .file-path-copy { border-left: 1px solid #dfe2ec; }
 .download-button { display: grid; place-items: center; padding: 10px; border-left: 1px solid #dfe2ec; color: var(--indigo); }
-.chat-outputs { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; min-height: 43px; padding: 6px 27px; border-bottom: 1px solid rgba(15, 17, 32, .08); background: rgba(250, 251, 255, .66); }
+.chat-outputs { flex: 0 0 auto; min-height: 43px; padding: 6px 27px; border-bottom: 1px solid rgba(15, 17, 32, .08); background: rgba(250, 251, 255, .66); }
+.chat-outputs-toggle { width: 100%; min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; text-align: left; }
+.chat-outputs-toggle-copy { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.chat-outputs-toggle-copy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8b90a0; font-size: 10px; }
+.chat-outputs-toggle-icon { flex: 0 0 auto; color: #777d91; transition: transform .16s ease; }
+.chat-outputs.expanded .chat-outputs-toggle-icon { transform: rotate(180deg); }
 .chat-outputs-heading { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: #6f7486; font-size: 10px; white-space: nowrap; }
 .chat-outputs-heading svg { color: var(--indigo); }
 .chat-outputs-heading strong { color: #313a70; font-size: 11px; }
-.chat-outputs-list { min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 1px; scrollbar-width: thin; }
-.chat-output-chip-wrap { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
-.chat-output-chip { flex: 0 0 auto; max-width: 230px; min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid #d5d9e8; border-radius: 999px; color: #4c5269; background: #fff; cursor: pointer; text-decoration: none; font-size: 11px; }
+.chat-outputs-list { min-width: 0; max-height: min(36vh, 360px); display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: start; gap: 6px; overflow: auto; margin-top: 5px; padding: 1px; scrollbar-width: thin; }
+.chat-output-chip-wrap { min-width: 0; display: flex; align-items: center; gap: 2px; }
+.chat-output-chip { min-width: 0; flex: 1; min-height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid #d5d9e8; border-radius: 9px; color: #4c5269; background: #fff; cursor: pointer; text-decoration: none; font-size: 11px; }
 .chat-output-chip:hover { border-color: #aab4e0; color: var(--indigo); background: #f2f4fd; }
 .chat-output-chip svg { flex: 0 0 auto; color: var(--indigo); }
 .chat-output-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1165,6 +1170,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .download-button { border-left-color: #44464e; }
 :root[data-theme="dark"] .file-card > .file-preview-trigger small { color: #94969f; }
 :root[data-theme="dark"] .chat-outputs { border-bottom-color: #303238; background: rgba(23, 24, 27, .55); }
+:root[data-theme="dark"] .chat-outputs-toggle-copy > small, :root[data-theme="dark"] .chat-outputs-toggle-icon { color: #94969f; }
 :root[data-theme="dark"] .chat-outputs-heading { color: #94969f; }
 :root[data-theme="dark"] .chat-outputs-heading strong { color: #d9deff; }
 :root[data-theme="dark"] .chat-output-chip { border-color: #3d3f47; color: #c7c9d0; background: #24262b; }

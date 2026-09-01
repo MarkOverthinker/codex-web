@@ -16,7 +16,7 @@ import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, normalizeTaskCategoryVisibleCount, pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
-import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "./file-links";
+import { canPreviewInline, filePreviewKind, firstMarkdownPreviewFile, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "./file-links";
 import { parseCodexSnippetUrl, parseFileRef, parseSnippetHref, type FileLineRef } from "./code-snippet";
 import { CopyPathButton, copyText } from "./copy-path";
 import { CodeSnippetPane } from "./code-snippet-pane";
@@ -518,6 +518,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const prependScrollRestoreRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const connectedJobRef = useRef<string | null>(null);
+  const deletingConversationIdsRef = useRef(new Set<string>());
   const selectedIdRef = useRef<string | null>(selectedId);
   const editingPendingRef = useRef<PendingPrompt | null>(editingPending);
   const lastEventIdRef = useRef(0);
@@ -593,6 +594,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setConversations((current) => conversationListEqual(current, result.conversations) ? current : result.conversations);
     return result.conversations;
   }, []);
+
+  function showConversationInList(conversation: Conversation): void {
+    setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)]);
+  }
 
   const refreshTaskCategories = useCallback(async () => {
     const result = await api.taskCategories(); setTaskCategorySettings(result.settings); return result.settings;
@@ -1155,11 +1160,18 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   }
 
   async function newConversation(workingDir?: string | null) {
-    setError(""); const result = await api.createConversation(workingDir);
-    setSelectedModel(result.agentSelection.model); setReasoningEffort(result.agentSelection.reasoningEffort);
-    setSandboxMode(result.agentSelection.sandbox ?? "workspace-write");
-    await refreshList(); setSelectedId(result.conversation.id);
-    setNewTaskDirPanelOpen(false);
+    setError("");
+    try {
+      const result = await api.createConversation(workingDir);
+      setSelectedModel(result.agentSelection.model); setReasoningEffort(result.agentSelection.reasoningEffort);
+      setSandboxMode(result.agentSelection.sandbox ?? "workspace-write");
+      showConversationInList(result.conversation);
+      setSelectedId(result.conversation.id);
+      setNewTaskDirPanelOpen(false);
+      void refreshList().catch(() => undefined);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "新建任务失败");
+    }
   }
 
   async function newConversationFromSource(sourceMessageId: string, excerpt: string) {
@@ -1179,8 +1191,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       draftCacheRef.current.set(result.conversation.id, cached);
       draftSyncedSignaturesRef.current.set(result.conversation.id, composerDraftSignature(cached.content, cached.quoteExcerpt, cached.sourceReference));
       draftLoadedConversationRef.current = result.conversation.id;
-      await refreshList();
+      showConversationInList(result.conversation);
       setSelectedId(result.conversation.id);
+      void refreshList().catch(() => undefined);
       setComposerDraft(result.composerDraft);
       applyExternalComposerText("");
       setAskAgentQuote(result.composerDraft.quote_excerpt ?? "");
@@ -1556,11 +1569,33 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   async function deleteConversation(conversation: Conversation) {
     if (!window.confirm(`删除“${conversation.title}”？相关任务会被停止，本机工作文件和结果文件将无法恢复；数据库审计记录会保留。`)) return;
+    if (deletingConversationIdsRef.current.has(conversation.id)) return;
+    deletingConversationIdsRef.current.add(conversation.id);
+    const wasSelected = selectedIdRef.current === conversation.id;
+    const originalIndex = conversationsRef.current.findIndex((item) => item.id === conversation.id);
+    setTaskMenu(null);
+    setConversations((current) => current.filter((item) => item.id !== conversation.id));
+    if (wasSelected) {
+      setPreviewFile(null);
+      setSnippetPreview(null);
+      setSideChatOpen(false);
+      setSelectedId(null);
+    }
     try {
       await api.deleteConversation(conversation.id);
-      if (selectedId === conversation.id) setSelectedId(null);
-      await refreshList();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "删除失败"); }
+      void refreshList().catch(() => undefined);
+    } catch (reason) {
+      setConversations((current) => {
+        if (current.some((item) => item.id === conversation.id)) return current;
+        const next = [...current];
+        next.splice(Math.min(Math.max(originalIndex, 0), next.length), 0, conversation);
+        return next;
+      });
+      if (wasSelected && selectedIdRef.current === null) setSelectedId(conversation.id);
+      setError(reason instanceof Error ? reason.message : "删除失败");
+    } finally {
+      deletingConversationIdsRef.current.delete(conversation.id);
+    }
   }
 
   async function renameConversation(conversation: Conversation) {
@@ -3214,9 +3249,36 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
   detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
-  const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail]);
+  const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail.messages, detail.outputFiles]);
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
+  const [previewedOutputFileIds, setPreviewedOutputFileIds] = useState<string[]>([]);
+  const autoPreviewedMarkdownRef = useRef(new Set<string>());
+  const handlePreview = useCallback((file: WorkFile) => {
+    if (file.kind === "output" && canPreviewInline(file)) {
+      setPreviewedOutputFileIds((current) => [file.id, ...current.filter((id) => id !== file.id)]);
+    }
+    onPreview(file);
+  }, [onPreview]);
+  const orderedOutputFiles = useMemo(
+    () => orderPreviewedFiles(detail.outputFiles, previewedOutputFileIds),
+    [detail.outputFiles, previewedOutputFileIds],
+  );
+
+  useEffect(() => {
+    const outputFileIds = new Set(detail.outputFiles.map((file) => file.id));
+    setPreviewedOutputFileIds((current) => {
+      const next = current.filter((fileId) => outputFileIds.has(fileId));
+      return next.length === current.length ? current : next;
+    });
+  }, [detail.conversation.id, detail.outputFiles]);
+
+  useEffect(() => {
+    const markdown = firstMarkdownPreviewFile(detail.outputFiles);
+    if (!markdown || autoPreviewedMarkdownRef.current.has(markdown.id)) return;
+    autoPreviewedMarkdownRef.current.add(markdown.id);
+    handlePreview(markdown);
+  }, [detail.conversation.id, detail.outputFiles, handlePreview]);
 
   useEffect(() => {
     let frame = 0;
@@ -3304,19 +3366,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
         onWorkingDirChange(value || null);
       }}
     />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
-    {detail.outputFiles.length > 0 && <div className="chat-outputs" aria-label="输出文件">
-      <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
-      <div className="chat-outputs-list">{detail.outputFiles.map((file) => {
-        const path = file.host_path ?? file.relative_path;
-        const chipContent = <>{file.mime_type.startsWith("image/") ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></>;
-        return <span className="chat-output-chip-wrap" key={file.id}>
-          {canPreviewInline(file)
-            ? <button type="button" className="chat-output-chip" title={path} onClick={() => onPreview(file)}>{chipContent}</button>
-            : <a className="chat-output-chip" href={fileUrl(file, true)} download={file.original_name} title={path}>{chipContent}</a>}
-          <CopyPathButton value={path} className="chat-output-chip-copy" />
-        </span>;
-      })}</div>
-    </div>}
+    <OutputFilesPanel key={detail.conversation.id} files={orderedOutputFiles} onPreview={handlePreview} />
     <MessageList
       messages={detail.messages}
       detail={detail}
@@ -3333,7 +3383,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       userInitials={userInitials}
       chatFontSize={chatFontSize}
       citationFiles={citationFiles}
-      onPreview={onPreview}
+      onPreview={handlePreview}
       onSkipQueue={onSkipQueue}
       skipQueueBusy={skipQueueBusy}
     />{askSelection && <div className={`ask-agent-selection selection-actions ${askSelection.below ? "below" : "above"}`} style={{ left: askSelection.left, top: askSelection.top }}>
@@ -3424,6 +3474,34 @@ function formatActivityTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return ACTIVITY_TIME_FORMATTER.format(date);
+}
+
+function OutputFilesPanel({ files, onPreview }: { files: WorkFile[]; onPreview: (file: WorkFile) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  if (files.length === 0) return null;
+  const previewableCount = files.filter((file) => canPreviewInline(file)).length;
+  return <section className={`chat-outputs ${expanded ? "expanded" : ""}`} aria-label="输出文件">
+    <button type="button" className="chat-outputs-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
+      <span className="chat-outputs-toggle-copy">
+        <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
+        <small>{files.length} 个文件{previewableCount > 0 ? ` · ${previewableCount} 个可预览` : ""}</small>
+      </span>
+      <ChevronDown size={15} className="chat-outputs-toggle-icon" />
+    </button>
+    {expanded && <div className="chat-outputs-list" role="list">
+      {files.map((file) => {
+        const path = file.host_path ?? file.relative_path;
+        const kind = filePreviewKind(file);
+        const chipContent = <>{kind === "image" ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></>;
+        return <span className="chat-output-chip-wrap" key={file.id} role="listitem">
+          {canPreviewInline(file)
+            ? <button type="button" className="chat-output-chip" title={path} onClick={() => onPreview(file)}>{chipContent}</button>
+            : <a className="chat-output-chip" href={fileUrl(file, true)} download={file.original_name} title={path}>{chipContent}</a>}
+          <CopyPathButton value={path} className="chat-output-chip-copy" />
+        </span>;
+      })}
+    </div>}
+  </section>;
 }
 
 function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkFile) => void }) {

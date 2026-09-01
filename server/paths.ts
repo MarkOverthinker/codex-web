@@ -449,7 +449,8 @@ export function resolveHostReadableFile(raw: string, options: { dataRoot: string
 }
 
 export function removeWorkspace(workspaceRoot: string, conversationId: string): void {
-  const root = ensureWorkspace(workspaceRoot, conversationId);
+  if (!/^[0-9a-f-]{36}$/i.test(conversationId)) throw new Error("Invalid conversation id");
+  const root = path.resolve(workspaceRoot, conversationId);
   const expectedParent = path.resolve(workspaceRoot);
   if (path.dirname(root) !== expectedParent) throw new Error("Refusing to remove unexpected path");
   fs.rmSync(root, { recursive: true, force: true });

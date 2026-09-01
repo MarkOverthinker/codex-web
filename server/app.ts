@@ -50,7 +50,7 @@ import {
   writeProviderConfig,
 } from "./provider-manager.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
-import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, type TenantPaths } from "./paths.js";
+import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, tenantPaths, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
 import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
@@ -189,9 +189,13 @@ export function createApp(overrides: AppOverrides = {}) {
     });
   }
 
-  function fileForClient(file: FileRow, userId: string) {
-    const workspace = workspaceFor(userId, file.conversation_id);
-    const storageRoot = file.kind === "output" && isPersistedDeliverablePath(file.relative_path) ? config.dataRoot : workspace;
+  function fileStorageRoot(file: FileRow, userId: string, workspace?: string): string {
+    if (file.kind === "output" && isPersistedDeliverablePath(file.relative_path)) return config.dataRoot;
+    return workspace ?? workspaceFor(userId, file.conversation_id);
+  }
+
+  function fileForClient(file: FileRow, userId: string, workspace?: string) {
+    const storageRoot = fileStorageRoot(file, userId, workspace);
     let hostPath = file.relative_path;
     try { hostPath = resolveInside(storageRoot, file.relative_path); } catch { /* Keep the stored relative path when the row is malformed. */ }
     return { ...file, host_path: hostPath };
@@ -203,8 +207,7 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   function fileAbsolutePath(file: FileRow, userId: string): string | null {
-    const workspace = workspaceFor(userId, file.conversation_id);
-    const storageRoot = file.kind === "output" && isPersistedDeliverablePath(file.relative_path) ? config.dataRoot : workspace;
+    const storageRoot = fileStorageRoot(file, userId);
     try {
       const absolute = resolveInside(storageRoot, file.relative_path);
       return fs.existsSync(absolute) ? absolute : null;
@@ -248,25 +251,30 @@ export function createApp(overrides: AppOverrides = {}) {
     const normalized = normalizeSnippetPath(rawPath);
     if (!normalized) return null;
     const folded = normalized.toLocaleLowerCase();
-    const workspace = workspaceFor(userId, conversation.id);
+    let workspace: string | undefined;
+    const clientFile = (file: FileRow) => {
+      if (!(file.kind === "output" && isPersistedDeliverablePath(file.relative_path))) workspace ??= workspaceFor(userId, conversation.id);
+      return fileForClient(file, userId, workspace);
+    };
     const files = db.listFiles(conversation.id);
     const basename = folded.split("/").pop() ?? "";
     const registered = files.find((file) => {
       const relative = normalizeSnippetPath(file.relative_path)?.toLocaleLowerCase() ?? "";
       if (relative && (folded === relative || folded.endsWith(`/${relative}`))) return true;
       if (!normalized.includes("/") && file.original_name.toLocaleLowerCase() === basename) return true;
-      const hostPath = normalizeSnippetPath(fileForClient(file, userId).host_path)?.toLocaleLowerCase() ?? "";
+      const hostPath = normalizeSnippetPath(clientFile(file).host_path)?.toLocaleLowerCase() ?? "";
       return Boolean(hostPath) && (folded === hostPath || folded.endsWith(`/${hostPath}`));
     });
     if (registered) {
-      const storageRoot = registered.kind === "output" && isPersistedDeliverablePath(registered.relative_path) ? config.dataRoot : workspace;
+      const storageRoot = fileStorageRoot(registered, userId, workspace);
       try {
         const absolute = resolveInside(storageRoot, registered.relative_path);
         if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) {
-          return { absolute, displayPath: fileForClient(registered, userId).host_path, originalName: registered.original_name };
+          return { absolute, displayPath: clientFile(registered).host_path, originalName: registered.original_name };
         }
       } catch { /* Fall through to the workspace lookup below. */ }
     }
+    workspace ??= workspaceFor(userId, conversation.id);
     const roots = [{ root: workspace }, ...(config.hostMode && conversation.working_dir ? [{ root: conversation.working_dir }] : []), { root: storageFor(userId).library }];
     for (const { root } of roots) {
       try {
@@ -399,7 +407,7 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   function removePendingPromptFiles(prompt: PendingPromptWithFiles, userId: string): void {
-    const workspace = workspaceFor(userId, prompt.conversation_id);
+    const workspace = resolveInside(tenantPaths(config.tenantRoot, userId).conversations, prompt.conversation_id);
     for (const file of prompt.files) {
       try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); }
       catch { /* Missing or already-cleaned drafts must not block queue cleanup. */ }
@@ -407,7 +415,7 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   function removeComposerDraftFiles(draft: ComposerDraftWithFiles, userId: string): void {
-    const workspace = workspaceFor(userId, draft.conversation_id);
+    const workspace = resolveInside(tenantPaths(config.tenantRoot, userId).conversations, draft.conversation_id);
     for (const file of draft.files) {
       try { fs.rmSync(resolveInside(workspace, file.relative_path), { force: true }); }
       catch { /* Missing draft files must not block explicit draft cleanup. */ }
@@ -1466,7 +1474,6 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!reference) return res.status(400).json({ error: "无法生成引用快照。" });
 
     const id = newId();
-    workspaceFor(session.user_id, id);
     const agentSelection = userAgentSelection(session.user_id);
     const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
     db.applyDefaultPresetPrompts(conversation.id, session.user_id);
@@ -1590,7 +1597,6 @@ export function createApp(overrides: AppOverrides = {}) {
     let conversation = db.getSideConversation(parent.id, session.user_id);
     if (!conversation) {
       const id = newId();
-      workspaceFor(session.user_id, id);
       const selection = conversationAgentSelection(parent);
       conversation = db.createSideConversation(parent, id, selection);
       db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
@@ -1616,7 +1622,6 @@ export function createApp(overrides: AppOverrides = {}) {
     let conversation = db.getSideConversation(parent.id, session.user_id);
     if (!conversation) {
       const id = newId();
-      workspaceFor(session.user_id, id);
       const selection = conversationAgentSelection(parent);
       conversation = db.createSideConversation(parent, id, selection);
       db.setConversationPresetPrompts(conversation.id, session.user_id, db.getConversationPresetPromptIds(parent.id));
@@ -1647,7 +1652,6 @@ export function createApp(overrides: AppOverrides = {}) {
       try { workingDir = resolveSubmittedWorkingDir(rawWorkingDir); }
       catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "工作目录路径无效。" }); }
     }
-    workspaceFor(session.user_id, id);
     const agentSelection = userAgentSelection(session.user_id);
     const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
     db.applyDefaultPresetPrompts(conversation.id, session.user_id);
@@ -1893,7 +1897,7 @@ export function createApp(overrides: AppOverrides = {}) {
       // queue pump during cancellation, so leaving drafts here could promote one
       // into a real message/job while the conversation is being deleted.
       for (const item of family) await stopConversationJobs(item.id, false);
-      const tenant = storageFor(session.user_id);
+      const tenant = tenantPaths(config.tenantRoot, session.user_id);
       for (const item of family) {
         for (const file of db.listFiles(item.id)) removePersistedDeliverable(config.dataRoot, file.relative_path);
         if (item.codex_thread_id && !db.isCodexThreadUsedByAnotherActiveConversation(item.codex_thread_id, item.id)) {
@@ -2419,8 +2423,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     const file = db.getFileForUser(String(req.params.id), session.user_id);
     if (!file) return res.status(404).json({ error: "文件不存在。" });
-    const workspace = workspaceFor(session.user_id, file.conversation_id);
-    const storageRoot = file.kind === "output" && isPersistedDeliverablePath(file.relative_path) ? config.dataRoot : workspace;
+    const storageRoot = fileStorageRoot(file, session.user_id);
     let absolute: string;
     try { absolute = resolveInside(storageRoot, file.relative_path); }
     catch { return res.status(400).json({ error: "文件路径无效。" }); }
