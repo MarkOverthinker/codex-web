@@ -624,7 +624,6 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .message.user .message-body > p, .message.assistant .markdown { font-size: var(--chat-font-size, 16px); }
 .message-source-reference { min-width: 0; display: flex; align-items: center; gap: 7px; margin: 0 0 6px auto; padding: 7px 10px; border: 1px solid #d6dae8; border-radius: 11px; color: #62687b; background: #f5f6fa; box-shadow: 0 4px 12px rgba(15, 17, 32, .04); font-size: 11px; line-height: 1.35; }
 .message-source-reference-copy { min-width: 0; display: flex; align-items: center; gap: 7px; }
-.conversation-context-usage { margin-left: auto; color: #7b829b; font-size: 9px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .message-source-reference-copy > svg { flex: 0 0 auto; color: var(--indigo); }
 .message-source-reference-quote { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-source-link { flex: 0 0 auto; padding: 0; border: 0; color: #343c70; background: transparent; font: inherit; font-size: 10px; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
