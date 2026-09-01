@@ -52,6 +52,7 @@ input.on("line", (line) => {
       activeExecution = startTenantTurn(message.request, {
         signal: controller.signal,
         onThreadStarted: (threadId) => send({ type: "thread_started", threadId }),
+        onTurnStarted: (turnId) => send({ type: "turn_started", turnId }),
         onProgress: (payload) => send({ type: "progress", payload }),
         onUsage: (usage) => send({ type: "usage", usage }),
         onContextUsage: (usage) => send({ type: "context_usage", usage }),

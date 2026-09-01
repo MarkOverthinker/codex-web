@@ -24,6 +24,7 @@ export type ContextUsage = {
 type AppServerCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
+  onTurnStarted?(turnId: string): void;
   onProgress(payload: unknown): void;
   onUsage?(usage: TokenUsage): void;
   onContextUsage?(usage: ContextUsage): void;
@@ -34,6 +35,7 @@ export type AppServerTurnOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   threadId: string | null;
+  forkBeforeTurnId?: string | null;
   prompt: string;
   imagePaths: string[];
   outputSchema?: Record<string, unknown>;
@@ -242,9 +244,21 @@ class AppServerTurnClient {
           ...buildOptionalCapabilityConfig(this.options.optionalCapabilities),
         },
       };
-      const threadResult = this.options.threadId
-        ? await this.request("thread/resume", { threadId: this.options.threadId, ...common, excludeTurns: true })
-        : await this.request("thread/start", common);
+      let threadResult: unknown;
+      if (this.options.forkBeforeTurnId) {
+        if (!this.options.threadId) throw new Error("线程分叉缺少源线程 ID");
+        threadResult = await this.request("thread/fork", {
+          threadId: this.options.threadId,
+          beforeTurnId: this.options.forkBeforeTurnId,
+          deferGoalContinuation: true,
+          ...common,
+          excludeTurns: true,
+        });
+      } else {
+        threadResult = this.options.threadId
+          ? await this.request("thread/resume", { threadId: this.options.threadId, ...common, excludeTurns: true })
+          : await this.request("thread/start", common);
+      }
       const thread = (threadResult as { thread?: { id?: string } })?.thread;
       if (!thread?.id) throw new Error("Codex app server did not return a thread id");
       this.threadId = thread.id;
@@ -260,6 +274,7 @@ class AppServerTurnClient {
       }) as { turn?: { id?: string } };
       if (!turnResult?.turn?.id) throw new Error("Codex app server did not return a turn id");
       this.activeTurnId = turnResult.turn.id;
+      this.callbacks.onTurnStarted?.(turnResult.turn.id);
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)));
     }

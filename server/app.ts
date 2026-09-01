@@ -206,11 +206,21 @@ export function createApp(overrides: AppOverrides = {}) {
     const citationFiles = db.listFiles(conversation.id);
     return messages.map((message) => {
       const sourceReference = parseStoredSourceReference(message.source_reference);
-      if (message.role !== "assistant") return { ...message, source_reference: sourceReference, files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
+      const publicMessage = {
+        id: message.id,
+        conversation_id: message.conversation_id,
+        role: message.role,
+        content: message.content,
+        quote_excerpt: message.quote_excerpt ?? null,
+        source_reference: sourceReference,
+        created_at: message.created_at,
+        can_edit: message.role === "user" && Boolean(message.codex_turn_id),
+      };
+      if (message.role !== "assistant") return { ...publicMessage, files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
       const visibleContent = conversation.title_source === "ai"
         ? extractLeakedAutoTitleAnswer(message.content, true) ?? message.content
         : message.content;
-      return { ...message, source_reference: sourceReference, content: sanitizeAgentMarkdown(visibleContent, citationFiles), files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
+      return { ...publicMessage, content: sanitizeAgentMarkdown(visibleContent, citationFiles), files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
     });
   }
 
@@ -670,7 +680,13 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   function submittedSourceReference(value: unknown): string | null {
-    const reference = normalizeMessageSourceReference(value);
+    let candidate = value;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      try { candidate = JSON.parse(trimmed); } catch { return null; }
+    }
+    const reference = normalizeMessageSourceReference(candidate);
     return reference ? JSON.stringify(reference) : null;
   }
 
@@ -2544,6 +2560,106 @@ export function createApp(overrides: AppOverrides = {}) {
     if (config.queueAutoStart) setImmediate(() => void pumpQueue());
   });
 
+  api.put("/conversations/:id/messages/:messageId", rejectDuringCodexUpdate, upload.array("files", 12), async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const uploaded = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) { removeUnregisteredUploads(uploaded); return res.status(404).json({ error: "会话不存在。" }); }
+    if (config.hostMode) {
+      const hostTenant = hostTenantFor(config, db, session.user_id);
+      if (!hostTenant || !isCodexConfigured(hostTenant.codexHome, { uid: hostTenant.uid, gid: hostTenant.gid })) {
+        removeUnregisteredUploads(uploaded);
+        return res.status(409).json({
+          error: hostTenant ? CODEX_CONFIG_HINT : "该用户没有对应的系统账户，无法运行 Codex 任务。请先由管理员添加系统用户。",
+        });
+      }
+    }
+    if (conversation.archived_at) { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "会话已归档，请恢复后再继续发送。" }); }
+    if (deletingConversations.has(conversation.id)) { removeUnregisteredUploads(uploaded); return res.status(409).json({ error: "会话正在删除。" }); }
+    if (db.listActiveJobsForConversation(conversation.id).length > 0 || db.listPendingPrompts(conversation.id).length > 0) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(409).json({ error: "当前会话仍有运行中或待发送任务，请完成后再编辑历史消息。" });
+    }
+    const sourceMessage = db.getMessageForUser(String(req.params.messageId), session.user_id);
+    if (!sourceMessage || sourceMessage.conversation_id !== conversation.id) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(404).json({ error: "消息不存在。" });
+    }
+    if (sourceMessage.role !== "user") {
+      removeUnregisteredUploads(uploaded);
+      return res.status(400).json({ error: "只能编辑用户消息。" });
+    }
+    const forkBeforeTurnId = sourceMessage.codex_turn_id;
+    if (sourceMessage.superseded_at || !forkBeforeTurnId || !conversation.codex_thread_id) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(409).json({ error: "这条消息没有可用的 Codex 线程分叉点，无法编辑重发。" });
+    }
+    const prompt = typeof req.body?.message === "string" ? req.body.message.trim().slice(0, 100_000) : "";
+    const quoteExcerpt = submittedQuoteExcerpt(req.body?.quoteExcerpt);
+    const sourceReference = req.body?.sourceReference === undefined
+      ? sourceMessage.source_reference ?? null
+      : submittedSourceReference(req.body.sourceReference);
+    let removedFileIds: string[] = [];
+    try {
+      const raw = typeof req.body?.removedFileIds === "string" ? JSON.parse(req.body.removedFileIds) : req.body?.removedFileIds;
+      if (raw !== undefined && !Array.isArray(raw)) throw new Error("not-array");
+      removedFileIds = (Array.isArray(raw) ? raw : []).filter((id): id is string => typeof id === "string");
+    } catch {
+      removeUnregisteredUploads(uploaded);
+      return res.status(400).json({ error: "待移除文件列表无效。" });
+    }
+    const sourceFiles = db.listFilesForMessage(sourceMessage.id).filter((file) => file.kind === "upload");
+    const sourceFileIds = new Set(sourceFiles.map((file) => file.id));
+    const removedFileIdSet = new Set(removedFileIds);
+    if (removedFileIds.some((fileId) => !sourceFileIds.has(fileId))) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(409).json({ error: "编辑消息的附件状态已经变化，请刷新后重试。" });
+    }
+    const retainedCount = sourceFiles.filter((file) => !removedFileIdSet.has(file.id)).length;
+    if (retainedCount + uploaded.length > 12) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(400).json({ error: "单条任务最多包含 12 个附件。" });
+    }
+    if (!prompt && !quoteExcerpt && retainedCount === 0 && uploaded.length === 0) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(400).json({ error: "请至少保留一个文件，或者输入具体操作。" });
+    }
+    const messageId = newId();
+    const createdAt = new Date().toISOString();
+    const uploadedFiles: FileRow[] = uploaded.map((file) => ({
+      id: newId(), conversation_id: conversation.id, message_id: messageId, pending_prompt_id: null, composer_draft_id: null,
+      original_name: safeUploadName(file.originalname).displayName,
+      relative_path: path.posix.join("uploads", file.filename), mime_type: normalizeUploadMime(file),
+      size: file.size, kind: "upload", created_at: createdAt,
+    }));
+    try {
+      const result = db.createEditedMessageJob({
+        sourceMessageId: sourceMessage.id,
+        messageId,
+        jobId: newId(),
+        conversationId: conversation.id,
+        content: prompt,
+        quoteExcerpt,
+        sourceReference,
+        forkBeforeTurnId,
+        selection: conversationAgentSelection(conversation),
+        retainedFileIds: sourceFiles.filter((file) => !removedFileIdSet.has(file.id)).map((file) => file.id),
+        uploadedFiles,
+      });
+      if (!result) {
+        removeUnregisteredUploads(uploaded);
+        return res.status(409).json({ error: "消息分支已经变化，请刷新后重试。" });
+      }
+      const queuePosition = db.getQueuePosition(result.job.id) ?? 1;
+      publishQueuePositions();
+      res.status(202).json({ job: { ...result.job, queuePosition }, message: { id: result.message.id }, queued: true });
+      if (config.queueAutoStart) setImmediate(() => void pumpQueue());
+    } catch (error) {
+      removeUnregisteredUploads(uploaded);
+      return res.status(409).json({ error: error instanceof Error ? error.message : "编辑消息失败。" });
+    }
+  });
+
   api.put("/conversations/:id/pending-prompts/order", (req, res) => {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
@@ -2646,7 +2762,7 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!running) return res.status(409).json({ error: "当前任务尚未进入可引导状态。" });
     try {
       const turnId = await runner.steer(running.id, agentPrompt(pending.content, pending.quote_excerpt, pending.source_reference), pending.files);
-      const message = db.materializeSteeredPrompt(pending.id, newId());
+      const message = db.materializeSteeredPrompt(pending.id, newId(), turnId);
       if (!message) throw new Error("引导已送达，但本地记录队列发生变化，请刷新确认。 ");
       return res.json({ ok: true, turnId, message });
     } catch (error) {

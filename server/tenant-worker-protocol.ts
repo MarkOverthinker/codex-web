@@ -25,6 +25,7 @@ export type TenantWorkerRunRequest = {
   codexHome: string;
   library: string;
   codexThreadId: string | null;
+  forkBeforeTurnId?: string | null;
   effectivePrompt: string;
   imagePaths: string[];
   outputSchema?: Record<string, unknown>;
@@ -44,6 +45,7 @@ export type TenantWorkerRunRequest = {
 
 export type TenantWorkerEvent =
   | { type: "thread_started"; threadId: string }
+  | { type: "turn_started"; turnId: string }
   | { type: "context_usage"; usage: ContextUsage }
   | { type: "progress"; payload: unknown }
   | { type: "usage"; usage: TokenUsage }

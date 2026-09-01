@@ -78,7 +78,7 @@ export type WorkFile = {
   id: string; original_name: string; relative_path: string; host_path?: string; mime_type: string; size: number; kind: "upload" | "output";
 };
 export type Message = {
-  id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; source_reference: MessageSourceReference | null; created_at: string; files: WorkFile[];
+  id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; source_reference: MessageSourceReference | null; created_at: string; files: WorkFile[]; can_edit?: boolean;
 };
 export type PendingPrompt = {
   id: string;
@@ -484,6 +484,15 @@ export const api = {
     if (useComposerDraft) body.set("useComposerDraft", "true");
     files.forEach((file) => body.append("files", file));
     return request<PendingMutationResponse>(`/conversations/${id}/messages`, { method: "POST", body });
+  },
+  editMessage: (conversationId: string, messageId: string, message: string, files: File[], removedFileIds: string[], quoteExcerpt = "", sourceReference: MessageSourceReference | null = null) => {
+    const body = new FormData();
+    body.set("message", message);
+    body.set("quoteExcerpt", quoteExcerpt);
+    body.set("sourceReference", JSON.stringify(sourceReference));
+    body.set("removedFileIds", JSON.stringify(removedFileIds));
+    files.forEach((file) => body.append("files", file));
+    return request<PendingMutationResponse>(`/conversations/${conversationId}/messages/${messageId}`, { method: "PUT", body });
   },
   transcribeAudio: (audio: Blob, fileName: string, context: { conversationId?: string; draftText?: string; attachmentNames?: string[] } = {}) => {
     const body = new FormData();

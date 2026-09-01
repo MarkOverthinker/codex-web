@@ -26,7 +26,7 @@ export type ImportableSession = {
   model: string | null;
 };
 
-export type ParsedSessionUserMessage = { content: string; createdAt: string };
+export type ParsedSessionUserMessage = { content: string; createdAt: string; turnId?: string | null };
 export type ParsedSessionAssistantMessage = { content: string; createdAt: string };
 export type ParsedSessionTurn = {
   user: ParsedSessionUserMessage;
@@ -59,6 +59,7 @@ async function scanSessionFile(filePath: string, options: { maxBytes?: number; m
   };
   const userStarts: Array<{ content: string; createdAt: string; event: boolean }> = [];
   const assistantCompletions: Array<{ content: string; createdAt: string }> = [];
+  const turnContexts: Array<{ turnId: string; createdAt: string }> = [];
   let consumedBytes = 0;
   let consumedLines = 0;
   const lines = readline.createInterface({ input: createReadStream(filePath, { encoding: "utf8" }), crlfDelay: Infinity });
@@ -85,6 +86,9 @@ async function scanSessionFile(filePath: string, options: { maxBytes?: number; m
       if (typeof payload.cwd === "string") scan.cwd = payload.cwd;
       if (typeof payload.originator === "string") scan.originator = payload.originator;
     } else if (type === "turn_context") {
+      if (typeof payload.turn_id === "string" && payload.turn_id && timestamp) {
+        turnContexts.push({ turnId: payload.turn_id, createdAt: timestamp });
+      }
       if (!scan.model && typeof payload.model === "string") scan.model = payload.model;
       if (!scan.reasoningEffort) {
         const mode = payload.collaboration_mode;
@@ -134,7 +138,8 @@ async function scanSessionFile(filePath: string, options: { maxBytes?: number; m
       const assistant = candidates.length > 0
         ? candidates.reduce((latest, candidate) => candidate.createdAt >= latest.createdAt ? candidate : latest)
         : undefined;
-      scan.turns.push({ user, ...(assistant ? { assistant } : {}) });
+      const turnContext = [...turnContexts].reverse().find((candidate) => candidate.createdAt <= user.createdAt);
+      scan.turns.push({ user: { ...user, turnId: turnContext?.turnId ?? null }, ...(assistant ? { assistant } : {}) });
     }
   }
   return scan;
@@ -266,7 +271,7 @@ export async function importSessionThread(
   const scan = await scanSessionFile(filePath, { maxLines: SESSION_IMPORT_MAX_LINES, collectTurns: true });
   if (scan.turns.length === 0) throw new Error("会话中没有可导入的对话记录");
   const messages = scan.turns.flatMap((turn) => [
-    { role: "user" as const, content: turn.user.content, createdAt: turn.user.createdAt },
+    { role: "user" as const, content: turn.user.content, turnId: turn.user.turnId, createdAt: turn.user.createdAt },
     ...(turn.assistant ? [{ role: "assistant" as const, content: sanitizeAgentMarkdown(turn.assistant.content, []), createdAt: turn.assistant.createdAt }] : []),
   ]);
   return db.createImportedConversation({

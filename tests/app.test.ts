@@ -1672,6 +1672,68 @@ test("conversation archive API keeps history readable, blocks new turns, and res
   assert.equal((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations[0].id, conversationId);
 });
 
+test("editing a completed user message forks the visible conversation branch and preserves old files", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-edit-message-api-"));
+  const dataRoot = path.join(root, "data");
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot, tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Edit-Message-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Edit-Message-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const conversationId = created.body.conversation.id as string;
+  const sourceMessageId = crypto.randomUUID();
+  const followUpMessageId = crypto.randomUUID();
+  const sourceTurnId = "source-turn-1";
+  const sourceCreatedAt = "2026-08-01T00:00:00.000Z";
+  const followUpCreatedAt = "2026-08-01T00:00:01.000Z";
+  instance.db.updateConversation(conversationId, { codexThreadId: "11111111-1111-4111-8111-111111111111" });
+  instance.db.addMessage({ id: sourceMessageId, conversation_id: conversationId, role: "user", content: "original request", quote_excerpt: "original quote", codex_turn_id: sourceTurnId, created_at: sourceCreatedAt });
+  instance.db.addMessage({ id: followUpMessageId, conversation_id: conversationId, role: "assistant", content: "old follow-up", created_at: followUpCreatedAt });
+  const workspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, conversationId);
+  const retainedRelativePath = path.posix.join("uploads", "retained.txt");
+  const removedRelativePath = path.posix.join("uploads", "removed.txt");
+  fs.writeFileSync(path.join(workspace, ...retainedRelativePath.split("/")), "retain", "utf8");
+  fs.writeFileSync(path.join(workspace, ...removedRelativePath.split("/")), "remove", "utf8");
+  const retainedFileId = crypto.randomUUID();
+  const removedFileId = crypto.randomUUID();
+  instance.db.addFile({ id: retainedFileId, conversation_id: conversationId, message_id: sourceMessageId, pending_prompt_id: null, composer_draft_id: null, original_name: "retained.txt", relative_path: retainedRelativePath, mime_type: "text/plain", size: 6, kind: "upload", created_at: sourceCreatedAt });
+  instance.db.addFile({ id: removedFileId, conversation_id: conversationId, message_id: sourceMessageId, pending_prompt_id: null, composer_draft_id: null, original_name: "removed.txt", relative_path: removedRelativePath, mime_type: "text/plain", size: 6, kind: "upload", created_at: sourceCreatedAt });
+
+  const edited = await agent.put("/codex-web/api/conversations/" + conversationId + "/messages/" + sourceMessageId)
+    .set("X-CSRF-Token", csrf)
+    .field("message", "edited request")
+    .field("quoteExcerpt", "edited quote")
+    .field("removedFileIds", JSON.stringify([removedFileId]))
+    .attach("files", Buffer.from("new file"), { filename: "new.txt", contentType: "text/plain" })
+    .expect(202);
+  const editedMessageId = edited.body.message.id as string;
+  const editedJobId = edited.body.job.id as string;
+  assert.equal(edited.body.job.fork_before_turn_id, sourceTurnId);
+  assert.equal(instance.db.getJob(editedJobId)?.fork_before_turn_id, sourceTurnId);
+  assert.deepEqual(instance.db.listMessages(conversationId).map((message) => message.content), ["edited request"]);
+  assert.equal(instance.db.getMessage(sourceMessageId)?.superseded_by, editedMessageId);
+  assert.equal(instance.db.getMessage(followUpMessageId)?.superseded_by, editedMessageId);
+  assert.equal(fs.existsSync(path.join(workspace, retainedRelativePath)), true);
+  assert.equal(fs.existsSync(path.join(workspace, removedRelativePath)), true);
+  const editedFiles = instance.db.listFilesForMessage(editedMessageId);
+  assert.deepEqual(editedFiles.map((file) => file.original_name).sort(), ["new.txt", "retained.txt"]);
+  assert.equal(editedFiles.some((file) => file.id === retainedFileId), false);
+  assert.equal(fs.existsSync(path.join(workspace, editedFiles.find((file) => file.original_name === "new.txt")!.relative_path)), true);
+
+  let detail = await agent.get("/codex-web/api/conversations/" + conversationId).expect(200);
+  assert.deepEqual(detail.body.messages.map((message: { content: string }) => message.content), ["edited request"]);
+  assert.equal(detail.body.messages[0].can_edit, false);
+  instance.db.updateMessageTurnId(editedMessageId, "edited-turn-1");
+  detail = await agent.get("/codex-web/api/conversations/" + conversationId).expect(200);
+  assert.equal(detail.body.messages[0].can_edit, true);
+});
+
 test("new tasks and persisted outputs avoid workspace initialization until needed", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-lazy-workspace-api-test-"));
   const dataRoot = path.join(root, "data");
@@ -3242,6 +3304,7 @@ test("importable-sessions API discovers local Codex threads and imports them as 
     ["user", "请检查这个项目"],
     ["assistant", "**最终回复**：项目已检查。"],
   ]);
+  assert.equal(detail.body.messages[0].can_edit, true);
 
   const listedAgain = await browser.get("/codex-web/api/conversations/importable-sessions").expect(200);
   assert.deepEqual(listedAgain.body.sessions, []);
@@ -3672,10 +3735,12 @@ test("pending drafts support reorder, steer, edit with attachments, and delete",
     instance.db.finishJob(jobId, id, "completed");
   };
   let steeredPrompt = "";
+  let steeredTurnId = "";
   instance.runner.steer = async (jobId, prompt) => {
     assert.equal(jobId, first.body.job.id);
     steeredPrompt = prompt;
-    return crypto.randomUUID();
+    steeredTurnId = crypto.randomUUID();
+    return steeredTurnId;
   };
   await instance.pumpQueue();
   for (let attempt = 0; attempt < 20 && !releases.has(first.body.job.id); attempt += 1) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -3683,6 +3748,7 @@ test("pending drafts support reorder, steer, edit with attachments, and delete",
     .set("X-CSRF-Token", login.body.csrfToken).expect(200);
   assert.equal(steeredPrompt, "gamma");
   assert.deepEqual(instance.db.listMessages(conversationId).map((message) => message.content), ["first", "gamma"]);
+  assert.equal(instance.db.listMessages(conversationId).find((message) => message.content === "gamma")?.codex_turn_id, steeredTurnId);
 
   await agent.delete(`/codex-web/api/conversations/${conversationId}/pending-prompts/${betaId}`)
     .set("X-CSRF-Token", login.body.csrfToken).expect(204);

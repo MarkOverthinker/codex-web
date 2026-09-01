@@ -12,6 +12,7 @@ import type { TokenUsage } from "./billing.js";
 type ExecutionCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
+  onTurnStarted?(turnId: string): void;
   onProgress(payload: unknown): void;
   onUsage(usage: TokenUsage): void;
   onContextUsage?(usage: ContextUsage): void;
@@ -40,6 +41,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     cwd: request.workingDir ?? request.workspace,
     env: codexEnvironment,
     threadId: request.codexThreadId,
+    forkBeforeTurnId: request.forkBeforeTurnId,
     prompt: request.effectivePrompt,
     imagePaths: request.imagePaths,
     outputSchema: request.outputSchema,

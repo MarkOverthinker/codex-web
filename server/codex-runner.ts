@@ -212,6 +212,7 @@ export class CodexRunner {
         codexHome: hostTenant?.codexHome ?? tenant.codexHome,
         library: tenant.library,
         codexThreadId: conversation.codex_thread_id,
+        forkBeforeTurnId: job?.fork_before_turn_id ?? null,
         effectivePrompt,
         imagePaths: uploads
           .filter((file) => /^image\/(png|jpeg|webp)$/i.test(file.mime_type))
@@ -233,7 +234,11 @@ export class CodexRunner {
       const callbacks = {
         onThreadStarted: (threadId: string) => {
           request.codexThreadId = threadId;
+          request.forkBeforeTurnId = null;
           this.db.updateConversation(conversationId, { codexThreadId: threadId });
+        },
+        onTurnStarted: (turnId: string) => {
+          if (job?.message_id) this.db.updateMessageTurnId(job.message_id, turnId);
         },
         onContextUsage: (usage: ContextUsage) => {
           this.db.setConversationContextUsage(conversationId, usage.usedTokens, usage.contextWindow);
