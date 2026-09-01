@@ -10,6 +10,10 @@ export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
   contextUsage?: { usedTokens: number; contextWindow: number | null; updatedAt: string | null } | null;
   working_dir: string | null;
+  codex_thread_id?: string | null;
+  fork_source_thread_id?: string | null;
+  fork_last_turn_id?: string | null;
+  fork_source_message_id?: string | null;
 };
 export type SideChatSummary = {
   conversation: Conversation;
@@ -78,7 +82,7 @@ export type WorkFile = {
   id: string; original_name: string; relative_path: string; host_path?: string; mime_type: string; size: number; kind: "upload" | "output";
 };
 export type Message = {
-  id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; source_reference: MessageSourceReference | null; created_at: string; files: WorkFile[]; can_edit?: boolean;
+  id: string; role: "user" | "assistant" | "system"; content: string; quote_excerpt: string | null; source_reference: MessageSourceReference | null; created_at: string; files: WorkFile[]; can_edit?: boolean; can_fork?: boolean;
 };
 export type PendingPrompt = {
   id: string;
@@ -426,6 +430,9 @@ export const api = {
   ),
   createNewSideChat: (parentConversationId: string) => request<{ conversation: Conversation; agentSelection: AgentSelection }>(
     `/conversations/${parentConversationId}/side-chats`, { method: "POST" },
+  ),
+  forkSideChat: (parentConversationId: string, sourceMessageId: string) => request<{ conversation: Conversation; agentSelection: AgentSelection }>(
+    `/conversations/${parentConversationId}/side-chats/fork`, { method: "POST", body: JSON.stringify({ sourceMessageId }) },
   ),
   openSideChat: (sideConversationId: string) => request<{ conversation: Conversation }>(
     `/side-chats/${sideConversationId}/open`, { method: "POST" },

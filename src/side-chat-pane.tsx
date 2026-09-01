@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, Bot, Copy, CornerUpLeft, LoaderCircle, Plus, Quote, Square, X } from "lucide-react";
+import { ArrowUp, Bot, Copy, CornerUpLeft, GitFork, LoaderCircle, Plus, Quote, Square, X } from "lucide-react";
 import {
   api,
   type AgentModelOption,
@@ -28,10 +28,18 @@ export type SideChatReferenceRequest = {
   excerpt: string;
 };
 
+export type SideChatForkRequest = {
+  id: number;
+  sourceConversation: Conversation;
+  sourceMessageId: string;
+};
+
 type SideChatPaneProps = {
   currentConversation: Conversation;
   agentOptions: AgentOptions | null;
   referenceRequest: SideChatReferenceRequest | null;
+  forkRequest: SideChatForkRequest | null;
+  onForkHandled: (requestId: number) => void;
   onReferenceHandled: (requestId: number) => void;
   onClose: () => void;
   onError: (message: string) => void;
@@ -90,7 +98,7 @@ function SideMessage({ message, citationFiles, onOpenSourceReference }: { messag
   </article>;
 }
 
-export function SideChatPane({ currentConversation, agentOptions, referenceRequest, onReferenceHandled, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
+export function SideChatPane({ currentConversation, agentOptions, referenceRequest, forkRequest, onReferenceHandled, onForkHandled, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
   const [history, setHistory] = useState<SideChatSummary[]>([]);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [input, setInput] = useState("");
@@ -161,6 +169,21 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
     }
   }
 
+  async function forkSideConversation(source: Conversation, sourceMessageId: string) {
+    if (source.archived_at) throw new Error("已归档任务不能 Fork 到侧边聊天。");
+    setLoading(true);
+    try {
+      await persistCurrentDraft();
+      const result = await api.forkSideChat(source.id, sourceMessageId);
+      const next = await refresh(result.conversation.id, true);
+      await refreshHistory();
+      window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".side-chat-composer textarea")?.focus(), 0);
+      return next;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function ensureActiveSideConversation(source: Conversation) {
     if (detailRef.current) return detailRef.current;
     const preferred = historyRef.current.find((item) => item.parentConversationId === source.id);
@@ -213,6 +236,18 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
       });
     return () => { cancelled = true; };
   }, [initialized, referenceRequest?.id]);
+
+  useEffect(() => {
+    if (!initialized || !forkRequest) return;
+    let cancelled = false;
+    void forkSideConversation(forkRequest.sourceConversation, forkRequest.sourceMessageId)
+      .catch((reason) => { if (!cancelled) onError(reason instanceof Error ? reason.message : "Fork 到侧边聊天失败"); })
+      .finally(() => {
+        if (!cancelled) onForkHandled(forkRequest.id);
+      });
+    return () => { cancelled = true; };
+  }, [initialized, forkRequest?.id]);
+
 
   useEffect(() => {
     const conversationId = detail?.conversation.id;
@@ -371,6 +406,7 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
         {effortOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
       </select></label>
     </div>
+    {detail?.conversation.fork_source_message_id && <div className="side-chat-fork-banner"><GitFork size={13} /><span>已从主对话指定位置 Fork；首次发送时创建独立线程。</span></div>}
     <div ref={messagesRef} className="side-chat-messages">
       {loading && !detail ? <div className="side-chat-empty"><LoaderCircle className="spin" size={20} /><span>正在加载侧边对话…</span></div>
         : detail?.messages.length

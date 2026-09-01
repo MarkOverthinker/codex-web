@@ -211,8 +211,9 @@ export class CodexRunner {
         runtimeRoot,
         codexHome: hostTenant?.codexHome ?? tenant.codexHome,
         library: tenant.library,
-        codexThreadId: conversation.codex_thread_id,
+        codexThreadId: conversation.codex_thread_id ?? conversation.fork_source_thread_id,
         forkBeforeTurnId: job?.fork_before_turn_id ?? null,
+        forkLastTurnId: conversation.codex_thread_id ? null : conversation.fork_last_turn_id,
         effectivePrompt,
         imagePaths: uploads
           .filter((file) => /^image\/(png|jpeg|webp)$/i.test(file.mime_type))
@@ -235,7 +236,13 @@ export class CodexRunner {
         onThreadStarted: (threadId: string) => {
           request.codexThreadId = threadId;
           request.forkBeforeTurnId = null;
-          this.db.updateConversation(conversationId, { codexThreadId: threadId });
+          request.forkLastTurnId = null;
+          this.db.updateConversation(conversationId, {
+            codexThreadId: threadId,
+            forkSourceThreadId: null,
+            forkLastTurnId: null,
+            forkSourceMessageId: null,
+          });
         },
         onTurnStarted: (turnId: string) => {
           if (job?.message_id) this.db.updateMessageTurnId(job.message_id, turnId);

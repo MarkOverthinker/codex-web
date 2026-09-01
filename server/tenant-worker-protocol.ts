@@ -26,6 +26,7 @@ export type TenantWorkerRunRequest = {
   library: string;
   codexThreadId: string | null;
   forkBeforeTurnId?: string | null;
+  forkLastTurnId?: string | null;
   effectivePrompt: string;
   imagePaths: string[];
   outputSchema?: Record<string, unknown>;

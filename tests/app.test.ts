@@ -1049,6 +1049,10 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
     () => validateTenantWorkerRequest({ ...relayRequest, modelProvider: "other-provider" }, owner.userId, tenantRoot),
     /adapter provider mismatch/,
   );
+  assert.throws(
+    () => validateTenantWorkerRequest({ ...request, forkBeforeTurnId: "before-turn", forkLastTurnId: "last-turn" }, owner.userId, tenantRoot),
+    /fork parameters cannot be combined/,
+  );
   assert.throws(() => validateTenantWorkerRequest({ ...request, sandboxMode: "read-only" as never }, owner.userId, tenantRoot), /Invalid worker sandbox mode/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, tenantRoot: path.join(os.tmpdir(), "other") }, owner.userId, tenantRoot), /path mismatch/);
   assert.throws(() => validateTenantWorkerRequest({ ...request, imagePaths: [path.join(tenantRoot, "..", "secret.png")] }, owner.userId, tenantRoot), /escapes workspace/);
@@ -1077,6 +1081,8 @@ test("the owner tenant has a dedicated Unix identity and workers reject cross-te
   const appServerSource = fs.readFileSync(path.join(process.cwd(), "server", "app-server-turn.ts"), "utf8");
   assert.match(appServerSource, /"turn\/steer"/);
   assert.match(appServerSource, /expectedTurnId: this\.activeTurnId/);
+  const runnerSource = fs.readFileSync(path.join(process.cwd(), "server", "codex-runner.ts"), "utf8");
+  assert.match(runnerSource, /codexThreadId: conversation\.codex_thread_id \?\? conversation\.fork_source_thread_id/);
   assert.match(appServerSource, /this\.request\("thread\/resume", \{ threadId: this\.options\.threadId, \.\.\.common, excludeTurns: true \}\)/);
   assert.match(appServerSource, /this\.request\("thread\/start", common\)/);
   assert.match(composeSource, /codex-runtime:\/opt\/codex-runtime/);
@@ -2042,6 +2048,93 @@ test("side chat keeps an independent model and persists exact JSONL references",
   await agent.post(`/codex-web/api/conversations/${parentId}/restore`).set("X-CSRF-Token", csrf).expect(200);
   assert.equal(instance.db.getConversation(sideId)?.archived_at, null);
   assert.equal(instance.db.getConversation(secondSideId)?.archived_at, null);
+
+  const parentWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, parentId);
+  const sideWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, sideId);
+  const secondSideWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, secondSideId);
+  await agent.delete(`/codex-web/api/conversations/${parentId}`).set("X-CSRF-Token", csrf).expect(204);
+  assert.ok(instance.db.getConversation(parentId)?.deleted_at);
+  assert.ok(instance.db.getConversation(sideId)?.deleted_at);
+  assert.ok(instance.db.getConversation(secondSideId)?.deleted_at);
+  assert.equal(fs.existsSync(parentWorkspace), false);
+  assert.equal(fs.existsSync(sideWorkspace), false);
+  assert.equal(fs.existsSync(secondSideWorkspace), false);
+  assert.equal(fs.existsSync(rolloutPath), false);
+});
+
+test("forking a completed primary turn creates an independent side branch", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-side-fork-api-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot,
+    username: "owner",
+    passwordHash: bcrypt.hashSync("Side-Fork-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Side-Fork-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const parentId = created.body.conversation.id as string;
+  const parentThreadId = crypto.randomUUID();
+  const firstUserId = crypto.randomUUID();
+  const selectedUserId = crypto.randomUUID();
+  const laterUserId = crypto.randomUUID();
+  const sourceTurnId = "source-turn-2";
+  instance.db.updateConversation(parentId, { codexThreadId: parentThreadId });
+  instance.db.addMessage({ id: firstUserId, conversation_id: parentId, role: "user", content: "第一轮请求", codex_turn_id: "source-turn-1", created_at: "2026-08-31T08:00:00.000Z" });
+  instance.db.addMessage({ id: crypto.randomUUID(), conversation_id: parentId, role: "assistant", content: "第一轮回复", created_at: "2026-08-31T08:00:01.000Z" });
+  instance.db.addMessage({ id: selectedUserId, conversation_id: parentId, role: "user", content: "第二轮请求", quote_excerpt: "第二轮引用", codex_turn_id: sourceTurnId, created_at: "2026-08-31T08:00:02.000Z" });
+  instance.db.addMessage({ id: crypto.randomUUID(), conversation_id: parentId, role: "assistant", content: "第二轮回复", created_at: "2026-08-31T08:00:03.000Z" });
+  instance.db.addMessage({ id: laterUserId, conversation_id: parentId, role: "user", content: "第三轮请求", codex_turn_id: "source-turn-3", created_at: "2026-08-31T08:00:04.000Z" });
+  instance.db.addMessage({ id: crypto.randomUUID(), conversation_id: parentId, role: "assistant", content: "第三轮回复", created_at: "2026-08-31T08:00:05.000Z" });
+  const parentMessagesBefore = instance.db.listMessages(parentId).map((message) => ({ role: message.role, content: message.content }));
+  const codexHome = ensureTenant(tenantRoot, LEGACY_USER_ID).codexHome;
+  const rolloutPath = writeSyntheticCodexSession(codexHome, parentThreadId);
+
+  const parentDetail = await agent.get(`/codex-web/api/conversations/${parentId}`).expect(200);
+  const selectedMessage = parentDetail.body.messages.find((message: { id: string }) => message.id === selectedUserId);
+  const assistantMessage = parentDetail.body.messages.find((message: { content: string }) => message.content === "第二轮回复");
+  assert.equal(selectedMessage.can_fork, true);
+  assert.equal(assistantMessage.can_fork, false);
+
+  const forked = await agent.post(`/codex-web/api/conversations/${parentId}/side-chats/fork`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceMessageId: selectedUserId })
+    .expect(201);
+  const sideId = forked.body.conversation.id as string;
+  assert.notEqual(sideId, parentId);
+  assert.equal(forked.body.conversation.codex_thread_id, null);
+  assert.equal(forked.body.conversation.fork_source_thread_id, parentThreadId);
+  assert.equal(forked.body.conversation.fork_last_turn_id, sourceTurnId);
+  assert.equal(forked.body.conversation.fork_source_message_id, selectedUserId);
+  assert.deepEqual(instance.db.listMessages(sideId).map((message) => ({ role: message.role, content: message.content })), parentMessagesBefore.slice(0, 4));
+  assert.equal(instance.db.listMessages(sideId)[2].quote_excerpt, "第二轮引用");
+  assert.deepEqual((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations.map((conversation: { id: string }) => conversation.id), [parentId]);
+  assert.deepEqual(instance.db.listMessages(parentId).map((message) => ({ role: message.role, content: message.content })), parentMessagesBefore);
+  assert.equal((await agent.get(`/codex-web/api/side-chats`).expect(200)).body.sideChats[0].conversation.id, sideId);
+
+  const firstSend = await agent.post(`/codex-web/api/conversations/${sideId}/messages`)
+    .set("X-CSRF-Token", csrf)
+    .field("message", "基于第二轮继续分析")
+    .expect(202);
+  assert.ok(firstSend.body.job.id);
+  assert.equal(instance.db.getConversation(sideId)?.codex_thread_id, null);
+  assert.equal(instance.db.getConversation(sideId)?.fork_last_turn_id, sourceTurnId);
+  assert.equal(instance.db.getConversation(sideId)?.fork_source_message_id, selectedUserId);
+  await agent.post(`/codex-web/api/conversations/${sideId}/cancel`).set("X-CSRF-Token", csrf).expect(200);
+
+  const secondFork = await agent.post(`/codex-web/api/conversations/${parentId}/side-chats/fork`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceMessageId: selectedUserId })
+    .expect(201);
+  const secondSideId = secondFork.body.conversation.id as string;
+  assert.notEqual(secondSideId, sideId);
+  assert.equal(instance.db.listCodexThreadIds().filter((threadId) => threadId === parentThreadId).length, 1);
 
   const parentWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, parentId);
   const sideWorkspace = ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, sideId);

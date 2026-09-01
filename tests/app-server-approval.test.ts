@@ -290,6 +290,69 @@ input.on("line", (line) => {
   assert.equal(forkConfig?.web_search, "cached");
   assert.equal(capture.messages.some((message) => message.method === "thread/start" || message.method === "thread/resume"), false);
 });
+test("app-server forks a thread through the selected turn with lastTurnId", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-last-turn-fork-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "fake-app-server.mjs");
+  const capturePath = path.join(root, "capture.json");
+  const workspace = path.join(root, "workspace");
+  const library = path.join(root, "library");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(library);
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+const capturePath = process.env.CAPTURE_PATH;
+const capture = { messages: [] };
+const persist = () => fs.writeFileSync(capturePath, JSON.stringify(capture));
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+persist();
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
+  const message = JSON.parse(line);
+  capture.messages.push(message);
+  persist();
+  if (message.method === "initialize") send({ id: message.id, result: {} });
+  if (message.method === "thread/fork") send({ id: message.id, result: { thread: { id: "forked-thread" } } });
+  if (message.method === "turn/start") {
+    send({ id: message.id, result: { turn: { id: "forked-turn" } } });
+    send({ method: "turn/completed", params: { turn: { id: "forked-turn", status: "completed", error: null } } });
+  }
+});
+`, { mode: 0o755 });
+
+  const controller = new AbortController();
+  const execution = startAppServerTurn({
+    executablePath: executable,
+    cwd: workspace,
+    env: { ...process.env, CAPTURE_PATH: capturePath },
+    threadId: "source-thread",
+    forkLastTurnId: "source-turn",
+    prompt: "side question",
+    imagePaths: [],
+    model: "test-model",
+    reasoningEffort: "medium",
+    sandboxMode: "workspace-write",
+    library,
+    shellEnvironment: {},
+    networkAccessEnabled: false,
+    webSearchMode: "cached",
+    optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
+  }, {
+    signal: controller.signal,
+    onThreadStarted: () => undefined,
+    onProgress: () => undefined,
+  });
+
+  assert.equal(await withTimeout(execution.result), "");
+  const capture = JSON.parse(fs.readFileSync(capturePath, "utf8")) as { messages: Array<{ method?: string; params?: Record<string, unknown> }> };
+  const fork = capture.messages.find((message) => message.method === "thread/fork");
+  assert.equal(fork?.params?.threadId, "source-thread");
+  assert.equal(fork?.params?.lastTurnId, "source-turn");
+  assert.equal("beforeTurnId" in (fork?.params ?? {}), false);
+  assert.equal(fork?.params?.deferGoalContinuation, true);
+  assert.equal(capture.messages.some((message) => message.method === "thread/start" || message.method === "thread/resume"), false);
+});
 
 test("app-server passes danger-full-access through and skips workspace writable roots", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-danger-access-"));

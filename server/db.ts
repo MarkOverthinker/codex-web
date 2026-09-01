@@ -29,6 +29,9 @@ export type ConversationRow = {
   title: string;
   title_source: ConversationTitleSource;
   codex_thread_id: string | null;
+  fork_source_thread_id: string | null;
+  fork_last_turn_id: string | null;
+  fork_source_message_id: string | null;
   working_dir: string | null;
   agent_model: string | null;
   reasoning_effort: string | null;
@@ -334,6 +337,9 @@ export class AppDatabase {
         title TEXT NOT NULL,
         title_source TEXT NOT NULL DEFAULT 'legacy',
         codex_thread_id TEXT,
+        fork_source_thread_id TEXT,
+        fork_last_turn_id TEXT,
+        fork_source_message_id TEXT,
         sandbox_mode TEXT,
         status TEXT NOT NULL DEFAULT 'idle',
         has_unread_result INTEGER NOT NULL DEFAULT 0,
@@ -548,6 +554,9 @@ export class AppDatabase {
     if (!conversationColumns.has("archived_at")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN archived_at TEXT");
     if (!conversationColumns.has("deleted_at")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN deleted_at TEXT");
     if (!conversationColumns.has("title_source")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL DEFAULT 'legacy'");
+    if (!conversationColumns.has("fork_source_thread_id")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN fork_source_thread_id TEXT");
+    if (!conversationColumns.has("fork_last_turn_id")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN fork_last_turn_id TEXT");
+    if (!conversationColumns.has("fork_source_message_id")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN fork_source_message_id TEXT");
     const messageColumns = this.columnNames("messages");
     if (!messageColumns.has("quote_excerpt")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN quote_excerpt TEXT");
     if (!messageColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN source_reference TEXT");
@@ -948,6 +957,64 @@ export class AppDatabase {
     return this.getConversation(id)!;
   }
 
+  createForkSideConversation(input: {
+    parent: ConversationRow;
+    id: string;
+    selection: StoredAgentSelection;
+    sourceMessage: MessageRow;
+    messages: MessageRow[];
+  }): ConversationRow {
+    if (!input.parent.codex_thread_id || !input.sourceMessage.codex_turn_id) throw new Error("线程分叉缺少 Codex turn 信息");
+    const now = new Date().toISOString();
+    const title = `分支 · ${input.parent.title}`.slice(0, 80);
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      this.sqlite.prepare(`
+        INSERT INTO conversations(
+          id,user_id,title,title_source,codex_thread_id,fork_source_thread_id,fork_last_turn_id,fork_source_message_id,
+          working_dir,agent_model,reasoning_effort,agent_provider,sandbox_mode,status,created_at,updated_at
+        )
+        VALUES(?,?,?,'manual',NULL,?,?,?,?,?,?,?,?,'idle',?,?)
+      `).run(
+        input.id,
+        input.parent.user_id,
+        title,
+        input.parent.codex_thread_id,
+        input.sourceMessage.codex_turn_id,
+        input.sourceMessage.id,
+        input.parent.working_dir,
+        input.selection.model,
+        input.selection.reasoningEffort,
+        input.selection.provider ?? null,
+        input.selection.sandbox ?? "workspace-write",
+        now,
+        now,
+      );
+      this.sqlite.prepare("INSERT INTO conversation_side_chats(parent_conversation_id,conversation_id,created_at,last_opened_at) VALUES(?,?,?,?)")
+        .run(input.parent.id, input.id, now, now);
+      const insertMessage = this.sqlite.prepare(`
+        INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,codex_turn_id,superseded_at,superseded_by,created_at)
+        VALUES(?,?,?, ?,?,?,NULL,NULL,NULL,?)
+      `);
+      for (const message of input.messages) {
+        insertMessage.run(
+          crypto.randomUUID(),
+          input.id,
+          message.role,
+          message.content,
+          message.quote_excerpt ?? null,
+          message.source_reference ?? null,
+          message.created_at,
+        );
+      }
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getConversation(input.id)!;
+  }
+
   touchSideConversation(conversationId: string, userId: string): ConversationRow | undefined {
     const conversation = this.getConversationForUser(conversationId, userId);
     if (!conversation || !this.getSideConversationParent(conversationId, userId)) return undefined;
@@ -965,8 +1032,11 @@ export class AppDatabase {
   }
 
   listCodexThreadIds(): string[] {
-    return (this.sqlite.prepare("SELECT codex_thread_id FROM conversations WHERE codex_thread_id IS NOT NULL").all() as Array<{ codex_thread_id: string }>)
-      .map((row) => row.codex_thread_id);
+    return (this.sqlite.prepare(`
+      SELECT codex_thread_id AS thread_id FROM conversations WHERE codex_thread_id IS NOT NULL
+      UNION
+      SELECT fork_source_thread_id AS thread_id FROM conversations WHERE fork_source_thread_id IS NOT NULL
+    `).all() as Array<{ thread_id: string }>).map((row) => row.thread_id);
   }
 
   createImportedConversation(input: {
@@ -999,10 +1069,23 @@ export class AppDatabase {
     return this.getConversation(input.id)!;
   }
 
-  updateConversation(id: string, fields: { title?: string; titleSource?: ConversationTitleSource; codexThreadId?: string; workingDir?: string | null; agentSelection?: StoredAgentSelection; status?: "idle" | "running" }): void {
+  updateConversation(id: string, fields: {
+    title?: string;
+    titleSource?: ConversationTitleSource;
+    codexThreadId?: string | null;
+    forkSourceThreadId?: string | null;
+    forkLastTurnId?: string | null;
+    forkSourceMessageId?: string | null;
+    workingDir?: string | null;
+    agentSelection?: StoredAgentSelection;
+    status?: "idle" | "running";
+  }): void {
     if (fields.title !== undefined) this.sqlite.prepare("UPDATE conversations SET title=?, title_source=COALESCE(?,title_source), updated_at=? WHERE id=?")
       .run(fields.title, fields.titleSource ?? null, new Date().toISOString(), id);
     if (fields.codexThreadId !== undefined) this.sqlite.prepare("UPDATE conversations SET codex_thread_id=?, updated_at=? WHERE id=?").run(fields.codexThreadId, new Date().toISOString(), id);
+    if (fields.forkSourceThreadId !== undefined) this.sqlite.prepare("UPDATE conversations SET fork_source_thread_id=?, updated_at=? WHERE id=?").run(fields.forkSourceThreadId, new Date().toISOString(), id);
+    if (fields.forkLastTurnId !== undefined) this.sqlite.prepare("UPDATE conversations SET fork_last_turn_id=?, updated_at=? WHERE id=?").run(fields.forkLastTurnId, new Date().toISOString(), id);
+    if (fields.forkSourceMessageId !== undefined) this.sqlite.prepare("UPDATE conversations SET fork_source_message_id=?, updated_at=? WHERE id=?").run(fields.forkSourceMessageId, new Date().toISOString(), id);
     if (fields.workingDir !== undefined) this.sqlite.prepare("UPDATE conversations SET working_dir=?, updated_at=? WHERE id=?").run(fields.workingDir, new Date().toISOString(), id);
     if (fields.agentSelection !== undefined) this.sqlite.prepare("UPDATE conversations SET agent_model=?, reasoning_effort=?, agent_provider=?, sandbox_mode=?, updated_at=? WHERE id=?").run(
       fields.agentSelection.model, fields.agentSelection.reasoningEffort, fields.agentSelection.provider ?? null, fields.agentSelection.sandbox ?? "workspace-write", new Date().toISOString(), id,
@@ -1097,8 +1180,14 @@ export class AppDatabase {
     this.sqlite.prepare("UPDATE conversations SET status='idle',deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(now, now, id);
   }
 
-  isCodexThreadUsedByAnotherActiveConversation(threadId: string, conversationId: string): boolean {
-    const row = this.sqlite.prepare("SELECT 1 AS found FROM conversations WHERE codex_thread_id=? AND id<>? AND deleted_at IS NULL LIMIT 1").get(threadId, conversationId) as { found: number } | undefined;
+  isCodexThreadUsedByAnotherActiveConversation(threadId: string, conversationId: string, excludedConversationIds: readonly string[] = []): boolean {
+    const excludedIds = [...new Set([conversationId, ...excludedConversationIds])];
+    const placeholders = excludedIds.map(() => "?").join(",");
+    const row = this.sqlite.prepare(`
+      SELECT 1 AS found FROM conversations
+      WHERE id NOT IN (${placeholders}) AND deleted_at IS NULL AND (codex_thread_id=? OR fork_source_thread_id=?)
+      LIMIT 1
+    `).get(...excludedIds, threadId, threadId) as { found: number } | undefined;
     return Boolean(row);
   }
 
