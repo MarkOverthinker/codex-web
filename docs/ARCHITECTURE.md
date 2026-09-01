@@ -82,7 +82,7 @@ conversation workspace, registered deliverables, the tenant library, or (in
 host mode) the conversation's selected working directory. Paths are
 revalidated with `resolveInside`, traversal is rejected, and scrolling the
 preview lazily requests adjacent windows.
-Output files stay behind a collapsed, conditionally rendered list; opening a file loads only that file's preview, moves previewed files to the front of the list, and automatically opens the first small Markdown deliverable when a task exposes one.
+Output files stay behind a collapsed, conditionally rendered list; opening a file loads only that file's preview and moves previewed files to the front of the list. Entering a task does not open a file preview automatically.
 
 Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. When a rollout records `turn_context.payload.turn_id`, that ID is stored on the corresponding imported user message so it can also be edited and resent. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
 

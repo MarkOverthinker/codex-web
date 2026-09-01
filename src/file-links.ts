@@ -103,10 +103,6 @@ export function orderPreviewedFiles(files: readonly WorkFile[], previewedFileIds
   return ordered;
 }
 
-export function firstMarkdownPreviewFile(files: readonly WorkFile[]): WorkFile | null {
-  return files.find((file) => filePreviewKind(file) === "markdown" && canPreviewInline(file)) ?? null;
-}
-
 export function resolveMessageFileLink(href: string | undefined, files: WorkFile[]): ResolvedMessageLink {
   if (!href) return { kind: "unavailable" };
   const normalized = normalizePath(href);

@@ -26,7 +26,7 @@ import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js
 import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
-import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, firstMarkdownPreviewFile, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "../src/file-links.js";
+import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "../src/file-links.js";
 import { parseCodexSnippetUrl, parseFileLine, parseFileRef, parseSnippetHref } from "../src/code-snippet.js";
 import { findUserMessageJump, findViewportAnchorMessageId } from "../src/message-jump.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -1507,15 +1507,13 @@ test("in-page preview distinguishes Markdown, text, images, and PDFs with a text
   assert.equal(canPreviewInline(file("image/png", 100 * 1024 * 1024)), true);
 });
 
-test("output preview ordering keeps the latest previewed files first and selects small Markdown", () => {
+test("output preview ordering keeps the latest previewed files first", () => {
   const files = [
     { id: "a", mime_type: "application/pdf", size: 10, original_name: "a.pdf", relative_path: "outputs/a.pdf" },
     { id: "b", mime_type: "text/plain", size: 10, original_name: "report.md", relative_path: "outputs/report.md" },
     { id: "c", mime_type: "application/octet-stream", size: 10, original_name: "data.bin", relative_path: "outputs/data.bin" },
   ] as WorkFile[];
   assert.deepEqual(orderPreviewedFiles(files, ["c", "b", "missing", "b"]).map((file) => file.id), ["c", "b", "a"]);
-  assert.equal(firstMarkdownPreviewFile(files)?.id, "b");
-  assert.equal(firstMarkdownPreviewFile([{ ...files[1], size: FILE_PREVIEW_TEXT_LIMIT_BYTES + 1 }]), null);
 });
 
 test("deliverable mime detection covers code and config files", () => {
@@ -1535,7 +1533,7 @@ test("deliverable mime detection covers code and config files", () => {
   assert.equal(mimeTypeForPath("outputs/unknown.bin"), "application/octet-stream");
 });
 
-test("output files are maintained in conversation details and open in a side-by-side preview", () => {
+test("output files are maintained in conversation details and preview on demand", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
   const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
@@ -1548,8 +1546,8 @@ test("output files are maintained in conversation details and open in a side-by-
   assert.match(serverSource, /host_path:/);
   assert.match(appSource, /className=\{`chat-outputs \$\{expanded \? "expanded" : ""\}`\}/);
   assert.match(appSource, /function OutputFilesPanel/);
-  assert.match(appSource, /firstMarkdownPreviewFile/);
   assert.match(appSource, /orderPreviewedFiles/);
+  assert.doesNotMatch(appSource, /autoPreviewedMarkdownRef|firstMarkdownPreviewFile/);
   assert.match(appSource, /aria-expanded=\{expanded\}/);
   assert.match(appSource, /function FilePreviewPane/);
   assert.match(appSource, /className="file-preview-trigger"/);
