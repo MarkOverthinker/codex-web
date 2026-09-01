@@ -179,6 +179,15 @@ export type BillingPricingRule = {
   currency: string;
   source: "manual" | "remote";
   pricing_url: string | null;
+  peak_enabled: number;
+  peak_input_per_million: number | null;
+  peak_cached_input_per_million: number | null;
+  peak_cache_write_per_million: number | null;
+  peak_output_per_million: number | null;
+  peak_start_minute: number | null;
+  peak_end_minute: number | null;
+  peak_weekdays: string;
+  timezone: string;
   updated_at: string;
 };
 export type BillingModel = { providerId: string; providerName: string; modelId: string; displayName: string };
@@ -325,7 +334,7 @@ export const api = {
   ),
   providers: () => request<ProviderState>("/providers"),
   billing: (days = 30) => request<BillingState>(`/billing?days=${days}`),
-  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cachedInputPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string }) =>
+  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cachedInputPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string; peakEnabled?: boolean; peakInputPerMillion?: number; peakCachedInputPerMillion?: number; peakCacheWritePerMillion?: number; peakOutputPerMillion?: number; peakStart?: string; peakEnd?: string; peakWeekdays?: number[]; timezone?: string }) =>
     request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { method: "PUT", body: JSON.stringify(payload) }),
   syncBillingPricing: (providerId?: string, pricingUrl?: string) => providerId
     ? request<{ imported: number; url: string; billing: BillingState }>(`/billing/providers/${encodeURIComponent(providerId)}/sync-pricing`, { method: "POST", body: JSON.stringify({ pricingUrl }) })

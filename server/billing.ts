@@ -71,13 +71,48 @@ function sumUsage(rows: ApiUsageRow[]): TokenUsage & { calls: number } {
   }), { calls: 0, input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 });
 }
 
+function localPeakTime(createdAt: string, timezone: string): { weekday: number; minute: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(createdAt));
+    const values = new Map(parts.map((part) => [part.type, part.value]));
+    const weekday = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[values.get("weekday") as "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun"];
+    const hour = Number(values.get("hour"));
+    const minute = Number(values.get("minute"));
+    if (!weekday || !Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return { weekday, minute: hour * 60 + minute };
+  } catch {
+    return null;
+  }
+}
+
+function isPeakPeriod(row: ApiUsageRow, rule: PricingRuleRow): boolean {
+  if (!rule.peak_enabled || rule.peak_start_minute === null || rule.peak_end_minute === null || rule.peak_start_minute === rule.peak_end_minute) return false;
+  const local = localPeakTime(row.created_at, rule.timezone);
+  if (!local) return false;
+  const weekdays = new Set(rule.peak_weekdays.split(",").map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value >= 1 && value <= 7));
+  if (weekdays.size === 0) return false;
+  const start = rule.peak_start_minute;
+  const end = rule.peak_end_minute;
+  if (start < end) return weekdays.has(local.weekday) && local.minute >= start && local.minute < end;
+  const previousWeekday = local.weekday === 1 ? 7 : local.weekday - 1;
+  return (local.minute >= start && weekdays.has(local.weekday)) || (local.minute < end && weekdays.has(previousWeekday));
+}
+
 function calculateCost(row: ApiUsageRow, rule: PricingRuleRow | undefined): BillingAmount {
   if (!rule) return { amount: null, currency: "USD", priced: false };
+  const peakRates = isPeakPeriod(row, rule)
+    && rule.peak_input_per_million !== null
+    && rule.peak_cached_input_per_million !== null
+    && rule.peak_cache_write_per_million !== null
+    && rule.peak_output_per_million !== null
+    ? { input: rule.peak_input_per_million, cached: rule.peak_cached_input_per_million, cacheWrite: rule.peak_cache_write_per_million, output: rule.peak_output_per_million }
+    : null;
+  const rates = peakRates ?? { input: rule.input_per_million, cached: rule.cached_input_per_million, cacheWrite: rule.cache_write_per_million, output: rule.output_per_million };
   const amount = (
-    row.input_tokens * rule.input_per_million
-    + row.cached_input_tokens * rule.cached_input_per_million
-    + row.cache_write_input_tokens * rule.cache_write_per_million
-    + row.output_tokens * rule.output_per_million
+    row.input_tokens * rates.input
+    + row.cached_input_tokens * rates.cached
+    + row.cache_write_input_tokens * rates.cacheWrite
+    + row.output_tokens * rates.output
   ) / 1_000_000;
   return { amount, currency: rule.currency, priced: true };
 }

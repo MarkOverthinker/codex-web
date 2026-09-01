@@ -180,6 +180,15 @@ export type PricingRuleRow = {
   currency: string;
   source: "manual" | "remote";
   pricing_url: string | null;
+  peak_enabled: number;
+  peak_input_per_million: number | null;
+  peak_cached_input_per_million: number | null;
+  peak_cache_write_per_million: number | null;
+  peak_output_per_million: number | null;
+  peak_start_minute: number | null;
+  peak_end_minute: number | null;
+  peak_weekdays: string;
+  timezone: string;
   updated_at: string;
 };
 
@@ -512,6 +521,15 @@ export class AppDatabase {
         currency TEXT NOT NULL DEFAULT 'USD',
         source TEXT NOT NULL DEFAULT 'manual',
         pricing_url TEXT,
+        peak_enabled INTEGER NOT NULL DEFAULT 0,
+        peak_input_per_million REAL,
+        peak_cached_input_per_million REAL,
+        peak_cache_write_per_million REAL,
+        peak_output_per_million REAL,
+        peak_start_minute INTEGER,
+        peak_end_minute INTEGER,
+        peak_weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5',
+        timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
         updated_at TEXT NOT NULL,
         PRIMARY KEY(user_id, provider_id, model_id)
       );
@@ -571,6 +589,16 @@ export class AppDatabase {
     if (!fileColumns.has("composer_draft_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN composer_draft_id TEXT REFERENCES composer_drafts(conversation_id) ON DELETE CASCADE");
     const presetPromptColumns = this.columnNames("preset_prompts");
     if (!presetPromptColumns.has("default_enabled")) this.sqlite.exec("ALTER TABLE preset_prompts ADD COLUMN default_enabled INTEGER NOT NULL DEFAULT 0");
+    const pricingRuleColumns = this.columnNames("pricing_rules");
+    if (!pricingRuleColumns.has("peak_enabled")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_enabled INTEGER NOT NULL DEFAULT 0");
+    if (!pricingRuleColumns.has("peak_input_per_million")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_input_per_million REAL");
+    if (!pricingRuleColumns.has("peak_cached_input_per_million")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_cached_input_per_million REAL");
+    if (!pricingRuleColumns.has("peak_cache_write_per_million")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_cache_write_per_million REAL");
+    if (!pricingRuleColumns.has("peak_output_per_million")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_output_per_million REAL");
+    if (!pricingRuleColumns.has("peak_start_minute")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_start_minute INTEGER");
+    if (!pricingRuleColumns.has("peak_end_minute")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_end_minute INTEGER");
+    if (!pricingRuleColumns.has("peak_weekdays")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5'");
+    if (!pricingRuleColumns.has("timezone")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'");
     this.sqlite.exec("CREATE INDEX IF NOT EXISTS messages_visible_order ON messages(conversation_id,superseded_at,created_at,id)");
     this.migrateSideChats();
     this.sqlite.prepare("UPDATE jobs SET queue_seq=rowid WHERE queue_seq IS NULL").run();
@@ -1772,11 +1800,23 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT * FROM pricing_rules WHERE user_id=? AND provider_id=? AND model_id=?").get(userId, providerId, modelId) as PricingRuleRow | undefined;
   }
 
-  upsertPricingRule(input: Omit<PricingRuleRow, "updated_at"> & { updated_at?: string }): PricingRuleRow {
+  upsertPricingRule(input: Omit<PricingRuleRow, "updated_at" | "peak_enabled" | "peak_input_per_million" | "peak_cached_input_per_million" | "peak_cache_write_per_million" | "peak_output_per_million" | "peak_start_minute" | "peak_end_minute" | "peak_weekdays" | "timezone"> & {
+    peak_enabled?: number;
+    peak_input_per_million?: number | null;
+    peak_cached_input_per_million?: number | null;
+    peak_cache_write_per_million?: number | null;
+    peak_output_per_million?: number | null;
+    peak_start_minute?: number | null;
+    peak_end_minute?: number | null;
+    peak_weekdays?: string;
+    timezone?: string;
+    updated_at?: string;
+  }): PricingRuleRow {
     const updatedAt = input.updated_at ?? new Date().toISOString();
+    const existing = this.getPricingRule(input.user_id, input.provider_id, input.model_id);
     this.sqlite.prepare(`
-      INSERT INTO pricing_rules(user_id,provider_id,model_id,input_per_million,cached_input_per_million,cache_write_per_million,output_per_million,currency,source,pricing_url,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO pricing_rules(user_id,provider_id,model_id,input_per_million,cached_input_per_million,cache_write_per_million,output_per_million,currency,source,pricing_url,peak_enabled,peak_input_per_million,peak_cached_input_per_million,peak_cache_write_per_million,peak_output_per_million,peak_start_minute,peak_end_minute,peak_weekdays,timezone,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(user_id,provider_id,model_id) DO UPDATE SET
         input_per_million=excluded.input_per_million,
         cached_input_per_million=excluded.cached_input_per_million,
@@ -1785,10 +1825,29 @@ export class AppDatabase {
         currency=excluded.currency,
         source=excluded.source,
         pricing_url=excluded.pricing_url,
+        peak_enabled=excluded.peak_enabled,
+        peak_input_per_million=excluded.peak_input_per_million,
+        peak_cached_input_per_million=excluded.peak_cached_input_per_million,
+        peak_cache_write_per_million=excluded.peak_cache_write_per_million,
+        peak_output_per_million=excluded.peak_output_per_million,
+        peak_start_minute=excluded.peak_start_minute,
+        peak_end_minute=excluded.peak_end_minute,
+        peak_weekdays=excluded.peak_weekdays,
+        timezone=excluded.timezone,
         updated_at=excluded.updated_at
     `).run(
       input.user_id, input.provider_id, input.model_id, input.input_per_million, input.cached_input_per_million,
-      input.cache_write_per_million, input.output_per_million, input.currency, input.source, input.pricing_url, updatedAt,
+      input.cache_write_per_million, input.output_per_million, input.currency, input.source, input.pricing_url,
+      input.peak_enabled ?? existing?.peak_enabled ?? 0,
+      input.peak_input_per_million !== undefined ? input.peak_input_per_million : existing?.peak_input_per_million ?? null,
+      input.peak_cached_input_per_million !== undefined ? input.peak_cached_input_per_million : existing?.peak_cached_input_per_million ?? null,
+      input.peak_cache_write_per_million !== undefined ? input.peak_cache_write_per_million : existing?.peak_cache_write_per_million ?? null,
+      input.peak_output_per_million !== undefined ? input.peak_output_per_million : existing?.peak_output_per_million ?? null,
+      input.peak_start_minute !== undefined ? input.peak_start_minute : existing?.peak_start_minute ?? null,
+      input.peak_end_minute !== undefined ? input.peak_end_minute : existing?.peak_end_minute ?? null,
+      input.peak_weekdays !== undefined ? input.peak_weekdays : existing?.peak_weekdays ?? "1,2,3,4,5",
+      input.timezone !== undefined ? input.timezone : existing?.timezone ?? "Asia/Shanghai",
+      updatedAt,
     );
     return this.getPricingRule(input.user_id, input.provider_id, input.model_id)!;
   }

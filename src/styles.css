@@ -1870,10 +1870,22 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .billing-sync { padding: 0 0 12px; }
 .billing-sync input { flex: 1; min-width: 220px; padding: 8px 10px; }
 .billing-sync > div { display: flex; gap: 8px; }
-.billing-rules-table { min-width: 980px; }
+.billing-rules-table { min-width: 1320px; }
 .billing-rules-table input { width: 82px; padding: 6px 7px; }
 .billing-rules-table td:first-child { min-width: 180px; }
 .billing-save { color: var(--accent); }
+.billing-peak-settings { min-width: 360px; }
+.billing-peak-settings summary { cursor: pointer; color: var(--accent); }
+.billing-checkbox, .billing-weekdays, .billing-peak-row, .billing-peak-grid { display: flex; align-items: center; gap: 7px; }
+.billing-checkbox { margin: 9px 0; color: var(--text); }
+.billing-peak-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.billing-peak-grid label, .billing-peak-row label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 11px; }
+.billing-peak-grid input, .billing-peak-row input { width: 100%; box-sizing: border-box; }
+.billing-peak-row { align-items: flex-end; margin-top: 7px; }
+.billing-peak-row label:last-child { flex: 1; }
+.billing-weekdays { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.billing-weekdays label { display: inline-flex; align-items: center; gap: 2px; }
+.billing-peak-settings > small { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; white-space: normal; }
 @media (max-width: 760px) {
   .billing-backdrop { padding: 10px; }
   .billing-header, .billing-toolbar, .billing-section { padding-left: 15px; padding-right: 15px; }

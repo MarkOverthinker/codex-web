@@ -39,6 +39,37 @@ test("billing aggregates usage and calculates token costs", () => {
   }
 });
 
+test("billing switches between valley and peak prices by local usage time", () => {
+  const { db, root } = makeDb();
+  try {
+    const conversation = db.createConversation("33333333-3333-4333-8333-333333333333", "Peak pricing test");
+    const peakJob = db.createJob("44444444-4444-4444-8444-444444444444", conversation.id, undefined, { model: "gpt-test", reasoningEffort: "medium" });
+    const valleyJob = db.createJob("55555555-5555-4555-8555-555555555555", conversation.id, undefined, { model: "gpt-test", reasoningEffort: "medium" });
+    db.upsertPricingRule({
+      user_id: conversation.user_id, provider_id: BUILTIN_PROVIDER_ID, model_id: "gpt-test",
+      input_per_million: 1, cached_input_per_million: 1, cache_write_per_million: 1, output_per_million: 1,
+      peak_enabled: 1, peak_input_per_million: 3, peak_cached_input_per_million: 3, peak_cache_write_per_million: 3, peak_output_per_million: 3,
+      peak_start_minute: 9 * 60, peak_end_minute: 18 * 60, peak_weekdays: "1,2,3,4,5", timezone: "Asia/Shanghai",
+      currency: "USD", source: "manual", pricing_url: null,
+    });
+    db.addApiUsage({
+      id: "66666666-6666-4666-8666-666666666666", user_id: conversation.user_id, job_id: peakJob.id, conversation_id: conversation.id,
+      provider_id: BUILTIN_PROVIDER_ID, model_id: "gpt-test", input_tokens: 1_000_000, cached_input_tokens: 0,
+      cache_write_input_tokens: 0, output_tokens: 1_000_000, reasoning_output_tokens: 0, created_at: "2026-08-31T02:00:00.000Z",
+    });
+    db.addApiUsage({
+      id: "77777777-7777-4777-8777-777777777777", user_id: conversation.user_id, job_id: valleyJob.id, conversation_id: conversation.id,
+      provider_id: BUILTIN_PROVIDER_ID, model_id: "gpt-test", input_tokens: 1_000_000, cached_input_tokens: 0,
+      cache_write_input_tokens: 0, output_tokens: 1_000_000, reasoning_output_tokens: 0, created_at: "2026-08-31T12:00:00.000Z",
+    });
+    const state = buildBillingState(db, conversation.user_id, 30);
+    assert.equal(state.summary.estimatedCost, 8);
+  } finally {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 test("New API pricing ratios are converted to per-million-token prices", async () => {
   const savedFetch = globalThis.fetch;
