@@ -485,6 +485,8 @@ test("offline bundle packaging ships the in-place upgrade script", () => {
   assert.match(upgradeScript, /\.\/upgrade\.sh <离线包\.tar\.zst> \[部署根\] \[--no-start\]/);
   assert.match(upgradeScript, /备份运行数据到:/);
   assert.match(upgradeScript, /只同步程序文件/);
+  assert.match(upgradeScript, /内置 codex-relay/);
+  assert.match(upgradeScript, /codex-relay: \$RELAY_VERSION/);
   assert.match(upgradeScript, /回滚命令:/);
 });
 test("closed mobile sidebar is not painted as an offscreen shadow layer", () => {
