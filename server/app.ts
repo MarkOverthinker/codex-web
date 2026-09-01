@@ -52,7 +52,7 @@ import {
   writeProviderConfig,
 } from "./provider-manager.js";
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
-import { chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, tenantPaths, type TenantPaths } from "./paths.js";
+import { assertHostPathReadable, chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isManagedHostPath, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, tenantPaths, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
 import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
@@ -253,6 +253,167 @@ export function createApp(overrides: AppOverrides = {}) {
 
   const CODE_SNIPPET_MAX_BYTES = 20 * 1024 * 1024;
   const CODE_SNIPPET_MAX_WINDOW = 500;
+  const FILE_TREE_MAX_ENTRIES = 1000;
+  const FILE_TREE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+  const FILE_TREE_SENSITIVE_NAMES = new Set([
+    ".aws", ".config", ".codex", ".env", ".env.local", ".env.production", ".gnupg", ".runtime", ".ssh",
+    ".npmrc", ".pypirc", "auth.json", "credentials", "credentials.json", "id_dsa", "id_ecdsa", "id_ed25519", "id_rsa", "known_hosts", "rightcode_auth.json",
+  ]);
+
+  type FileTreeRootId = "working-dir" | "workspace" | "library";
+  type FileTreeRootSpec = {
+    id: FileTreeRootId;
+    label: string;
+    absolute: string;
+    displayPath: string;
+    available: boolean;
+  };
+
+  function normalizeFileTreePath(raw: unknown): string {
+    if (raw === undefined || raw === null || raw === "") return "";
+    if (typeof raw !== "string") throw new Error("文件路径无效。");
+    let value = raw.trim().replace(/\\/g, "/");
+    for (let index = 0; index < 2; index += 1) {
+      try {
+        const decoded = decodeURIComponent(value);
+        if (decoded === value) break;
+        value = decoded.replace(/\\/g, "/");
+      } catch {
+        break;
+      }
+    }
+    if (!value || value === ".") return "";
+    if (value.startsWith("/") || value.includes("\0")) throw new Error("文件路径无效。");
+    const parts = value.split("/").filter(Boolean);
+    if (parts.some((part) => part === ".." || part === ".")) throw new Error("文件路径无效。");
+    return parts.join("/");
+  }
+
+  function pathWithin(root: string, candidate: string): boolean {
+    return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+  }
+
+  function fileTreeRootsFor(conversation: ConversationRow): FileTreeRootSpec[] {
+    const storage = storageFor(conversation.user_id);
+    const roots: FileTreeRootSpec[] = [
+      { id: "workspace", label: "会话工作区", absolute: workspaceFor(conversation.user_id, conversation.id), displayPath: "会话工作区", available: true },
+      { id: "library", label: "资料库", absolute: storage.library, displayPath: "资料库", available: true },
+    ];
+    if (config.hostMode && conversation.working_dir) {
+      const host = hostTenantFor(config, db, conversation.user_id);
+      if (host) {
+        try {
+          const workingDir = resolveHostWorkingDir(conversation.working_dir, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot });
+          roots.unshift({ id: "working-dir", label: "当前工作目录", absolute: workingDir, displayPath: workingDir, available: true });
+        } catch {
+          roots.unshift({ id: "working-dir", label: "当前工作目录", absolute: conversation.working_dir, displayPath: conversation.working_dir, available: false });
+        }
+      }
+    }
+    return roots;
+  }
+
+  function fileTreeRootFor(conversation: ConversationRow, rootId: string): FileTreeRootSpec | null {
+    return fileTreeRootsFor(conversation).find((root) => root.id === rootId) ?? null;
+  }
+
+  function fileTreeRootForClient(root: FileTreeRootSpec) {
+    return { id: root.id, label: root.label, path: root.displayPath, available: root.available };
+  }
+
+  function fileTreeDisplayPath(root: FileTreeRootSpec, relativePath: string): string {
+    if (!relativePath) return root.displayPath;
+    return root.id === "working-dir" ? path.join(root.displayPath, ...relativePath.split("/")) : `${root.displayPath}/${relativePath}`;
+  }
+
+  function isSensitiveFileTreeName(name: string): boolean {
+    const lower = name.toLocaleLowerCase();
+    return FILE_TREE_SENSITIVE_NAMES.has(lower) || lower.endsWith(".pem") || lower.endsWith(".key");
+  }
+
+  function isSensitiveFileTreePath(filePath: string): boolean {
+    return filePath.split(path.sep).some(isSensitiveFileTreeName);
+  }
+
+  function fileTreeTargetFor(conversation: ConversationRow, rootId: string, rawPath: unknown) {
+    const root = fileTreeRootFor(conversation, rootId);
+    if (!root || !root.available) return null;
+    const relativePath = normalizeFileTreePath(rawPath);
+    const absoluteInput = resolveInside(root.absolute, relativePath);
+    const rootCanonical = fs.realpathSync(root.absolute);
+    const absolute = fs.realpathSync(absoluteInput);
+    if (root.id !== "working-dir" && !pathWithin(rootCanonical, absolute)) throw new Error("文件路径无效。");
+    if (root.id === "working-dir" && isManagedHostPath(absolute, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot })) {
+      throw new Error("文件路径无效。");
+    }
+    if (isSensitiveFileTreePath(path.relative(rootCanonical, absolute))) throw new Error("该文件不允许通过文件浏览器访问。");
+    const host = config.hostMode ? hostTenantFor(config, db, conversation.user_id) : null;
+    const stat = fs.statSync(absolute);
+    if (host) assertHostPathReadable(absolute, host.username, stat.isDirectory());
+    if (relativePath.split("/").some(isSensitiveFileTreeName)) throw new Error("该文件不允许通过文件浏览器访问。");
+    return {
+      root,
+      relativePath,
+      absolute,
+      stat,
+      mimeType: mimeTypeForPath(absolute),
+      displayPath: fileTreeDisplayPath(root, relativePath),
+    };
+  }
+
+  function fileTreeEntryPreviewable(mimeType: string, size: number | null): boolean {
+    return Boolean(size !== null && (mimeType.startsWith("image/") || mimeType === "application/pdf" || (isTextPreviewMime(mimeType) && size <= FILE_TREE_PREVIEW_MAX_BYTES)));
+  }
+
+  function listFileTreeDirectory(conversation: ConversationRow, rootId: string, rawPath: unknown) {
+    const target = fileTreeTargetFor(conversation, rootId, rawPath);
+    if (!target) throw new Error("文件根目录不可用。");
+    if (!target.stat.isDirectory()) throw new Error("不是目录，无法浏览。");
+    let names: string[];
+    try { names = fs.readdirSync(target.absolute); } catch { throw new Error("无法读取该目录。"); }
+    const truncated = names.length > FILE_TREE_MAX_ENTRIES;
+    const entries = names.slice(0, FILE_TREE_MAX_ENTRIES).flatMap((name) => {
+      if (isSensitiveFileTreeName(name)) return [];
+      const childInput = path.join(target.absolute, name);
+      try {
+        const childLinkStat = fs.lstatSync(childInput);
+        let childStat = childLinkStat;
+        let type: "dir" | "file" | "link" | "other" = "other";
+        if (childLinkStat.isSymbolicLink()) {
+          const childTarget = fs.realpathSync(childInput);
+          if (target.root.id !== "working-dir" && !pathWithin(fs.realpathSync(target.root.absolute), childTarget)) return [];
+          if (target.root.id === "working-dir" && isManagedHostPath(childTarget, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot })) return [];
+          if (isSensitiveFileTreePath(path.relative(fs.realpathSync(target.root.absolute), childTarget))) return [];
+          childStat = fs.statSync(childTarget);
+          type = childStat.isDirectory() ? "dir" : childStat.isFile() ? "file" : "link";
+        } else {
+          type = childLinkStat.isDirectory() ? "dir" : childLinkStat.isFile() ? "file" : "other";
+        }
+        const relativePath = target.relativePath ? `${target.relativePath}/${name}` : name;
+        const mimeType = type === "file" ? mimeTypeForPath(childInput) : "application/octet-stream";
+        return [{
+          name,
+          path: relativePath,
+          display_path: fileTreeDisplayPath(target.root, relativePath),
+          type,
+          mime_type: mimeType,
+          size: type === "file" ? childStat.size : null,
+          mtime: type === "file" ? childStat.mtime.toISOString() : null,
+          previewable: type === "file" && fileTreeEntryPreviewable(mimeType, childStat.size),
+        }];
+      } catch {
+        return [];
+      }
+    });
+    entries.sort((left, right) => (left.type === "dir" ? 0 : 1) - (right.type === "dir" ? 0 : 1) || left.name.localeCompare(right.name));
+    return {
+      rootId: target.root.id,
+      path: target.relativePath,
+      parentPath: target.relativePath ? path.posix.dirname(target.relativePath) === "." ? "" : path.posix.dirname(target.relativePath) : null,
+      entries,
+      truncated,
+    };
+  }
 
   function normalizeSnippetPath(raw: string): string | null {
     let value = String(raw ?? "").trim().replace(/^<|>$/g, "");
@@ -1880,6 +2041,64 @@ export function createApp(overrides: AppOverrides = {}) {
       messages: safeConversationMessages(conversation, messagePage.messages),
       messagePage: { hasMore: messagePage.hasMore, nextCursor: messagePage.nextCursor },
     });
+  });
+
+  api.get("/conversations/:id/file-tree", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    const roots = fileTreeRootsFor(conversation);
+    const rootId = typeof req.query.root === "string" ? req.query.root : "";
+    if (!rootId) return res.json({ roots: roots.map(fileTreeRootForClient) });
+    try {
+      return res.json({
+        roots: roots.map(fileTreeRootForClient),
+        listing: listFileTreeDirectory(conversation, rootId, req.query.path),
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "无法读取文件目录。" });
+    }
+  });
+
+  api.get("/conversations/:id/file-tree/preview", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    const rootId = typeof req.query.root === "string" ? req.query.root : "";
+    try {
+      const target = fileTreeTargetFor(conversation, rootId, req.query.path);
+      if (!target) return res.status(404).json({ error: "文件不存在或不可访问。" });
+      if (!target.stat.isFile()) return res.status(400).json({ error: "不是文件，无法预览。" });
+      if (!fileTreeEntryPreviewable(target.mimeType, target.stat.size)) return res.status(400).json({ error: "该文件格式暂不支持页内预览。" });
+      if (target.stat.size > FILE_TREE_PREVIEW_MAX_BYTES) return res.status(413).json({ error: "文件过大，无法预览。" });
+      const content = fs.readFileSync(target.absolute, "utf8");
+      if (content.includes("\0")) return res.status(400).json({ error: "二进制文件无法预览。" });
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.json({ mimeType: target.mimeType, content });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "文件读取失败。" });
+    }
+  });
+
+  api.get("/conversations/:id/file-tree/file", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    const rootId = typeof req.query.root === "string" ? req.query.root : "";
+    try {
+      const target = fileTreeTargetFor(conversation, rootId, req.query.path);
+      if (!target) return res.status(404).json({ error: "文件不存在或不可访问。" });
+      if (!target.stat.isFile()) return res.status(400).json({ error: "不是文件。" });
+      const download = req.query.download === "1";
+      const inline = !download && (target.mimeType.startsWith("image/") || target.mimeType === "application/pdf" || isTextPreviewMime(target.mimeType));
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Content-Type", target.mimeType);
+      res.setHeader("Content-Disposition", contentDisposition(inline ? "inline" : "attachment", path.basename(target.absolute)));
+      return res.sendFile(path.basename(target.absolute), { root: path.dirname(target.absolute) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "文件读取失败。" });
+    }
   });
 
   api.get("/conversations/:id/code-snippet", (req, res) => {

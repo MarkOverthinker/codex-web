@@ -34,6 +34,33 @@ export type HostDirectoryListing = {
   entries: HostPathEntry[];
   truncated: boolean;
 };
+export type FileTreeRoot = {
+  id: "working-dir" | "workspace" | "library";
+  label: string;
+  path: string;
+  available: boolean;
+};
+export type FileTreeEntry = {
+  name: string;
+  path: string;
+  display_path: string;
+  type: HostPathEntryType;
+  mime_type: string;
+  size: number | null;
+  mtime: string | null;
+  previewable: boolean;
+};
+export type FileTreeListing = {
+  rootId: FileTreeRoot["id"];
+  path: string;
+  parentPath: string | null;
+  entries: FileTreeEntry[];
+  truncated: boolean;
+};
+export type FileTreePreview = {
+  mimeType: string;
+  content: string;
+};
 export type ReloadStatus = {
   available: boolean;
   state?: string;
@@ -340,6 +367,15 @@ export const api = {
     method: "PUT", body: JSON.stringify({ enabled }),
   }),
   workingDirs: () => request<{ settings: WorkingDirSettings }>("/working-dirs"),
+  fileTree: (conversationId: string, rootId?: FileTreeRoot["id"], directoryPath?: string) => request<{ roots: FileTreeRoot[]; listing?: FileTreeListing }>(
+    `/conversations/${conversationId}/file-tree${rootId ? `?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(directoryPath ?? "")}` : ""}`,
+  ),
+  fileTreePreview: (conversationId: string, rootId: FileTreeRoot["id"], filePath: string, signal?: AbortSignal) => request<FileTreePreview>(
+    `/conversations/${conversationId}/file-tree/preview?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(filePath)}`,
+    { signal },
+  ),
+  fileTreeFileUrl: (conversationId: string, rootId: FileTreeRoot["id"], filePath: string, download = false) =>
+    `${BASE_PATH}/api/conversations/${conversationId}/file-tree/file?root=${encodeURIComponent(rootId)}&path=${encodeURIComponent(filePath)}${download ? "&download=1" : ""}`,
   browsePath: (path?: string) => request<{ listing: HostDirectoryListing }>(
     `/path-browser${path ? `?path=${encodeURIComponent(path)}` : ""}`,
   ),

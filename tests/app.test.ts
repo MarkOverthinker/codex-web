@@ -2718,6 +2718,19 @@ test("host mode exposes the path browser and attaches files selected by host pat
   await agent.get(`/codex-web/api/path-browser?path=${encodeURIComponent(path.join(root, "data"))}`).expect(400);
   await agent.get("/codex-web/api/path-browser?path=relative/path").expect(400);
 
+  const hostTreeConversation = await agent.post("/codex-web/api/conversations")
+    .set("X-CSRF-Token", csrf)
+    .send({ workingDir: project })
+    .expect(201);
+  const hostTreeId = hostTreeConversation.body.conversation.id as string;
+  const hostRoots = await agent.get(`/codex-web/api/conversations/${hostTreeId}/file-tree`).expect(200);
+  assert.deepEqual(hostRoots.body.roots.map((root: { id: string }) => root.id), ["working-dir", "workspace", "library"]);
+  assert.equal(hostRoots.body.roots[0].path, fs.realpathSync(project));
+  const hostListing = await agent.get(`/codex-web/api/conversations/${hostTreeId}/file-tree?root=working-dir&path=`).expect(200);
+  assert.ok(hostListing.body.listing.entries.some((entry: { name: string }) => entry.name === "input.md"));
+  const hostPreview = await agent.get(`/codex-web/api/conversations/${hostTreeId}/file-tree/preview?root=working-dir&path=${encodeURIComponent("input.md")}`).expect(200);
+  assert.equal(hostPreview.body.content, "# 输入\n");
+
   const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
   const conversationId = created.body.conversation.id;
   const attached = await agent.post(`/codex-web/api/conversations/${conversationId}/draft/files/from-host`)
@@ -4169,4 +4182,54 @@ test("conversation detail restores running progress and terminal SSE replay", as
   assert.match(replay.text, /id: 3\n/);
   assert.match(replay.text, /"created_at":"2026-/);
   await agent.get(`/codex-web/api/conversations/${crypto.randomUUID()}`).expect(404);
+});
+
+test("file tree API scopes listings to the conversation and serves safe previews", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-file-tree-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot, queueAutoStart: false, hostMode: false,
+    username: "owner", passwordHash: bcrypt.hashSync("File-Tree-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "File-Tree-Password-2026!" }).expect(200);
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", login.body.csrfToken).expect(201);
+  const conversationId = created.body.conversation.id as string;
+  const userId = instance.db.getConversation(conversationId)?.user_id;
+  assert.ok(userId);
+  const workspace = ensureTenantWorkspace(tenantRoot, userId, conversationId);
+  const library = ensureTenant(tenantRoot, userId).library;
+  fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workspace, "README.md"), "# Workspace\n\nhello\n", "utf8");
+  fs.writeFileSync(path.join(workspace, "src", "main.ts"), "export const answer = 42;\n", "utf8");
+  fs.writeFileSync(path.join(workspace, ".env"), "TOKEN=must-not-be-listed\n", "utf8");
+  fs.writeFileSync(path.join(library, "PROFILE.md"), "# Profile\n", "utf8");
+
+  const roots = await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree`).expect(200);
+  assert.deepEqual(roots.body.roots.map((root: { id: string }) => root.id), ["workspace", "library"]);
+  assert.equal(roots.body.roots.every((root: { available: boolean }) => root.available), true);
+
+  const listing = await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree?root=workspace&path=`).expect(200);
+  const names = listing.body.listing.entries.map((entry: { name: string }) => entry.name);
+  assert.ok(names.includes("README.md"));
+  assert.ok(names.includes("src"));
+  assert.equal(names.includes(".env"), false);
+  assert.equal(names.includes(".runtime"), false);
+
+  const nested = await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree?root=workspace&path=${encodeURIComponent("src")}`).expect(200);
+  assert.deepEqual(nested.body.listing.entries.map((entry: { name: string }) => entry.name), ["main.ts"]);
+
+  const preview = await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree/preview?root=workspace&path=${encodeURIComponent("src/main.ts")}`).expect(200);
+  assert.equal(preview.body.mimeType, "text/x-typescript");
+  assert.equal(preview.body.content, "export const answer = 42;\n");
+
+  const download = await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree/file?root=workspace&path=${encodeURIComponent("src/main.ts")}&download=1`).expect(200);
+  assert.match(download.headers["content-type"], /text\/x-typescript/);
+  assert.equal(download.text, "export const answer = 42;\n");
+
+  await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree/preview?root=workspace&path=${encodeURIComponent("../README.md")}`).expect(400);
+  await agent.get(`/codex-web/api/conversations/${conversationId}/file-tree/preview?root=workspace&path=${encodeURIComponent(".env")}`).expect(400);
 });
