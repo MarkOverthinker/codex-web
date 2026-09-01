@@ -84,7 +84,7 @@ revalidated with `resolveInside`, traversal is rejected, and scrolling the
 preview lazily requests adjacent windows.
 Output files stay behind a collapsed, conditionally rendered list; opening a file loads only that file's preview, moves previewed files to the front of the list, and automatically opens the first small Markdown deliverable when a task exposes one.
 
-Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
+Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. When a rollout records `turn_context.payload.turn_id`, that ID is stored on the corresponding imported user message so it can also be edited and resent. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
 
 In host mode the importer also recovers the rollout's recorded `cwd` into the
 conversation's `working_dir` (with the same canonicalization and safety checks
@@ -93,7 +93,7 @@ categories automatically. If that directory is missing or now points into
 managed storage, the conversation is imported without a working directory
 instead of failing.
 
-Queued prompts and their attachments are stored by the server. The browser is only a view of that state. A queued prompt can be reordered, edited, deleted, or converted into a live steering instruction for the currently running Codex turn. Running and queued states are derived independently so an idle-but-queued conversation is not presented as actively executing.
+Queued prompts and their attachments are stored by the server. The browser is only a view of that state. A queued prompt can be reordered, edited, deleted, or converted into a live steering instruction for the currently running Codex turn. Completed user messages retain their Codex turn ID. Editing one creates a replacement user message and job in a transaction, copies only the retained uploads, marks the selected message and all later visible messages as superseded, and persists the source turn ID on `jobs.fork_before_turn_id`. The worker executes `thread/fork` with `beforeTurnId`, starts the replacement turn on the new thread, and then updates the conversation's thread ID. Superseded messages, files, and jobs remain in SQLite for audit while normal message queries hide that branch. Running and queued states are derived independently so an idle-but-queued conversation is not presented as actively executing.
 
 Already-created queued jobs carry a durable `skip_queue` flag when promoted.
 The dispatcher gives promoted jobs priority on restart, and the promotion API

@@ -603,6 +603,9 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .message-meta { min-height: 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 2px 6px; }
 .message-name { color: #606474; font-size: 11px; font-weight: 750; }
 .message-meta time, .live-label { color: #9a9dab; font-size: 10px; font-weight: 500; letter-spacing: .01em; white-space: nowrap; }
+.message-meta-actions { display: inline-flex; align-items: center; gap: 8px; }
+.message-edit-button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; color: #6570a5; background: transparent; cursor: pointer; font-size: 10px; }
+.message-edit-button:hover { border-color: #cbd2ef; color: #303b79; background: #f2f4fc; }
 .live-label { color: #6570a5; }
 .message.assistant .markdown {
   padding: .9375em 1.0625em;
@@ -1159,6 +1162,8 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .messages::-webkit-scrollbar-thumb { background: #4a4c54; }
 :root[data-theme="dark"] .message-name { color: #c4c5ca; }
 :root[data-theme="dark"] .message-meta time { color: #8f9199; }
+:root[data-theme="dark"] .message-edit-button { color: #abb5ee; }
+:root[data-theme="dark"] .message-edit-button:hover { border-color: #4c557d; color: #e0e4ff; background: #303342; }
 :root[data-theme="dark"] .live-label { color: #abb5ee; }
 :root[data-theme="dark"] .message.assistant .markdown { border-color: #373940; background: var(--paper); box-shadow: 0 7px 22px rgba(0, 0, 0, .16); }
 :root[data-theme="dark"] .message.user .message-body > p { color: #f3f3f5; background: linear-gradient(145deg, #363842, #2b2c33); box-shadow: 0 8px 24px rgba(0, 0, 0, .24); }

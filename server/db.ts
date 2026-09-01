@@ -63,6 +63,9 @@ export type MessageRow = {
   content: string;
   quote_excerpt?: string | null;
   source_reference?: string | null;
+  codex_turn_id?: string | null;
+  superseded_at?: string | null;
+  superseded_by?: string | null;
   created_at: string;
 };
 
@@ -125,6 +128,7 @@ export type JobRow = {
   reasoning_effort: string | null;
   agent_provider: string | null;
   sandbox_mode: string | null;
+  fork_before_turn_id: string | null;
   queue_seq: number;
   skip_queue: number;
   status: JobStatus;
@@ -346,6 +350,9 @@ export class AppDatabase {
         content TEXT NOT NULL,
         quote_excerpt TEXT,
         source_reference TEXT,
+        codex_turn_id TEXT,
+        superseded_at TEXT,
+        superseded_by TEXT,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS pending_prompts (
@@ -390,6 +397,7 @@ export class AppDatabase {
         agent_model TEXT,
         reasoning_effort TEXT,
         sandbox_mode TEXT,
+        fork_before_turn_id TEXT,
         skip_queue INTEGER NOT NULL DEFAULT 0,
         queue_seq INTEGER,
         status TEXT NOT NULL,
@@ -525,6 +533,9 @@ export class AppDatabase {
     const messageColumns = this.columnNames("messages");
     if (!messageColumns.has("quote_excerpt")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN quote_excerpt TEXT");
     if (!messageColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN source_reference TEXT");
+    if (!messageColumns.has("codex_turn_id")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN codex_turn_id TEXT");
+    if (!messageColumns.has("superseded_at")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN superseded_at TEXT");
+    if (!messageColumns.has("superseded_by")) this.sqlite.exec("ALTER TABLE messages ADD COLUMN superseded_by TEXT");
     const composerDraftColumns = this.columnNames("composer_drafts");
     if (!composerDraftColumns.has("source_reference")) this.sqlite.exec("ALTER TABLE composer_drafts ADD COLUMN source_reference TEXT");
     const pendingPromptColumns = this.columnNames("pending_prompts");
@@ -537,6 +548,7 @@ export class AppDatabase {
     if (!jobColumns.has("agent_model")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN agent_model TEXT");
     if (!jobColumns.has("reasoning_effort")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN reasoning_effort TEXT");
     if (!jobColumns.has("queue_seq")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN queue_seq INTEGER");
+    if (!jobColumns.has("fork_before_turn_id")) this.sqlite.exec("ALTER TABLE jobs ADD COLUMN fork_before_turn_id TEXT");
     const conversationColumnsAfter = this.columnNames("conversations");
     if (!conversationColumnsAfter.has("agent_provider")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN agent_provider TEXT");
     if (!conversationColumnsAfter.has("sandbox_mode")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN sandbox_mode TEXT");
@@ -559,6 +571,7 @@ export class AppDatabase {
     if (!fileColumns.has("composer_draft_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN composer_draft_id TEXT REFERENCES composer_drafts(conversation_id) ON DELETE CASCADE");
     const presetPromptColumns = this.columnNames("preset_prompts");
     if (!presetPromptColumns.has("default_enabled")) this.sqlite.exec("ALTER TABLE preset_prompts ADD COLUMN default_enabled INTEGER NOT NULL DEFAULT 0");
+    this.sqlite.exec("CREATE INDEX IF NOT EXISTS messages_visible_order ON messages(conversation_id,superseded_at,created_at,id)");
     this.migrateSideChats();
     this.sqlite.prepare("UPDATE jobs SET queue_seq=rowid WHERE queue_seq IS NULL").run();
 
@@ -938,7 +951,7 @@ export class AppDatabase {
     updatedAt: string;
     agentModel: string | null;
     reasoningEffort: string | null;
-    messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+    messages: Array<{ role: "user" | "assistant"; content: string; turnId?: string | null; createdAt: string }>;
   }): ConversationRow {
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
@@ -946,9 +959,9 @@ export class AppDatabase {
         INSERT INTO conversations(id,user_id,title,title_source,codex_thread_id,working_dir,agent_model,reasoning_effort,agent_provider,sandbox_mode,status,created_at,updated_at)
         VALUES(?,?,?,'legacy',?,?,?,?,NULL,'workspace-write','idle',?,?)
       `).run(input.id, input.userId, input.title, input.threadId, input.workingDir, input.agentModel, input.reasoningEffort, input.createdAt, input.updatedAt);
-      const insertMessage = this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,created_at) VALUES(?,?,?,?,NULL,?)");
+      const insertMessage = this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,codex_turn_id,created_at) VALUES(?,?,?, ?,NULL,NULL,?,?)");
       for (const message of input.messages) {
-        insertMessage.run(crypto.randomUUID(), input.id, message.role, message.content, message.createdAt);
+        insertMessage.run(crypto.randomUUID(), input.id, message.role, message.content, message.turnId ?? null, message.createdAt);
       }
       this.sqlite.exec("COMMIT");
     } catch (error) {
@@ -1046,7 +1059,7 @@ export class AppDatabase {
   }
 
   isFirstUserMessage(conversationId: string, messageId: string): boolean {
-    const first = this.sqlite.prepare("SELECT id FROM messages WHERE conversation_id=? AND role='user' ORDER BY created_at,id LIMIT 1")
+    const first = this.sqlite.prepare("SELECT id FROM messages WHERE conversation_id=? AND role='user' AND superseded_at IS NULL ORDER BY created_at,id LIMIT 1")
       .get(conversationId) as { id: string } | undefined;
     return first?.id === messageId;
   }
@@ -1062,8 +1075,8 @@ export class AppDatabase {
   }
 
   addMessage(message: MessageRow): void {
-    this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,created_at) VALUES(?,?,?,?,?,?,?)").run(
-      message.id, message.conversation_id, message.role, message.content, message.quote_excerpt ?? null, message.source_reference ?? null, message.created_at,
+    this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,codex_turn_id,superseded_at,superseded_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(
+      message.id, message.conversation_id, message.role, message.content, message.quote_excerpt ?? null, message.source_reference ?? null, message.codex_turn_id ?? null, message.superseded_at ?? null, message.superseded_by ?? null, message.created_at,
     );
     this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(message.created_at, message.conversation_id);
   }
@@ -1072,8 +1085,77 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT * FROM messages WHERE id=?").get(id) as MessageRow | undefined;
   }
 
+  getMessageForUser(id: string, userId: string): MessageRow | undefined {
+    return this.sqlite.prepare(`
+      SELECT message.* FROM messages message
+      JOIN conversations conversation ON conversation.id=message.conversation_id
+      WHERE message.id=? AND conversation.user_id=? AND conversation.deleted_at IS NULL
+    `).get(id, userId) as MessageRow | undefined;
+  }
+
+  updateMessageTurnId(id: string, turnId: string): void {
+    if (!turnId.trim()) return;
+    this.sqlite.prepare("UPDATE messages SET codex_turn_id=? WHERE id=?").run(turnId, id);
+  }
+
+  createEditedMessageJob(input: {
+    sourceMessageId: string;
+    messageId: string;
+    jobId: string;
+    conversationId: string;
+    content: string;
+    quoteExcerpt: string | null;
+    sourceReference: string | null;
+    forkBeforeTurnId: string;
+    selection: StoredAgentSelection;
+    retainedFileIds: string[];
+    uploadedFiles: FileRow[];
+  }): { message: MessageRow; job: JobRow } | undefined {
+    const now = new Date().toISOString();
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const source = this.sqlite.prepare("SELECT * FROM messages WHERE id=?").get(input.sourceMessageId) as MessageRow | undefined;
+      if (!source || source.conversation_id !== input.conversationId || source.role !== "user" || source.superseded_at || source.codex_turn_id !== input.forkBeforeTurnId) {
+        this.sqlite.exec("ROLLBACK");
+        return undefined;
+      }
+      const sourceFiles = this.sqlite.prepare("SELECT * FROM files WHERE message_id=? AND kind='upload' ORDER BY created_at,id").all(input.sourceMessageId) as FileRow[];
+      const sourceFileIds = new Set(sourceFiles.map((file) => file.id));
+      if (input.retainedFileIds.some((fileId) => !sourceFileIds.has(fileId))) throw new Error("编辑消息的附件状态已经变化，请刷新后重试。");
+      for (const file of input.uploadedFiles) {
+        if (file.conversation_id !== input.conversationId || file.message_id !== input.messageId || file.pending_prompt_id || file.composer_draft_id || file.kind !== "upload") {
+          throw new Error("编辑消息的上传文件无效。");
+        }
+      }
+      this.sqlite.prepare(
+        "UPDATE messages SET superseded_at=?,superseded_by=? "
+        + "WHERE conversation_id=? AND superseded_at IS NULL "
+        + "AND (created_at>? OR (created_at=? AND id>=?))",
+      ).run(now, input.messageId, input.conversationId, source.created_at, source.created_at, source.id);
+      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,codex_turn_id,superseded_at,superseded_by,created_at) VALUES(?,?,'user',?,?,?,?,?,?,?)")
+        .run(input.messageId, input.conversationId, input.content, input.quoteExcerpt, input.sourceReference, null, null, null, now);
+      const insertFile = this.sqlite.prepare("INSERT INTO files(id,conversation_id,message_id,pending_prompt_id,composer_draft_id,original_name,relative_path,mime_type,size,kind,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+      const retainedFiles = sourceFiles.filter((file) => input.retainedFileIds.includes(file.id));
+      for (const file of retainedFiles) {
+        insertFile.run(crypto.randomUUID(), file.conversation_id, input.messageId, null, null, file.original_name, file.relative_path, file.mime_type, file.size, file.kind, now);
+      }
+      for (const file of input.uploadedFiles) {
+        insertFile.run(file.id, file.conversation_id, input.messageId, null, null, file.original_name, normalizeStoredRelativePath(file.relative_path), file.mime_type, file.size, file.kind, file.created_at);
+      }
+      const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
+      this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,sandbox_mode,fork_before_turn_id,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'queued',?,?)")
+        .run(input.jobId, input.conversationId, input.messageId, input.selection.model, input.selection.reasoningEffort, input.selection.provider ?? null, input.selection.sandbox ?? "workspace-write", input.forkBeforeTurnId, next.value, now, now);
+      this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, input.conversationId);
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return { message: this.getMessage(input.messageId)!, job: this.getJob(input.jobId)! };
+  }
+
   listMessages(conversationId: string): Array<MessageRow & { files: FileRow[] }> {
-    const messages = this.sqlite.prepare("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,id").all(conversationId) as MessageRow[];
+    const messages = this.sqlite.prepare("SELECT * FROM messages WHERE conversation_id=? AND superseded_at IS NULL ORDER BY created_at,id").all(conversationId) as MessageRow[];
     const files = this.sqlite.prepare("SELECT * FROM files WHERE conversation_id=? ORDER BY created_at,id").all(conversationId) as FileRow[];
     return messages.map((message) => ({
       ...message,
@@ -1089,12 +1171,12 @@ export class AppDatabase {
       if (!cursor || cursor.conversation_id !== conversationId) return undefined;
       newestFirst = this.sqlite.prepare(`
         SELECT * FROM messages
-        WHERE conversation_id=? AND (created_at<? OR (created_at=? AND id<?))
+        WHERE conversation_id=? AND superseded_at IS NULL AND (created_at<? OR (created_at=? AND id<?))
         ORDER BY created_at DESC,id DESC LIMIT ?
       `).all(conversationId, cursor.created_at, cursor.created_at, cursor.id, pageSize + 1) as MessageRow[];
     } else {
       newestFirst = this.sqlite.prepare(`
-        SELECT * FROM messages WHERE conversation_id=?
+        SELECT * FROM messages WHERE conversation_id=? AND superseded_at IS NULL
         ORDER BY created_at DESC,id DESC LIMIT ?
       `).all(conversationId, pageSize + 1) as MessageRow[];
     }
@@ -1385,14 +1467,14 @@ export class AppDatabase {
     return this.getJob(jobId);
   }
 
-  materializeSteeredPrompt(pendingId: string, messageId: string): MessageRow | undefined {
+  materializeSteeredPrompt(pendingId: string, messageId: string, turnId: string | null = null): MessageRow | undefined {
     const prompt = this.getPendingPrompt(pendingId);
     if (!prompt || prompt.status !== "queued") return undefined;
     const now = new Date().toISOString();
     this.sqlite.exec("BEGIN IMMEDIATE");
     try {
-      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,created_at) VALUES(?,?,'user',?,?,?,?)")
-        .run(messageId, prompt.conversation_id, prompt.content, prompt.quote_excerpt, prompt.source_reference, now);
+      this.sqlite.prepare("INSERT INTO messages(id,conversation_id,role,content,quote_excerpt,source_reference,codex_turn_id,created_at) VALUES(?,?,'user',?,?,?,?,?)")
+        .run(messageId, prompt.conversation_id, prompt.content, prompt.quote_excerpt, prompt.source_reference, turnId, now);
       this.sqlite.prepare("UPDATE files SET message_id=?,pending_prompt_id=NULL WHERE pending_prompt_id=?").run(messageId, pendingId);
       this.sqlite.prepare("DELETE FROM pending_prompts WHERE id=?").run(pendingId);
       this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, prompt.conversation_id);
@@ -1917,12 +1999,12 @@ export class AppDatabase {
     `).all(conversationId) as EnabledPresetPrompt[];
   }
 
-  createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection): JobRow {
+  createJob(id: string, conversationId: string, messageId?: string, selection?: StoredAgentSelection, forkBeforeTurnId: string | null = null): JobRow {
     const now = new Date().toISOString();
     const next = this.sqlite.prepare("SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs").get() as { value: number };
-    this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,sandbox_mode,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'queued',?,?)").run(
+    this.sqlite.prepare("INSERT INTO jobs(id,conversation_id,message_id,agent_model,reasoning_effort,agent_provider,sandbox_mode,fork_before_turn_id,queue_seq,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'queued',?,?)").run(
       id, conversationId, messageId ?? null, selection?.model ?? null, selection?.reasoningEffort ?? null,
-      selection?.provider ?? null, selection?.sandbox ?? "workspace-write", next.value, now, now,
+      selection?.provider ?? null, selection?.sandbox ?? "workspace-write", forkBeforeTurnId, next.value, now, now,
     );
     return this.getJob(id)!;
   }

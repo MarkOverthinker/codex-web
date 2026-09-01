@@ -5,6 +5,7 @@ type PendingJob = {
   resolve(finalResponse: string): void;
   reject(error: Error): void;
   onThreadStarted(threadId: string): void;
+  onTurnStarted?(turnId: string): void;
   onProgress(payload: unknown): void;
   onContextUsage(usage: import("./app-server-turn.js").ContextUsage): void;
   onUsage(usage: import("./billing.js").TokenUsage): void;
@@ -26,7 +27,7 @@ export class TenantWorkerClient {
 
   run(
     request: TenantWorkerRunRequest,
-    callbacks: Pick<PendingJob, "onThreadStarted" | "onProgress" | "onUsage" | "onContextUsage">,
+    callbacks: Pick<PendingJob, "onThreadStarted" | "onTurnStarted" | "onProgress" | "onUsage" | "onContextUsage">,
   ): Promise<string> {
     if (!process.send || !process.connected) return Promise.reject(new Error("Tenant worker isolation is unavailable"));
     if (this.jobs.has(request.jobId)) return Promise.reject(new Error("Tenant worker job already exists"));
@@ -82,6 +83,7 @@ export class TenantWorkerClient {
 
   private handleEvent(jobId: string, pending: PendingJob, event: TenantWorkerEvent): void {
     if (event.type === "thread_started") pending.onThreadStarted(event.threadId);
+    if (event.type === "turn_started") pending.onTurnStarted?.(event.turnId);
     if (event.type === "progress") pending.onProgress(event.payload);
     if (event.type === "usage") pending.onUsage(event.usage);
     if (event.type === "context_usage") pending.onContextUsage(event.usage);

@@ -11,6 +11,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - A responsive React chat interface for Codex CLI
 - Persistent side-chat history with multiple independent threads per primary conversation, cross-task pinning, task-aware reopening, an independently resizable desktop pane, one-click primary-context snapshots, per-thread model/reasoning selection, and source quotes resolved to rollout JSONL path, line, byte offset, JSON Pointer, item ID, and character range
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions; queued jobs can also be promoted to start immediately
+- Edit and resend completed user turns from the browser; the server forks the Codex thread before that turn, keeps the superseded branch for audit, and hides it from the active conversation
 - Persistent attachments and generated deliverables
 - Side-by-side in-page previews for Markdown, code, config (JSON/YAML/TOML/XML and other text-based formats), text, CSV, PDF, and image outputs, with a per-conversation output-file strip; uploaded `.md` attachments are recognized by extension and rendered as Markdown in the same panel; every attachment and output shows its real server path with a copy button, including referenced local files that were not registered as attachments
 - Clickable `file:line` references in assistant replies open a lazy-loading code preview centered on the referenced line
@@ -18,7 +19,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Previous/next “my message” jump controls anchor to the viewport and auto-load older pages until the target user message is located
 - Temporary unauthenticated share links for previewable output files (HMAC-signed, 7-day expiry, outputs only)
 - Server-persistent unsent text, quotes, and attachments, restored across conversations, browsers, and devices
-- Codex thread persistence across browser restarts
+- Codex thread persistence across browser restarts, including durable turn IDs used for history editing and resend
 - Subagent execution through Codex app-server, with child-agent operations and status shown in the live work journal
 - Import existing local Codex CLI sessions (rollout files in the executor's `sessions/` and `archived_sessions/`) as web conversations, then continue them from the browser
 - Optional multi-provider management with a "source · model" picker: native Responses providers remain direct, while Chat Completions-only providers can run through a per-task bundled `codex-relay`; management is disabled by default per user and supports source/model visibility plus task-level switching through app-server `modelProvider` (see [docs/PROVIDER_MANAGEMENT.md](docs/PROVIDER_MANAGEMENT.md))

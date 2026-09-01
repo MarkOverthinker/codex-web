@@ -418,6 +418,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [draftUploads, setDraftUploads] = useState<DraftUpload[]>([]);
   const [draftSaveState, setDraftSaveState] = useState<DraftSaveState>("idle");
   const [editingPending, setEditingPending] = useState<PendingPrompt | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [removedEditingFileIds, setRemovedEditingFileIds] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -530,6 +531,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const deletingConversationIdsRef = useRef(new Set<string>());
   const selectedIdRef = useRef<string | null>(selectedId);
   const editingPendingRef = useRef<PendingPrompt | null>(editingPending);
+  const editingMessageRef = useRef<Message | null>(editingMessage);
   const lastEventIdRef = useRef(0);
   const inputRef = useRef(input);
   const askAgentQuoteRef = useRef(askAgentQuote);
@@ -555,6 +557,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   currentConversationIdRef.current = detail?.conversation.id === selectedId ? detail.conversation.id : null;
   taskMenuRef.current = taskMenu;
   editingPendingRef.current = editingPending;
+  editingMessageRef.current = editingMessage;
   askAgentQuoteRef.current = askAgentQuote;
   sourceReferenceRef.current = sourceReference;
   composerDraftRef.current = composerDraft;
@@ -637,19 +640,19 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const persistComposerDraft = useCallback((conversationId: string, content: string, quoteExcerpt: string, sourceRef: MessageSourceReference | null, keepalive = false) => {
     const signature = composerDraftSignature(content, quoteExcerpt, sourceRef);
     const operation = draftSaveQueueRef.current.catch(() => undefined).then(async () => {
-      if (selectedIdRef.current === conversationId && !editingPendingRef.current) setDraftSaveState("saving");
+      if (selectedIdRef.current === conversationId && !editingPendingRef.current && !editingMessageRef.current) setDraftSaveState("saving");
       const result = await api.saveConversationDraft(conversationId, content, quoteExcerpt, sourceRef, keepalive && new Blob([content, quoteExcerpt, JSON.stringify(sourceRef ?? "")]).size < 60_000);
       draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
       draftSyncedSignaturesRef.current.set(conversationId, signature);
       const cached = draftCacheRef.current.get(conversationId);
       if (cached) draftCacheRef.current.set(conversationId, { ...cached, composerDraft: result.composerDraft });
-      if (selectedIdRef.current === conversationId && !editingPendingRef.current) {
+      if (selectedIdRef.current === conversationId && !editingPendingRef.current && !editingMessageRef.current) {
         composerDraftRef.current = result.composerDraft;
         setComposerDraft(result.composerDraft);
         setDraftSaveState(composerDraftSignature(inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current) === signature ? "saved" : "unsaved");
       }
     }).catch((reason) => {
-      if (selectedIdRef.current === conversationId && !editingPendingRef.current) setDraftSaveState("error");
+      if (selectedIdRef.current === conversationId && !editingPendingRef.current && !editingMessageRef.current) setDraftSaveState("error");
       throw reason;
     });
     draftSaveQueueRef.current = operation.catch(() => undefined);
@@ -667,7 +670,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const handleComposerTextChange = useCallback((text: string) => {
     inputRef.current = text;
     const conversationId = selectedIdRef.current;
-    if (!conversationId || editingPendingRef.current || draftLoadedConversationRef.current !== conversationId) return;
+    if (!conversationId || editingPendingRef.current || editingMessageRef.current || draftLoadedConversationRef.current !== conversationId) return;
     const quoteExcerpt = askAgentQuoteRef.current;
     const sourceRef = sourceReferenceRef.current;
     const signature = composerDraftSignature(text, quoteExcerpt, sourceRef);
@@ -713,7 +716,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     }, ACTIVITY_FLUSH_DELAY_MS);
   }, []);
 
-  const refreshDetail = useCallback(async (id: string) => {
+  const refreshDetail = useCallback(async (id: string, resetMessages = false) => {
     const draftGenerationAtRequest = draftMutationGenerationRef.current.get(id) ?? 0;
     let result = await api.conversation(id);
     if (selectedIdRef.current !== id) return result;
@@ -730,8 +733,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setDetail((current) => current?.conversation.id === id
       ? {
           ...result,
-          messages: mergeMessagePages(current.messages, result.messages),
-          messagePage: current.messagePage,
+          messages: resetMessages ? result.messages : mergeMessagePages(current.messages, result.messages),
+          messagePage: resetMessages ? result.messagePage : current.messagePage,
         }
       : result);
     setSelectedModel(result.agentSelection.model);
@@ -740,7 +743,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setJob(result.activeJob);
     setSending(Boolean(result.activeJob));
     setActivities(mergeJobEvents([], result.jobEvents));
-    if (result.editingPrompt && !responseIsStale) {
+    if (result.editingPrompt && !responseIsStale && !editingMessageRef.current) {
       composerDraftRef.current = result.composerDraft;
       setComposerDraft(result.composerDraft);
       const cachedDraft = draftCacheRef.current.get(id);
@@ -754,7 +757,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         setAskAgentQuote(result.editingPrompt.quote_excerpt ?? "");
         setSourceReference(null);
       }
-    } else if (!result.editingPrompt) {
+    } else if (!result.editingPrompt && !editingMessageRef.current) {
       const wasEditing = Boolean(editingPendingRef.current);
       if (wasEditing && !responseIsStale) {
         editingPendingRef.current = null;
@@ -917,6 +920,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       eventSourceRef.current?.close(); connectedJobRef.current = null;
       clearActivitiesBuffer();
       setDetail(null); setJob(null); setSending(false); setActivities([]);
+      editingMessageRef.current = null; setEditingMessage(null);
       setEditingPending(null); setRemovedEditingFileIds([]); setAskAgentQuote("");
       setSourceReference(null);
       composerDraftRef.current = null; setComposerDraft(null); setDraftUploads([]); setDraftSaveState("idle");
@@ -931,7 +935,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     writeLocalStorageValue(SELECTED_CONVERSATION_KEY, selectedId);
     eventSourceRef.current?.close(); connectedJobRef.current = null; setActivities([]);
     clearActivitiesBuffer();
-    editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]); setFiles([]); setDraftUploads([]);
+    editingPendingRef.current = null; setEditingPending(null); editingMessageRef.current = null; setEditingMessage(null); setRemovedEditingFileIds([]); setFiles([]); setDraftUploads([]);
     const cached = draftCacheRef.current.get(selectedId);
     draftLoadedConversationRef.current = cached ? selectedId : null;
     composerDraftRef.current = cached?.composerDraft ?? null;
@@ -945,7 +949,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
   useEffect(() => {
-    if (!selectedId || editingPending || draftLoadedConversationRef.current !== selectedId) return;
+    if (!selectedId || editingPending || editingMessage || draftLoadedConversationRef.current !== selectedId) return;
     const content = inputRef.current;
     const signature = composerDraftSignature(content, askAgentQuote, sourceReference);
     draftCacheRef.current.set(selectedId, { content, quoteExcerpt: askAgentQuote, sourceReference, composerDraft: composerDraftRef.current });
@@ -963,11 +967,11 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
       draftSaveTimerRef.current = null;
     };
-  }, [askAgentQuote, editingPending, persistComposerDraft, selectedId, sourceReference]);
+  }, [askAgentQuote, editingMessage, editingPending, persistComposerDraft, selectedId, sourceReference]);
   useEffect(() => () => {
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     const conversationId = selectedId;
-    if (!conversationId || editingPendingRef.current || draftLoadedConversationRef.current !== conversationId) return;
+    if (!conversationId || editingPendingRef.current || editingMessageRef.current || draftLoadedConversationRef.current !== conversationId) return;
     const content = inputRef.current;
     const quoteExcerpt = askAgentQuoteRef.current;
     const sourceRef = sourceReferenceRef.current;
@@ -980,7 +984,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const visible = () => {
       if (document.visibilityState === "visible") return resume();
       const conversationId = selectedIdRef.current;
-      if (!conversationId || editingPendingRef.current || draftLoadedConversationRef.current !== conversationId) return;
+      if (!conversationId || editingPendingRef.current || editingMessageRef.current || draftLoadedConversationRef.current !== conversationId) return;
       const content = inputRef.current;
       const quoteExcerpt = askAgentQuoteRef.current;
       const sourceRef = sourceReferenceRef.current;
@@ -1164,9 +1168,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     };
   }
 
-  async function reconcile(id: string) {
+  async function reconcile(id: string, resetMessages = false) {
     try {
-      const [value] = await Promise.all([refreshDetail(id), refreshList()]);
+      const [value] = await Promise.all([refreshDetail(id, resetMessages), refreshList()]);
       if (selectedIdRef.current !== id) return;
       syncConversation(value.conversation);
       if (value.activeJob) connectJob(value.activeJob);
@@ -1362,7 +1366,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   function applyComposerDraftUploadResult(result: { composerDraft: ComposerDraft }, conversationId: string) {
     draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
-    if (selectedIdRef.current === conversationId && !editingPendingRef.current) {
+    if (selectedIdRef.current === conversationId && !editingPendingRef.current && !editingMessageRef.current) {
       composerDraftRef.current = result.composerDraft;
       setComposerDraft(result.composerDraft);
     }
@@ -1381,8 +1385,15 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   async function addComposerFiles(incoming: File[]) {
     if (incoming.length === 0) return;
     const conversationId = selectedIdRef.current;
-    if (editingPendingRef.current || !conversationId) {
-      setFiles((previous) => [...previous, ...incoming].slice(0, 12));
+    if (editingPendingRef.current || editingMessageRef.current || !conversationId) {
+      const editingFiles = editingMessageRef.current?.files ?? editingPendingRef.current?.files ?? [];
+      const retainedCount = editingFiles.filter((file) => !removedEditingFileIds.includes(file.id)).length;
+      const available = Math.max(0, 12 - retainedCount);
+      if (available === 0) {
+        setNotice("单条任务最多包含 12 个附件。");
+        return;
+      }
+      setFiles((previous) => [...previous, ...incoming].slice(0, available));
       return;
     }
     const available = Math.max(0, 12 - (composerDraftRef.current?.files.length ?? 0) - draftUploadsRef.current.length);
@@ -1408,7 +1419,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   async function addHostComposerFiles(paths: string[]) {
     if (paths.length === 0) return;
     const conversationId = selectedIdRef.current;
-    if (editingPendingRef.current || !conversationId) {
+    if (editingPendingRef.current || editingMessageRef.current || !conversationId) {
       setNotice("请先完成或取消正在编辑的任务，再选择对话添加服务器文件。");
       return;
     }
@@ -1439,7 +1450,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     try {
       const result = await api.deleteConversationDraftFile(conversationId, file.id);
       draftMutationGenerationRef.current.set(conversationId, (draftMutationGenerationRef.current.get(conversationId) ?? 0) + 1);
-      if (selectedIdRef.current !== conversationId || editingPendingRef.current) return;
+      if (selectedIdRef.current !== conversationId || editingPendingRef.current || editingMessageRef.current) return;
       composerDraftRef.current = result.composerDraft;
       setComposerDraft(result.composerDraft);
       const cached = draftCacheRef.current.get(conversationId);
@@ -1453,7 +1464,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   async function clearComposerDraft() {
     const conversationId = selectedIdRef.current;
-    if (!conversationId || editingPendingRef.current || draftUploads.length > 0) return;
+    if (!conversationId || editingPendingRef.current || editingMessageRef.current || draftUploads.length > 0) return;
     if (!window.confirm("清空这个会话尚未发送的正文、引用和附件？")) return;
     if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
     await draftSaveQueueRef.current;
@@ -1469,15 +1480,18 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
   async function send(message?: string) {
     const content = message ?? inputRef.current;
-    const hasRetainedEditingFile = Boolean(editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id)));
-    const hasComposerDraftFile = Boolean(!editingPending && composerDraft?.files.length);
+    const hasRetainedEditingFile = Boolean(
+      editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id))
+      || editingMessage?.files.some((file) => !removedEditingFileIds.includes(file.id)),
+    );
+    const hasComposerDraftFile = Boolean(!editingPending && !editingMessage && composerDraft?.files.length);
     if ((!content.trim() && !askAgentQuote && files.length === 0 && !hasRetainedEditingFile && !hasComposerDraftFile) || submitting || selectionSaving) return;
     if (draftUploads.length > 0) { setNotice("请等待草稿附件上传完成后再发送。"); return; }
     setError(""); setNotice(""); setSubmitting(true);
     if (!sending) setActivities([{ kind: "status", label: files.length ? "正在上传并准备文件" : "正在提交任务" }]);
     try {
       let id = selectedId;
-      const useComposerDraft = Boolean(id && !editingPending);
+      const useComposerDraft = Boolean(id && !editingPending && !editingMessage);
       if (!id) {
         const created = await api.createConversation(); id = created.conversation.id;
         setSelectedModel(created.agentSelection.model); setReasoningEffort(created.agentSelection.reasoningEffort);
@@ -1494,6 +1508,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           editingPendingRef.current = null; setEditingPending(null); setRemovedEditingFileIds([]);
           draftLoadedConversationRef.current = null;
         }
+      } else if (editingMessage) {
+        await api.editMessage(id, editingMessage.id, content, files, removedEditingFileIds, askAgentQuote, sourceReferenceRef.current);
+        editingMessageRef.current = null;
+        setEditingMessage(null); setRemovedEditingFileIds([]); setFiles([]);
+        draftLoadedConversationRef.current = null;
+        await reconcile(id, true);
+        return;
       } else {
         if (useComposerDraft) {
           if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
@@ -1515,6 +1536,57 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "发送失败");
     } finally { setSubmitting(false); }
+  }
+
+  async function beginMessageEdit(message: Message) {
+    const conversationId = selectedIdRef.current;
+    if (!conversationId || editingPendingRef.current || editingMessageRef.current || submitting) return;
+    if (!message.can_edit) return;
+    if (sending || job) {
+      setNotice("当前会话仍有运行中或待发送任务，请完成后再编辑历史消息。");
+      return;
+    }
+    if (draftUploads.length > 0) {
+      setNotice("请等待草稿附件上传完成后再编辑历史消息。");
+      return;
+    }
+    setError(""); setNotice(""); setSubmitting(true);
+    try {
+      if (draftLoadedConversationRef.current === conversationId) {
+        if (draftSaveTimerRef.current !== null) window.clearTimeout(draftSaveTimerRef.current);
+        await draftSaveQueueRef.current;
+        await persistComposerDraft(conversationId, inputRef.current, askAgentQuoteRef.current, sourceReferenceRef.current);
+      }
+      editingMessageRef.current = message;
+      setEditingMessage(message);
+      setRemovedEditingFileIds([]);
+      setFiles([]);
+      setAskAgentQuote(message.quote_excerpt ?? "");
+      setSourceReference(message.source_reference);
+      applyExternalComposerText(message.content);
+      draftLoadedConversationRef.current = null;
+      setComposerFocusRequest((request) => request + 1);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "进入历史消息编辑状态失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function cancelMessageEdit() {
+    const conversationId = selectedIdRef.current;
+    if (!conversationId || !editingMessageRef.current || submitting) return;
+    setError(""); setNotice(""); setSubmitting(true);
+    editingMessageRef.current = null;
+    setEditingMessage(null); setRemovedEditingFileIds([]); setFiles([]);
+    draftLoadedConversationRef.current = null;
+    try {
+      await reconcile(conversationId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "取消历史消息编辑失败");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function beginPendingEdit(prompt: PendingPrompt) {
@@ -2528,7 +2600,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     ?? null;
   const loadingConversation = Boolean(selectedId && !currentDetail);
   const composerPendingPrompts = currentDetail?.pendingPrompts ?? EMPTY_PENDING_PROMPTS;
-  const composerDraftFiles = composerDraft?.files ?? EMPTY_WORK_FILES;
+  const composerDraftFiles = editingMessage ? EMPTY_WORK_FILES : composerDraft?.files ?? EMPTY_WORK_FILES;
   const composerCanSteer = job?.status === "running";
   const hostFilesAvailable = Boolean(workingDirSettings?.enabled);
   const taskMenuConversation = taskMenu ? conversations.find((conversation) => conversation.id === taskMenu.conversationId) : undefined;
@@ -2553,7 +2625,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     sending={sending} submitting={submitting} selectionSaving={selectionSaving}
     voiceEnabled={Boolean(session.voiceEnabled)}
     conversationId={selectedId}
-    pendingPrompts={composerPendingPrompts} editingPending={editingPending} removedEditingFileIds={removedEditingFileIds}
+    pendingPrompts={composerPendingPrompts} editingPending={editingPending} editingMessage={editingMessage} removedEditingFileIds={removedEditingFileIds}
     presetPrompts={presetPrompts} enabledPresetPromptIds={currentDetail?.enabledPresetPromptIds ?? EMPTY_PRESET_PROMPT_IDS}
     onTogglePresetPrompt={(id, enabled) => void togglePresetPrompt(id, enabled)} presetSaving={presetSaving}
     onOpenPresetManager={() => setPresetPromptManagerOpen(true)}
@@ -2561,7 +2633,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     onModelChange={changeModel} onReasoningChange={changeReasoning} onSandboxChange={changeSandbox}
     onReorderPending={(ordered) => void reorderPendingPrompts(ordered)} onEditPending={(prompt) => void beginPendingEdit(prompt)}
     onDeletePending={(prompt) => void deletePendingPrompt(prompt)} onSteerPending={(prompt) => void steerPendingPrompt(prompt)}
-    canSteer={composerCanSteer} onCancelPendingEdit={() => void cancelPendingEdit()}
+    canSteer={composerCanSteer} onCancelPendingEdit={() => void cancelPendingEdit()} onCancelMessageEdit={() => void cancelMessageEdit()}
     onAddFiles={(incoming) => void addComposerFiles(incoming)} onRemoveDraftFile={(file) => void removeComposerDraftFile(file)} onClearDraft={() => void clearComposerDraft()}
     onRemoveEditingFile={(fileId) => setRemovedEditingFileIds((current) => [...current, fileId])}
     onRestoreEditingFile={(fileId) => setRemovedEditingFileIds((current) => current.filter((id) => id !== fileId))}
@@ -2570,7 +2642,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     onSend={(message) => void send(message)} onCancel={job && selectedId ? () => void api.cancelConversation(selectedId).then(() => reconcile(selectedId)) : undefined}
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
-    currentDetail, draftSaveState, draftUploads, editingPending, files, handleComposerTextChange, input, composerInputRevision, job, reasoningEffort, sandboxMode,
+    currentDetail, draftSaveState, draftUploads, editingMessage, editingPending, files, handleComposerTextChange, input, composerInputRevision, job, reasoningEffort, sandboxMode,
     hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
@@ -2981,7 +3053,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="desktop-header"><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></header>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onEditMessage={(message) => void beginMessageEdit(message)} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => applyExternalComposerText(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -3162,13 +3234,14 @@ type MessageCardProps = {
   onPreview: (file: WorkFile) => void;
   onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
+  onEditMessage: (message: Message) => void;
 };
 
-const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference, onEditMessage }: MessageCardProps) {
   return <article className={`message ${message.role}`} data-message-id={message.id}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
-      <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></div>
+      <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><span className="message-meta-actions">{message.role === "user" && message.can_edit && <button type="button" className="message-edit-button" onClick={() => onEditMessage(message)} title="编辑并重发"><Pencil size={12} /><span>编辑并重发</span></button>}<time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></span></div>
       {message.role === "assistant" ? <div className="markdown" data-agent-selectable="true"><ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
@@ -3225,6 +3298,7 @@ type MessageListProps = {
   onJumpToUserMessage: (direction: JumpDirection) => void;
   onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
+  onEditMessage: (message: Message) => void;
   userInitials: string;
   chatFontSize: number;
   citationFiles: WorkFile[];
@@ -3242,7 +3316,7 @@ function LiveProcessPanel({ detail, onSkipQueue, skipQueueBusy }: { detail: Conv
     activeJobId={activeJobId} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, onEditMessage, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
@@ -3250,7 +3324,7 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
       const reasoningAbove = !sending && index === reasoningMessageIndex && reasoningSteps.length > 0;
       return <Fragment key={message.id}>
         {reasoningAbove && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
-        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} />
+        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} onEditMessage={onEditMessage} />
       </Fragment>;
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} /></div></article>}
@@ -3297,8 +3371,8 @@ function ContextUsageBadge({ usage }: { usage: ConversationDetail["contextUsage"
   </span>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onToggleFileExplorer, fileExplorerOpen, onOpenBilling, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: () => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onEditMessage, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onToggleFileExplorer, fileExplorerOpen, onOpenBilling, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: () => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail.messages, detail.outputFiles]);
@@ -3430,6 +3504,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       messagesRef={messagesRef}
       onMessagesScroll={onMessagesScroll}
       onJumpToUserMessage={onJumpToUserMessage}
+      onEditMessage={onEditMessage}
       onOpenSnippet={onOpenSnippet}
       onOpenSourceReference={onOpenSourceReference}
       userInitials={userInitials}
@@ -3723,7 +3798,7 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, inputRevision, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
+function Composer({ conversationId, input, inputRevision, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, editingMessage, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onCancelMessageEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
   inputRevision: number;
@@ -3745,6 +3820,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   voiceEnabled: boolean;
   pendingPrompts: PendingPrompt[];
   editingPending: PendingPrompt | null;
+  editingMessage: Message | null;
   removedEditingFileIds: string[];
   presetPrompts: PresetPrompt[];
   enabledPresetPromptIds: string[];
@@ -3764,6 +3840,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   onSteerPending: (prompt: PendingPrompt) => void;
   canSteer: boolean;
   onCancelPendingEdit: () => void;
+  onCancelMessageEdit: () => void;
   onAddFiles: (files: File[]) => void;
   onRemoveDraftFile: (file: WorkFile) => void;
   onClearDraft: () => void;
@@ -3801,6 +3878,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   const draftFilesRef = useRef(draftFiles);
   const draftUploadsRef = useRef(draftUploads);
   const editingPendingRef = useRef(editingPending);
+  const editingMessageRef = useRef(editingMessage);
   const removedEditingFileIdsRef = useRef(removedEditingFileIds);
   const onSendRef = useRef(onSend);
   onTextChangeRef.current = onTextChange;
@@ -3808,6 +3886,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   draftFilesRef.current = draftFiles;
   draftUploadsRef.current = draftUploads;
   editingPendingRef.current = editingPending;
+  editingMessageRef.current = editingMessage;
   removedEditingFileIdsRef.current = removedEditingFileIds;
   onSendRef.current = onSend;
 
@@ -3953,7 +4032,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     if (blob.size === 0) { setVoiceError("没有录到声音，请重新录制。"); setVoiceState("idle"); return; }
     const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : "webm";
     try {
-      const retainedNames = (editingPendingRef.current?.files ?? [])
+      const retainedNames = (editingMessageRef.current?.files ?? editingPendingRef.current?.files ?? [])
         .filter((file) => !removedEditingFileIdsRef.current.includes(file.id))
         .map((file) => file.original_name);
       const attachmentNames = [...retainedNames, ...draftFilesRef.current.map((file) => file.original_name), ...draftUploadsRef.current.map((file) => file.name), ...filesRef.current.map((file) => file.name)].slice(0, 12);
@@ -3989,7 +4068,8 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     const timestamp = clipboardTimestamp(new Date());
     const normalized = clipboardFiles.map((file, index) => normalizeClipboardFile(file, timestamp, index));
     addFiles(normalized);
-    const available = Math.max(0, 12 - files.length - draftFiles.length - draftUploads.length);
+    const retainedEditingFileCount = (editingMessage?.files ?? editingPending?.files ?? []).filter((file) => !removedEditingFileIds.includes(file.id)).length;
+    const available = Math.max(0, 12 - retainedEditingFileCount - files.length - draftFiles.length - draftUploads.length);
     const added = Math.min(normalized.length, available);
     setPasteNotice(added > 0 ? `已从剪贴板添加 ${added} 个附件` : "单次最多添加 12 个附件");
     window.clearTimeout(pasteTimer.current);
@@ -4003,7 +4083,10 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     label: mode.label,
     description: mode.description,
   })) ?? [];
-  const hasRetainedEditingFile = Boolean(editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id)));
+  const hasRetainedEditingFile = Boolean(
+    editingPending?.files.some((file) => !removedEditingFileIds.includes(file.id))
+    || editingMessage?.files.some((file) => !removedEditingFileIds.includes(file.id)),
+  );
   const primaryAction = chooseComposerPrimaryAction({
     running: Boolean(sending && onCancel),
     hasText: Boolean(hasText || askAgentQuote),
@@ -4011,7 +4094,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     voiceActive: voiceState !== "idle",
   });
   const awaitingInstruction = Boolean(editingPending && !editingPending.content.trim() && !editingPending.quote_excerpt);
-  const hasUnsentDraft = !editingPending && Boolean(hasText || askAgentQuote || draftFiles.length || draftUploads.length);
+  const hasUnsentDraft = !editingPending && !editingMessage && Boolean(hasText || askAgentQuote || draftFiles.length || draftUploads.length);
   const draftStatusLabel = draftUploads.length > 0 ? "正在上传附件…"
     : draftSaveState === "saving" ? "正在保存草稿…"
     : draftSaveState === "unsaved" ? "草稿将在停止输入后自动保存"
@@ -4022,6 +4105,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     {pendingPrompts.length > 0 && <PendingQueue prompts={pendingPrompts} busy={submitting} canSteer={canSteer}
       onReorder={onReorderPending} onEdit={onEditPending} onDelete={onDeletePending} onSteer={onSteerPending} />}
     {editingPending && <div className={`editing-pending-banner ${awaitingInstruction ? "awaiting-instruction" : ""}`}><span>{awaitingInstruction ? <Paperclip size={13} /> : <Pencil size={13} />}{awaitingInstruction ? `已上传 ${editingPending.files.length} 个文件，请输入具体操作` : "正在编辑待发送任务"}</span><button type="button" onClick={onCancelPendingEdit} disabled={submitting}><X size={14} />{awaitingInstruction ? "清除文件" : "取消编辑"}</button></div>}
+    {editingMessage && <div className="editing-pending-banner editing-message-banner"><span><Pencil size={13} />正在编辑历史消息，发送后将从这里重建任务分支</span><button type="button" onClick={onCancelMessageEdit} disabled={submitting}><X size={14} />取消编辑</button></div>}
     <div className="composer" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}>
     <div
       className="composer-resize-handle"
@@ -4047,21 +4131,25 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
       <button type="button" className="derived-task-reference-remove" onClick={onClearSourceReference} aria-label="移除引用" title="移除引用"><X size={14} /></button>
     </div>}
     {!sourceReference && askAgentQuote && <div className="ask-agent-reference" title={askAgentQuote}><CornerUpLeft size={15} /><span>{askAgentQuote}</span><button type="button" onClick={onClearAskAgentQuote} aria-label="移除引用" title="移除引用"><X size={14} /></button></div>}
+    {editingMessage && editingMessage.files.length > 0 && <div className="editing-pending-files">{editingMessage.files.map((file) => {
+      const removed = removedEditingFileIds.includes(file.id);
+      return <span key={file.id} className={removed ? "removed" : ""}><FileIcon size={14} /><span className="pending-file-name">{file.original_name}</span><button type="button" onClick={() => removed ? onRestoreEditingFile(file.id) : onRemoveEditingFile(file.id)} title={removed ? "恢复附件" : "移除附件"}>{removed ? <Plus size={13} /> : <X size={13} />}</button></span>;
+    })}</div>}
     {editingPending && editingPending.files.length > 0 && <div className="editing-pending-files">{editingPending.files.map((file) => {
       const removed = removedEditingFileIds.includes(file.id);
       return <span key={file.id} className={removed ? "removed" : ""}><FileIcon size={14} /><span className="pending-file-name">{file.original_name}</span><button type="button" onClick={() => removed ? onRestoreEditingFile(file.id) : onRemoveEditingFile(file.id)} title={removed ? "恢复附件" : "移除附件"}>{removed ? <Plus size={13} /> : <X size={13} />}</button></span>;
     })}</div>}
-    {!editingPending && draftFiles.length > 0 && <div className="pending-files">{draftFiles.map((file) => <span key={file.id}><FileIcon size={14} /><span className="pending-file-name">{file.original_name}</span><button type="button" aria-label={`移除附件 ${file.original_name}`} title="移除附件" onClick={() => onRemoveDraftFile(file)}><X size={13} /></button></span>)}</div>}
-    {!editingPending && draftUploads.length > 0 && <div className="pending-files">{draftUploads.map((file) => <span key={file.id} className="uploading"><LoaderCircle className="spin" size={14} /><span className="pending-file-name">{file.name}</span></span>)}</div>}
+    {!editingPending && !editingMessage && draftFiles.length > 0 && <div className="pending-files">{draftFiles.map((file) => <span key={file.id}><FileIcon size={14} /><span className="pending-file-name">{file.original_name}</span><button type="button" aria-label={`移除附件 ${file.original_name}`} title="移除附件" onClick={() => onRemoveDraftFile(file)}><X size={13} /></button></span>)}</div>}
+    {!editingPending && !editingMessage && draftUploads.length > 0 && <div className="pending-files">{draftUploads.map((file) => <span key={file.id} className="uploading"><LoaderCircle className="spin" size={14} /><span className="pending-file-name">{file.name}</span></span>)}</div>}
     {files.length > 0 && <div className="pending-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={14} /><span className="pending-file-name">{file.name}</span><button onClick={() => setFiles(files.filter((_, i) => i !== index))}><X size={13} /></button></span>)}</div>}
     {pasteNotice && <div className="paste-notice" role="status" aria-live="polite"><Check size={14} />{pasteNotice}</div>}
     {voiceError && <div className="voice-error" role="alert"><span>{voiceError}</span><button type="button" onClick={() => setVoiceError("")}><X size={13} /></button></div>}
-    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
+    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : editingMessage ? "修改这条历史消息并重发…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
     {voiceState !== "idle" && <div className={`voice-panel ${voiceState}`}>
       {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
     </div>}
     <div className="composer-actions"><div className="composer-primary-actions"><button className="attach-button" onClick={() => fileInput.current?.click()} disabled={submitting}><Paperclip size={17} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
-      {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
+      {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending || editingMessage)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <ProviderModelMenu agentOptions={agentOptions} selectedModel={selectedModel} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
