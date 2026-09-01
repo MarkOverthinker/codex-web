@@ -6,6 +6,7 @@ type PendingJob = {
   reject(error: Error): void;
   onThreadStarted(threadId: string): void;
   onProgress(payload: unknown): void;
+  onUsage(usage: import("./billing.js").TokenUsage): void;
 };
 
 export class TenantWorkerClient {
@@ -24,7 +25,7 @@ export class TenantWorkerClient {
 
   run(
     request: TenantWorkerRunRequest,
-    callbacks: Pick<PendingJob, "onThreadStarted" | "onProgress">,
+    callbacks: Pick<PendingJob, "onThreadStarted" | "onProgress" | "onUsage">,
   ): Promise<string> {
     if (!process.send || !process.connected) return Promise.reject(new Error("Tenant worker isolation is unavailable"));
     if (this.jobs.has(request.jobId)) return Promise.reject(new Error("Tenant worker job already exists"));
@@ -81,6 +82,7 @@ export class TenantWorkerClient {
   private handleEvent(jobId: string, pending: PendingJob, event: TenantWorkerEvent): void {
     if (event.type === "thread_started") pending.onThreadStarted(event.threadId);
     if (event.type === "progress") pending.onProgress(event.payload);
+    if (event.type === "usage") pending.onUsage(event.usage);
     if (event.type === "steer_completed" || event.type === "steer_failed") {
       const steer = this.steers.get(event.requestId);
       if (!steer) return;

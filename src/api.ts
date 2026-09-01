@@ -138,6 +138,30 @@ export type ProviderModel = {
   updatedAt: string;
 };
 export type ProviderState = { providers: Provider[]; models: ProviderModel[] };
+export type BillingPricingRule = {
+  user_id: string;
+  provider_id: string;
+  model_id: string;
+  input_per_million: number;
+  cached_input_per_million: number;
+  cache_write_per_million: number;
+  output_per_million: number;
+  currency: string;
+  source: "manual" | "remote";
+  pricing_url: string | null;
+  updated_at: string;
+};
+export type BillingModel = { providerId: string; providerName: string; modelId: string; displayName: string };
+export type BillingState = {
+  rangeDays: number;
+  from: string;
+  summary: { calls: number; inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number; outputTokens: number; reasoningOutputTokens: number; cacheHitRate: number; estimatedCost: number; currency: string; unpricedCalls: number };
+  byProvider: Array<{ providerId: string; providerName: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
+  byModel: Array<{ providerId: string; providerName: string; modelId: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; estimatedCost: number | null; currency: string }>;
+  rules: BillingPricingRule[];
+  models: BillingModel[];
+};
+
 export type PresetPrompt = {
   id: string;
   name: string;
@@ -267,6 +291,11 @@ export const api = {
     { method: "PUT", body: JSON.stringify(selection) },
   ),
   providers: () => request<ProviderState>("/providers"),
+  billing: (days = 30) => request<BillingState>(`/billing?days=${days}`),
+  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cachedInputPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string }) =>
+    request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  syncBillingPricing: (providerId: string, pricingUrl?: string) =>
+    request<{ imported: number; url: string; billing: BillingState }>(`/billing/providers/${encodeURIComponent(providerId)}/sync-pricing`, { method: "POST", body: JSON.stringify({ pricingUrl }) }),
   createProvider: (payload: { name: string; baseUrl: string; apiKey?: string; modelsFile?: string; autoReviewModelOverride?: string | null; wireApi?: Provider["wireApi"]; requiresOpenaiAuth?: boolean; enabled?: boolean }) =>
     request<{ provider: Provider }>("/providers", { method: "POST", body: JSON.stringify(payload) }),
   updateProvider: (id: string, payload: Partial<Omit<Provider, "id" | "createdAt" | "updatedAt" | "hasApiKey" | "apiKeyHint" | "extraConfig">> & { apiKey?: string | null }) =>

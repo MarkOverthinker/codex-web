@@ -145,6 +145,35 @@ export type JobEventRow = {
   created_at: string;
 };
 
+export type ApiUsageRow = {
+  id: string;
+  user_id: string;
+  job_id: string;
+  conversation_id: string;
+  provider_id: string;
+  model_id: string;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  created_at: string;
+};
+
+export type PricingRuleRow = {
+  user_id: string;
+  provider_id: string;
+  model_id: string;
+  input_per_million: number;
+  cached_input_per_million: number;
+  cache_write_per_million: number;
+  output_per_million: number;
+  currency: string;
+  source: "manual" | "remote";
+  pricing_url: string | null;
+  updated_at: string;
+};
+
 export type StoredAgentSelection = {
   model: string;
   reasoningEffort: string;
@@ -436,6 +465,35 @@ export class AppDatabase {
         PRIMARY KEY(user_id, id),
         FOREIGN KEY(user_id, provider_id) REFERENCES providers(user_id, id) ON DELETE CASCADE,
         UNIQUE(user_id, provider_id, model_id)
+      );
+      CREATE TABLE IF NOT EXISTS api_usage (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS api_usage_user_created_idx ON api_usage(user_id, created_at);
+      CREATE TABLE IF NOT EXISTS pricing_rules (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        input_per_million REAL NOT NULL DEFAULT 0,
+        cached_input_per_million REAL NOT NULL DEFAULT 0,
+        cache_write_per_million REAL NOT NULL DEFAULT 0,
+        output_per_million REAL NOT NULL DEFAULT 0,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        source TEXT NOT NULL DEFAULT 'manual',
+        pricing_url TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, provider_id, model_id)
       );
     `);
 
@@ -1496,6 +1554,10 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT * FROM provider_models WHERE user_id=? AND id=?").get(userId, id) as ProviderModelRow | undefined;
   }
 
+  getProviderModelBySlug(userId: string, providerId: string, slug: string): ProviderModelRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM provider_models WHERE user_id=? AND provider_id=? AND slug=?").get(userId, providerId, slug) as ProviderModelRow | undefined;
+  }
+
   createProviderModel(input: {
     userId: string;
     id: string;
@@ -1570,6 +1632,50 @@ export class AppDatabase {
 
   deleteProviderModel(userId: string, id: string): boolean {
     return this.sqlite.prepare("DELETE FROM provider_models WHERE user_id=? AND id=?").run(userId, id).changes > 0;
+  }
+
+  addApiUsage(row: Omit<ApiUsageRow, "created_at"> & { created_at?: string }): void {
+    this.sqlite.prepare(`
+      INSERT INTO api_usage(id,user_id,job_id,conversation_id,provider_id,model_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      row.id, row.user_id, row.job_id, row.conversation_id, row.provider_id, row.model_id,
+      row.input_tokens, row.cached_input_tokens, row.cache_write_input_tokens, row.output_tokens,
+      row.reasoning_output_tokens, row.created_at ?? new Date().toISOString(),
+    );
+  }
+
+  listApiUsage(userId: string, since: string): ApiUsageRow[] {
+    return this.sqlite.prepare("SELECT * FROM api_usage WHERE user_id=? AND created_at>=? ORDER BY created_at DESC,id DESC").all(userId, since) as ApiUsageRow[];
+  }
+
+  listPricingRules(userId: string): PricingRuleRow[] {
+    return this.sqlite.prepare("SELECT * FROM pricing_rules WHERE user_id=? ORDER BY provider_id,model_id").all(userId) as PricingRuleRow[];
+  }
+
+  getPricingRule(userId: string, providerId: string, modelId: string): PricingRuleRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM pricing_rules WHERE user_id=? AND provider_id=? AND model_id=?").get(userId, providerId, modelId) as PricingRuleRow | undefined;
+  }
+
+  upsertPricingRule(input: Omit<PricingRuleRow, "updated_at"> & { updated_at?: string }): PricingRuleRow {
+    const updatedAt = input.updated_at ?? new Date().toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO pricing_rules(user_id,provider_id,model_id,input_per_million,cached_input_per_million,cache_write_per_million,output_per_million,currency,source,pricing_url,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(user_id,provider_id,model_id) DO UPDATE SET
+        input_per_million=excluded.input_per_million,
+        cached_input_per_million=excluded.cached_input_per_million,
+        cache_write_per_million=excluded.cache_write_per_million,
+        output_per_million=excluded.output_per_million,
+        currency=excluded.currency,
+        source=excluded.source,
+        pricing_url=excluded.pricing_url,
+        updated_at=excluded.updated_at
+    `).run(
+      input.user_id, input.provider_id, input.model_id, input.input_per_million, input.cached_input_per_million,
+      input.cache_write_per_million, input.output_per_million, input.currency, input.source, input.pricing_url, updatedAt,
+    );
+    return this.getPricingRule(input.user_id, input.provider_id, input.model_id)!;
   }
 
   getFavoriteWorkingDirectories(userId = LEGACY_USER_ID): WorkingDirectoryFavorite[] {

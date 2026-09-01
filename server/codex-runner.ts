@@ -20,6 +20,7 @@ import { hostTenantFor } from "./host-mode.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 import { mimeTypeForPath } from "./mime.js";
 import { resolveModelAdapter } from "./provider-manager.js";
+import { recordTokenUsage, type TokenUsage } from "./billing.js";
 
 type Publish = (jobId: string, eventType: string, payload: unknown) => void;
 
@@ -195,6 +196,9 @@ export class CodexRunner {
         selection.provider,
         this.config.codexRelayPath,
       );
+      const usageModelId = selection.provider
+        ? this.db.getProviderModelBySlug(conversation.user_id, selection.provider, selection.model)?.model_id ?? selection.model
+        : selection.model;
       const request: TenantWorkerRunRequest = {
         jobId,
         userId: conversation.user_id,
@@ -232,6 +236,14 @@ export class CodexRunner {
           this.db.updateConversation(conversationId, { codexThreadId: threadId });
         },
         onProgress: (payload: unknown) => this.publish(jobId, "progress", payload),
+        onUsage: (usage: TokenUsage) => recordTokenUsage(this.db, {
+          userId: conversation.user_id,
+          jobId,
+          conversationId,
+          providerId: selection.provider,
+          modelId: usageModelId,
+          usage,
+        }),
       };
       const rawFinalResponse = await runWithTransientRetries(async (retryAttempt) => {
         if (retryAttempt > 0) {

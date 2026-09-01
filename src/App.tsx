@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
-  Archive, ArrowDown, ArrowUp, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  Archive, ArrowDown, ArrowUp, BarChart3, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
   ChevronUp, ListChecks,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
@@ -35,6 +35,7 @@ import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { ProviderManagerDialog } from "./provider-manager-dialog";
+import { BillingPanel } from "./billing-panel";
 import { SideChatPane, type SideChatReferenceRequest } from "./side-chat-pane";
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
@@ -427,6 +428,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
+  const [billingPanelOpen, setBillingPanelOpen] = useState(false);
   const [presetPromptManagerOpen, setPresetPromptManagerOpen] = useState(false);
   const [presetPrompts, setPresetPrompts] = useState<PresetPrompt[]>([]);
   const [presetSaving, setPresetSaving] = useState(false);
@@ -2641,6 +2643,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
             <input type="checkbox" checked={providerManagementEnabled} disabled={providerManagementSaving} onChange={(event) => void toggleProviderManagement(event.target.checked)} />
           </label>
           {providerManagementEnabled && <button type="button" className="account-settings-archive" onClick={() => { setProviderManagerOpen(true); setAccountSettingsOpen(false); }}><Settings2 size={15} /><span>打开 API 源管理器</span></button>}
+          <button type="button" className="account-settings-archive" onClick={() => { setBillingPanelOpen(true); setAccountSettingsOpen(false); }}><BarChart3 size={15} /><span>API 调用计费统计</span></button>
           <button type="button" className="account-settings-archive" onClick={() => { setPresetPromptManagerOpen(true); setAccountSettingsOpen(false); }}><ListChecks size={15} /><span>预设 Prompt 管理</span></button>
         </section>}
         <div className="account-row">
@@ -2976,6 +2979,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onResizeStart={(event) => beginPaneResize(event, sideChatWidth, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX, "grow-left", setSideChatWidth, (width) => commitPaneWidth(SIDE_CHAT_WIDTH_KEY, width))}
       onResizeKeyDown={(event) => handlePaneResizerKey(event, "side-chat")}
     />}
+    <BillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} providers={agentOptions?.providers ?? []} builtinModels={agentOptions?.models.filter((model) => !model.provider) ?? []} />
     {snippetPreview
       ? <CodeSnippetPane
           key={`${snippetPreview.conversationId}:${snippetPreview.path}:${snippetPreview.line}`}

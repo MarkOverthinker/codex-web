@@ -5,6 +5,7 @@ import { describeUpstreamError, isRetryableUpstreamError } from "./retry-policy.
 import { buildOptionalCapabilityConfig, type OptionalAgentCapabilities } from "./optional-capabilities.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 import type { SandboxMode } from "./model-options.js";
+import type { TokenUsage } from "./billing.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -19,6 +20,7 @@ type AppServerCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
   onProgress(payload: unknown): void;
+  onUsage?(usage: TokenUsage): void;
 };
 
 export type AppServerTurnOptions = {
@@ -370,6 +372,14 @@ class AppServerTurnClient {
     this.terminal = true;
     this.activeTurnId = null;
     if (turn?.status === "completed") {
+      const usage = (params.usage ?? (turn as JsonObject | undefined)?.usage) as Partial<TokenUsage> | undefined;
+      if (usage) this.callbacks.onUsage?.({
+        input_tokens: Number(usage.input_tokens) || 0,
+        cached_input_tokens: Number(usage.cached_input_tokens) || 0,
+        cache_write_input_tokens: Number(usage.cache_write_input_tokens) || 0,
+        output_tokens: Number(usage.output_tokens) || 0,
+        reasoning_output_tokens: Number(usage.reasoning_output_tokens) || 0,
+      });
       this.callbacks.onProgress({ kind: "status", label: "工作已完成，正在整理结果" });
       this.resolveCompletion(this.finalResponse);
       return;

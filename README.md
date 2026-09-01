@@ -1,6 +1,6 @@
 # Codex Web
 
-An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues with an optional skip-the-queue immediate start, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, user-managed preset prompts with default-on and per-conversation toggles, and optional voice transcription.
+An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persistent conversations and unsent drafts, file uploads and deliverables, side-by-side in-page previews for generated files, server-side task queues with an optional skip-the-queue immediate start, live steering, resumable interruption history, conversation archiving, time-filtered bulk import of local sessions, automatic titles, self-service username and password changes, adjustable reading size and chat column width, light/dark/system appearance modes, per-provider/model token, cache-hit, and estimated-cost billing analytics with manual or JSON-synced pricing rules, user-managed preset prompts with default-on and per-conversation toggles, and optional voice transcription.
 
 > Codex Web is an independent community project. It is not affiliated with, endorsed by, or supported by OpenAI.
 
@@ -22,6 +22,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Subagent execution through Codex app-server, with child-agent operations and status shown in the live work journal
 - Import existing local Codex CLI sessions (rollout files in the executor's `sessions/` and `archived_sessions/`) as web conversations, then continue them from the browser
 - Optional multi-provider management with a "source · model" picker: native Responses providers remain direct, while Chat Completions-only providers can run through a per-task bundled `codex-relay`; management is disabled by default per user and supports source/model visibility plus task-level switching through app-server `modelProvider` (see [docs/PROVIDER_MANAGEMENT.md](docs/PROVIDER_MANAGEMENT.md))
+- API usage and billing analytics from completed turns, grouped by provider and model, with input/output/cache token totals, cache-hit rate, manual per-million-token rules, and compatible JSON pricing sync
 - User-managed preset prompts: create, edit, and delete named rules from account settings, mark presets as default-on so new conversations start with them enabled, and toggle them per conversation in a collapsible panel below the composer; enabled prompts are appended to every task automatically
 - Soft-deleted conversation audit records while workspace files are removed
 - Archive and restore completed conversations without deleting their history or files
@@ -286,6 +287,10 @@ The optional spelling/topic context is bounded to about 500 tokens by default an
 ## Reverse proxy
 
 The container binds to loopback by default. Proxy `/codex-web/` to `http://127.0.0.1:37821/codex-web/` and preserve WebSocket/SSE-friendly buffering settings. See [Deployment](docs/DEPLOYMENT.md).
+
+## Usage and billing
+
+Open **API usage and billing** from account settings to review 7/30/90/365-day input, output, and cache token totals, cache-hit rate, and estimated cost grouped by provider and model. Prices are configured per million tokens for input, cached input, cache writes, and output. A provider can also sync a compatible JSON pricing endpoint; because upstreams do not share one pricing API, sync only imports responses that expose a model plus input/output token prices. Calls without a configured rule remain visible but are deliberately excluded from estimated cost.
 
 ## Development
 

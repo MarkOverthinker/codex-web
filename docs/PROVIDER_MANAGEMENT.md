@@ -45,6 +45,14 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 前端和数据库保存当前用户目录内唯一的别名；真正启动任务时，服务端会按所选源把别名反解为原始 `model_id` 再传给上游。例如选择 `sssaicodeapi-gpt-5.4-mini` 时，上游收到的是 `gpt-5.4-mini`。
 
+## 用量与计费统计
+
+个人设置中的“API 调用计费统计”会在每个 Codex turn 完成后持久化 SDK/app-server 上报的输入、缓存输入、缓存写入、输出与推理输出 token。面板按用户隔离，支持按 API 源和模型汇总；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
+
+费率规则以每 1,000,000 tokens 为单位，分别设置 input、cached input、cache write 和 output 的单价与三位货币代码。费用为估算值；没有规则的调用不会计入费用。内置 Codex 源使用 `Codex 内置源` 单独归类，外部源使用实际 provider 与上游模型 ID，避免别名影响定价。
+
+“同步计费标准”会使用手工输入的 JSON URL；未输入时依次尝试源域名下的 `/api/pricing`、`/api/prices` 和该源 base URL 下的 `/pricing`。接口必须返回可识别的 JSON 模型条目，至少包含 model、input 和 output 的每百万 token 单价；无法识别时不会覆盖现有规则。不同 New API 部署的接口并不统一，因此必要时应填写其实际计费 JSON 地址。
+
 ## 刷新内置模板库
 
 升级 Codex CLI 后，如其模型 schema 或内置模型发生变化，应使用 `scripts/update-model-catalog-templates.mjs` 重新生成 `server/model-catalog-templates.json`。脚本读取一个 TOML 配置文件，配置 `codex_version`、Codex 源码中的 `models.json` / `prompt.md`、一个或多个 DeepSeek 模型目录以及输出路径；生成后必须运行 `npm test`，确认新模板可被当前 CLI 解析。
