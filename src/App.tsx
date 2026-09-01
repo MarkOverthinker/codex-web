@@ -16,7 +16,7 @@ import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, normalizeTaskCategoryVisibleCount, pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
-import { canPreviewInline, filePreviewKind, firstMarkdownPreviewFile, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "./file-links";
+import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "./file-links";
 import { parseCodexSnippetUrl, parseFileRef, parseSnippetHref, type FileLineRef } from "./code-snippet";
 import { CopyPathButton, copyText } from "./copy-path";
 import { CodeSnippetPane } from "./code-snippet-pane";
@@ -3379,7 +3379,6 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
   const chatRef = useRef<HTMLElement>(null);
   const [askSelection, setAskSelection] = useState<AskAgentSelection | null>(null);
   const [previewedOutputFileIds, setPreviewedOutputFileIds] = useState<string[]>([]);
-  const autoPreviewedMarkdownRef = useRef(new Set<string>());
   const handlePreview = useCallback((file: WorkFile) => {
     if (file.kind === "output" && canPreviewInline(file)) {
       setPreviewedOutputFileIds((current) => [file.id, ...current.filter((id) => id !== file.id)]);
@@ -3398,13 +3397,6 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       return next.length === current.length ? current : next;
     });
   }, [detail.conversation.id, detail.outputFiles]);
-
-  useEffect(() => {
-    const markdown = firstMarkdownPreviewFile(detail.outputFiles);
-    if (!markdown || autoPreviewedMarkdownRef.current.has(markdown.id)) return;
-    autoPreviewedMarkdownRef.current.add(markdown.id);
-    handlePreview(markdown);
-  }, [detail.conversation.id, detail.outputFiles, handlePreview]);
 
   useEffect(() => {
     let frame = 0;
