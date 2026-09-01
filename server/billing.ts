@@ -98,6 +98,10 @@ function isPeakPeriod(row: ApiUsageRow, rule: PricingRuleRow): boolean {
   return (local.minute >= start && weekdays.has(local.weekday)) || (local.minute < end && weekdays.has(previousWeekday));
 }
 
+function uncachedInputTokens(row: ApiUsageRow): number {
+  return Math.max(0, row.input_tokens - row.cached_input_tokens - row.cache_write_input_tokens);
+}
+
 function calculateCost(row: ApiUsageRow, rule: PricingRuleRow | undefined): BillingAmount {
   if (!rule) return { amount: null, currency: "USD", priced: false };
   const peakRates = isPeakPeriod(row, rule)
@@ -105,14 +109,14 @@ function calculateCost(row: ApiUsageRow, rule: PricingRuleRow | undefined): Bill
     && rule.peak_cached_input_per_million !== null
     && rule.peak_cache_write_per_million !== null
     && rule.peak_output_per_million !== null
-    ? { input: rule.peak_input_per_million, cached: rule.peak_cached_input_per_million, cacheWrite: rule.peak_cache_write_per_million, output: rule.peak_output_per_million }
+    ? { input: rule.peak_input_per_million, cacheRead: rule.peak_cached_input_per_million, cacheWrite: rule.peak_cache_write_per_million, output: rule.peak_output_per_million }
     : null;
-  const rates = peakRates ?? { input: rule.input_per_million, cached: rule.cached_input_per_million, cacheWrite: rule.cache_write_per_million, output: rule.output_per_million };
+  const rates = peakRates ?? { input: rule.input_per_million, cacheRead: rule.cached_input_per_million, cacheWrite: rule.cache_write_per_million, output: rule.output_per_million };
   const amount = (
-    row.input_tokens * rates.input
-    + row.cached_input_tokens * rates.cached
-    + row.cache_write_input_tokens * rates.cacheWrite
+    uncachedInputTokens(row) * rates.input
     + row.output_tokens * rates.output
+    + row.cache_write_input_tokens * rates.cacheWrite
+    + row.cached_input_tokens * rates.cacheRead
   ) / 1_000_000;
   return { amount, currency: rule.currency, priced: true };
 }
@@ -293,7 +297,7 @@ export async function syncProviderPricing(
         const input = newApiRatio !== null && !isPerRequest
           ? newApiRatio * 2
           : pricingNumber(entry, ["input_per_million", "inputPricePerMillion", "input_price", "prompt_price", "input"]);
-        const cached = newApiRatio !== null && !isPerRequest && newApiCacheRatio !== null
+        const cacheRead = newApiRatio !== null && !isPerRequest && newApiCacheRatio !== null
           ? newApiRatio * newApiCacheRatio * 2
           : pricingNumber(entry, ["cached_input_per_million", "cache_read_per_million", "cache_read_price", "cached_input_price", "cached_input"]);
         const cacheWrite = newApiRatio !== null && !isPerRequest && newApiCreateCacheRatio !== null
@@ -304,7 +308,7 @@ export async function syncProviderPricing(
           : pricingNumber(entry, ["output_per_million", "outputPricePerMillion", "output_price", "completion_price", "output"]);
         if (!modelId || input === null || output === null) continue;
         const currency = typeof entry.currency === "string" && entry.currency.trim() ? entry.currency.trim().toUpperCase() : "USD";
-        db.upsertPricingRule({ user_id: userId, provider_id: provider.id, model_id: modelId, input_per_million: input, cached_input_per_million: cached ?? input, cache_write_per_million: cacheWrite ?? 0, output_per_million: output, currency, source: "remote", pricing_url: url.toString() });
+        db.upsertPricingRule({ user_id: userId, provider_id: provider.id, model_id: modelId, input_per_million: input, cached_input_per_million: cacheRead ?? input, cache_write_per_million: cacheWrite ?? 0, output_per_million: output, currency, source: "remote", pricing_url: url.toString() });
         imported += 1;
       }
       if (imported === 0) { lastError = "接口返回的数据中没有识别到模型的 input/output token 价格"; continue; }

@@ -30,9 +30,30 @@ test("billing aggregates usage and calculates token costs", () => {
     assert.equal(state.summary.inputTokens, 1_000_000);
     assert.equal(state.summary.cachedInputTokens, 200_000);
     assert.equal(state.summary.cacheHitRate, 0.2);
-    assert.equal(state.summary.estimatedCost, 4.25);
+    assert.equal(state.summary.estimatedCost, 3.65);
     assert.equal(state.summary.unpricedCalls, 0);
     assert.equal(state.byModel[0]?.modelId, "gpt-test");
+  } finally {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("billing treats cached input and cache writes as subsets of total input", () => {
+  const { db, root } = makeDb();
+  try {
+    const conversation = db.createConversation("11111111-1111-4111-8111-111111111111", "Billing subset test");
+    const job = db.createJob("22222222-2222-4222-8222-222222222222", conversation.id, undefined, { model: "gpt-test", reasoningEffort: "medium" });
+    db.upsertPricingRule({
+      user_id: conversation.user_id, provider_id: BUILTIN_PROVIDER_ID, model_id: "gpt-test",
+      input_per_million: 2, cached_input_per_million: 1, cache_write_per_million: 0.5, output_per_million: 4,
+      currency: "USD", source: "manual", pricing_url: null,
+    });
+    recordTokenUsage(db, {
+      userId: conversation.user_id, jobId: job.id, conversationId: conversation.id, modelId: "gpt-test",
+      usage: { input_tokens: 1_000_000, cached_input_tokens: 200_000, cache_write_input_tokens: 100_000, output_tokens: 500_000, reasoning_output_tokens: 0 },
+    });
+    assert.equal(buildBillingState(db, conversation.user_id, 30).summary.estimatedCost, 3.65);
   } finally {
     db.close();
     fs.rmSync(root, { recursive: true, force: true });

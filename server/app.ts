@@ -1113,15 +1113,23 @@ export function createApp(overrides: AppOverrides = {}) {
     const providerId = String(req.params.providerId);
     const modelId = String(req.params.modelId);
     const raw = req.body as Record<string, unknown> | undefined;
-    const values = ["inputPerMillion", "cachedInputPerMillion", "cacheWritePerMillion", "outputPerMillion"]
-      .map((key) => Number(raw?.[key]));
+    const values = [
+      Number(raw?.inputPerMillion),
+      Number(raw?.cacheReadPerMillion ?? raw?.cachedInputPerMillion),
+      Number(raw?.cacheWritePerMillion),
+      Number(raw?.outputPerMillion),
+    ];
     if (!values.every((value) => Number.isFinite(value) && value >= 0)) return res.status(400).json({ error: "费率必须是非负数字。" });
     if (providerId !== BUILTIN_PROVIDER_ID && !db.getProvider(session.user_id, providerId)) return res.status(404).json({ error: "API 源不存在。" });
     if (!modelId.trim() || modelId.length > 160) return res.status(400).json({ error: "模型标识无效。" });
     const currency = typeof raw?.currency === "string" && /^[A-Za-z]{3}$/.test(raw.currency.trim()) ? raw.currency.trim().toUpperCase() : "USD";
     const peakEnabled = raw?.peakEnabled === true || raw?.peakEnabled === 1;
-    const peakValues = ["peakInputPerMillion", "peakCachedInputPerMillion", "peakCacheWritePerMillion", "peakOutputPerMillion"]
-      .map((key) => Number(raw?.[key]));
+    const peakValues = [
+      Number(raw?.peakInputPerMillion),
+      Number(raw?.peakCacheReadPerMillion ?? raw?.peakCachedInputPerMillion),
+      Number(raw?.peakCacheWritePerMillion),
+      Number(raw?.peakOutputPerMillion),
+    ];
     if (peakEnabled && !peakValues.every((value) => Number.isFinite(value) && value >= 0)) return res.status(400).json({ error: "峰时费率必须是非负数字。" });
     const peakStartMinute = parseBillingMinute(raw?.peakStart);
     const peakEndMinute = parseBillingMinute(raw?.peakEnd);
