@@ -114,7 +114,6 @@ function conversationFieldsEqual(left: Conversation, right: Conversation): boole
     && left.status === right.status
     && left.has_unread_result === right.has_unread_result
     && left.has_pending_work === right.has_pending_work
-    && JSON.stringify(left.contextUsage) === JSON.stringify(right.contextUsage)
     && left.rollout_bytes === right.rollout_bytes
     && left.archived_at === right.archived_at
     && left.created_at === right.created_at
@@ -3146,7 +3145,6 @@ const ConversationRow = memo(function ConversationRow({
         : Boolean(conversation.has_pending_work)
           ? <CircleDashed size={14} className="conversation-waiting" role="img" aria-label="等待发送" />
           : null}
-      {conversation.contextUsage && <small className="conversation-context-usage">{formatContextTokens(conversation.contextUsage.usedTokens)}{conversation.contextUsage.contextWindow ? ` / ${formatContextTokens(conversation.contextUsage.contextWindow)}` : ""}</small>}
     </button>
     <div className="row-actions">
       <button type="button" className="task-menu-trigger" data-task-menu aria-label={`任务 ${conversation.title} 操作`} aria-haspopup="menu" aria-expanded={menuOpen} title="任务操作" onClick={(event) => onMenu(conversation, event.currentTarget)}><MoreHorizontal size={15} /></button>
