@@ -231,6 +231,7 @@ export function createApp(overrides: AppOverrides = {}) {
         source_reference: sourceReference,
         created_at: message.created_at,
         can_edit: message.role === "user" && Boolean(message.codex_turn_id),
+        can_fork: message.role === "user" && Boolean(message.codex_turn_id) && Boolean(conversation.codex_thread_id),
       };
       if (message.role !== "assistant") return { ...publicMessage, files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
       const visibleContent = conversation.title_source === "ai"
@@ -1804,6 +1805,26 @@ export function createApp(overrides: AppOverrides = {}) {
     return { conversation, agentSelection: selection };
   }
 
+  function createForkSideChatFor(parent: ConversationRow, sourceMessage: MessageRow) {
+    const sourceMessages = db.listMessages(parent.id).filter((message) => message.role === "user" || message.role === "assistant");
+    const sourceIndex = sourceMessages.findIndex((message) => message.id === sourceMessage.id);
+    if (sourceIndex < 0) throw new Error("来源消息不存在。");
+    const nextUserIndex = sourceMessages.findIndex((message, index) => index > sourceIndex && message.role === "user");
+    const forkMessages = sourceMessages.slice(0, nextUserIndex < 0 ? sourceMessages.length : nextUserIndex);
+    const id = newId();
+    workspaceFor(parent.user_id, id);
+    const selection = conversationAgentSelection(parent);
+    const conversation = db.createForkSideConversation({
+      parent,
+      id,
+      selection,
+      sourceMessage,
+      messages: forkMessages,
+    });
+    db.setConversationPresetPrompts(conversation.id, parent.user_id, db.getConversationPresetPromptIds(parent.id));
+    return { conversation, agentSelection: selection };
+  }
+
   api.get("/side-chats", (req, res) => {
     const session = res.locals.session as SessionRow;
     return res.json({ sideChats: db.listSideConversations(session.user_id).filter((sideChat) => !sideChat.archived_at).map(sideConversationForClient) });
@@ -1845,6 +1866,32 @@ export function createApp(overrides: AppOverrides = {}) {
     if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
     if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再新建侧边聊天。" });
     return res.status(201).json(createSideChatFor(parent));
+  });
+
+  api.post("/conversations/:id/side-chats/fork", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const parent = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!parent || db.getSideConversationParent(parent.id, session.user_id)) return res.status(404).json({ error: "主会话不存在。" });
+    if (parent.archived_at) return res.status(409).json({ error: "主会话已归档，请恢复后再 Fork。" });
+    if (parent.status === "running"
+      || db.listActiveJobsForConversation(parent.id).length > 0
+      || db.listPendingPrompts(parent.id).length > 0
+      || db.listPendingPrompts(parent.id, "editing").length > 0) {
+      return res.status(409).json({ error: "主会话仍在运行或有待发送任务，请完成后再 Fork。" });
+    }
+    const sourceMessageId = typeof req.body?.sourceMessageId === "string" ? req.body.sourceMessageId : "";
+    if (!/^[0-9a-f-]{36}$/i.test(sourceMessageId)) return res.status(400).json({ error: "Fork 来源消息无效。" });
+    const sourceMessage = db.getMessageForUser(sourceMessageId, session.user_id);
+    if (!sourceMessage || sourceMessage.conversation_id !== parent.id) return res.status(404).json({ error: "来源消息不存在。" });
+    if (sourceMessage.role !== "user") return res.status(400).json({ error: "只能从用户消息 Fork。" });
+    if (sourceMessage.superseded_at || !sourceMessage.codex_turn_id || !parent.codex_thread_id) {
+      return res.status(409).json({ error: "这条消息没有可用的 Codex 线程分叉点，无法 Fork。" });
+    }
+    try {
+      return res.status(201).json(createForkSideChatFor(parent, sourceMessage));
+    } catch (error) {
+      return res.status(409).json({ error: error instanceof Error ? error.message : "创建 Fork 侧边聊天失败。" });
+    }
   });
 
   api.post("/side-chats/:id/context", (req, res) => {
@@ -2271,9 +2318,10 @@ export function createApp(overrides: AppOverrides = {}) {
       // into a real message/job while the conversation is being deleted.
       for (const item of family) await stopConversationJobs(item.id, false);
       const tenant = tenantPaths(config.tenantRoot, session.user_id);
+      const familyIds = family.map((item) => item.id);
       for (const item of family) {
         for (const file of db.listFiles(item.id)) removePersistedDeliverable(config.dataRoot, file.relative_path);
-        if (item.codex_thread_id && !db.isCodexThreadUsedByAnotherActiveConversation(item.codex_thread_id, item.id)) {
+        if (item.codex_thread_id && !db.isCodexThreadUsedByAnotherActiveConversation(item.codex_thread_id, item.id, familyIds)) {
           removeCodexThreadFiles(codexHomeFor(session.user_id), item.codex_thread_id);
         }
         removeWorkspace(tenant.conversations, item.id);

@@ -69,6 +69,7 @@ export type AppServerTurnOptions = {
   env: NodeJS.ProcessEnv;
   threadId: string | null;
   forkBeforeTurnId?: string | null;
+  forkLastTurnId?: string | null;
   prompt: string;
   imagePaths: string[];
   outputSchema?: Record<string, unknown>;
@@ -278,12 +279,15 @@ class AppServerTurnClient {
           ...buildOptionalCapabilityConfig(this.options.optionalCapabilities),
         },
       };
+      const forkBeforeTurnId = this.options.forkBeforeTurnId?.trim() || null;
+      const forkLastTurnId = this.options.forkLastTurnId?.trim() || null;
+      if (forkBeforeTurnId && forkLastTurnId) throw new Error("线程分叉参数不能同时指定 beforeTurnId 和 lastTurnId");
       let threadResult: unknown;
-      if (this.options.forkBeforeTurnId) {
+      if (forkBeforeTurnId || forkLastTurnId) {
         if (!this.options.threadId) throw new Error("线程分叉缺少源线程 ID");
         threadResult = await this.request("thread/fork", {
           threadId: this.options.threadId,
-          beforeTurnId: this.options.forkBeforeTurnId,
+          ...(forkBeforeTurnId ? { beforeTurnId: forkBeforeTurnId } : { lastTurnId: forkLastTurnId }),
           deferGoalContinuation: true,
           ...common,
           excludeTurns: true,

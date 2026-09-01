@@ -42,6 +42,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     env: codexEnvironment,
     threadId: request.codexThreadId,
     forkBeforeTurnId: request.forkBeforeTurnId,
+    forkLastTurnId: request.forkLastTurnId,
     prompt: request.effectivePrompt,
     imagePaths: request.imagePaths,
     outputSchema: request.outputSchema,
@@ -147,6 +148,7 @@ export function validateTenantWorkerRequest(request: TenantWorkerRunRequest, exp
   if (request.modelProvider !== undefined && request.modelProvider !== null && !/^[a-z0-9][a-z0-9._-]{1,80}$/i.test(request.modelProvider)) {
     throw new Error("Invalid worker model provider");
   }
+  if (request.forkBeforeTurnId && request.forkLastTurnId) throw new Error("Worker fork parameters cannot be combined");
   if (request.modelAdapter) {
     if (request.modelAdapter.kind !== "codex-relay") throw new Error("Invalid worker model adapter");
     if (request.modelAdapter.providerId !== request.modelProvider) throw new Error("Worker model adapter provider mismatch");

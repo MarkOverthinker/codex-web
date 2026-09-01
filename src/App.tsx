@@ -7,7 +7,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, BarChart3, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen, FolderTree,
-  ChevronUp, ListChecks,
+  ChevronUp, GitFork, ListChecks,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
@@ -36,7 +36,7 @@ import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { ProviderManagerDialog } from "./provider-manager-dialog";
 import { BillingPanel } from "./billing-panel";
-import { SideChatPane, type SideChatReferenceRequest } from "./side-chat-pane";
+import { SideChatPane, type SideChatForkRequest, type SideChatReferenceRequest } from "./side-chat-pane";
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
 import { FileExplorerPane } from "./file-explorer-pane";
@@ -408,6 +408,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
   const [sideChatReferenceRequest, setSideChatReferenceRequest] = useState<SideChatReferenceRequest | null>(null);
+  const [sideChatForkRequest, setSideChatForkRequest] = useState<SideChatForkRequest | null>(null);
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
   const [composerInputRevision, setComposerInputRevision] = useState(0);
@@ -551,6 +552,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const taskMenuRef = useRef(taskMenu);
   const dismissedReloadSignatureRef = useRef<string | null>(null);
   const currentReloadSignatureRef = useRef("");
+  const sideChatForkSequenceRef = useRef(0);
   const sideChatReferenceSequenceRef = useRef(0);
   selectedIdRef.current = selectedId;
   detailRef.current = detail;
@@ -585,6 +587,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setSnippetPreview(null);
     setSideChatOpen(false);
     setSideChatReferenceRequest(null);
+    setSideChatForkRequest(null);
     setFileExplorerOpen((open) => !open);
   }, []);
 
@@ -598,6 +601,18 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setSideChatOpen(true);
     sideChatReferenceSequenceRef.current += 1;
     setSideChatReferenceRequest({ id: sideChatReferenceSequenceRef.current, sourceConversation, sourceMessageId: messageId, excerpt });
+  }, []);
+
+  const forkMessageToSideChat = useCallback((messageId: string) => {
+    const sourceConversation = detailRef.current?.conversation;
+    if (!sourceConversation) return;
+    setPreviewFile(null);
+    setSnippetPreview(null);
+    setFileExplorerOpen(false);
+    setSideChatOpen(true);
+    setSideChatReferenceRequest(null);
+    sideChatForkSequenceRef.current += 1;
+    setSideChatForkRequest({ id: sideChatForkSequenceRef.current, sourceConversation, sourceMessageId: messageId });
   }, []);
 
   const openFilePreview = useCallback((file: WorkFile) => { setFileExplorerOpen(false); setSideChatOpen(false); setPreviewFile(file); }, []);
@@ -3053,7 +3068,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="desktop-header"><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></header>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
-      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onEditMessage={(message) => void beginMessageEdit(message)} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
+      {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onEditMessage={(message) => void beginMessageEdit(message)} onForkSideChat={forkMessageToSideChat} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => applyExternalComposerText(text)} />}
       {error && <div className="toast"><span>{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
@@ -3071,8 +3086,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       currentConversation={sideChatCurrentConversation}
       agentOptions={agentOptions}
       referenceRequest={sideChatReferenceRequest}
+      forkRequest={sideChatForkRequest}
+      onForkHandled={(requestId) => setSideChatForkRequest((current) => current?.id === requestId ? null : current)}
       onReferenceHandled={(requestId) => setSideChatReferenceRequest((current) => current?.id === requestId ? null : current)}
-      onClose={() => { setSideChatOpen(false); setSideChatReferenceRequest(null); }}
+      onClose={() => { setSideChatOpen(false); setSideChatReferenceRequest(null); setSideChatForkRequest(null); }}
       onError={setError}
       onOpenSourceReference={openSourceReference}
       width={sideChatWidth}
@@ -3235,13 +3252,14 @@ type MessageCardProps = {
   onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
   onEditMessage: (message: Message) => void;
+  onForkSideChat: (messageId: string) => void;
 };
 
-const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference, onEditMessage }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat }: MessageCardProps) {
   return <article className={`message ${message.role}`} data-message-id={message.id}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
-      <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><span className="message-meta-actions">{message.role === "user" && message.can_edit && <button type="button" className="message-edit-button" onClick={() => onEditMessage(message)} title="编辑并重发"><Pencil size={12} /><span>编辑并重发</span></button>}<time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></span></div>
+      <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><span className="message-meta-actions">{message.role === "user" && message.can_edit && <button type="button" className="message-edit-button" onClick={() => onEditMessage(message)} title="编辑并重发"><Pencil size={12} /><span>编辑并重发</span></button>}{message.role === "user" && message.can_fork && <button type="button" className="message-fork-button" onClick={() => onForkSideChat(message.id)} title="Fork 到侧边聊天"><GitFork size={12} /><span>Fork 到侧边聊天</span></button>}<time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></span></div>
       {message.role === "assistant" ? <div className="markdown" data-agent-selectable="true"><ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
@@ -3298,6 +3316,7 @@ type MessageListProps = {
   onJumpToUserMessage: (direction: JumpDirection) => void;
   onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
+  onForkSideChat: (messageId: string) => void;
   onEditMessage: (message: Message) => void;
   userInitials: string;
   chatFontSize: number;
@@ -3316,7 +3335,7 @@ function LiveProcessPanel({ detail, onSkipQueue, skipQueueBusy }: { detail: Conv
     activeJobId={activeJobId} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, onEditMessage, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
@@ -3324,7 +3343,7 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
       const reasoningAbove = !sending && index === reasoningMessageIndex && reasoningSteps.length > 0;
       return <Fragment key={message.id}>
         {reasoningAbove && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
-        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} onEditMessage={onEditMessage} />
+        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} onEditMessage={onEditMessage} onForkSideChat={onForkSideChat} />
       </Fragment>;
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} /></div></article>}
@@ -3371,8 +3390,8 @@ function ContextUsageBadge({ usage }: { usage: ConversationDetail["contextUsage"
   </span>;
 }
 
-const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onEditMessage, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onToggleFileExplorer, fileExplorerOpen, onOpenBilling, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: () => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
+const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onEditMessage, onForkSideChat, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onToggleFileExplorer, fileExplorerOpen, onOpenBilling, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onForkSideChat: (messageId: string) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: () => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail.messages, detail.outputFiles]);
@@ -3497,6 +3516,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       onMessagesScroll={onMessagesScroll}
       onJumpToUserMessage={onJumpToUserMessage}
       onEditMessage={onEditMessage}
+      onForkSideChat={onForkSideChat}
       onOpenSnippet={onOpenSnippet}
       onOpenSourceReference={onOpenSourceReference}
       userInitials={userInitials}
