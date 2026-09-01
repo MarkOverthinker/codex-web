@@ -7,11 +7,13 @@ import { summarizeEvent } from "./codex-events.js";
 import type { TenantWorkerRunRequest } from "./tenant-worker-protocol.js";
 import { isOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { startCodexRelay } from "./codex-relay.js";
+import type { TokenUsage } from "./billing.js";
 
 type ExecutionCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
   onProgress(payload: unknown): void;
+  onUsage(usage: TokenUsage): void;
 };
 
 export async function executeTenantTurn(request: TenantWorkerRunRequest, callbacks: ExecutionCallbacks): Promise<string> {
@@ -106,7 +108,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
 
 export async function consumeTenantTurnEvents(
   events: AsyncIterable<ThreadEvent>,
-  callbacks: Pick<ExecutionCallbacks, "onThreadStarted" | "onProgress">,
+  callbacks: Pick<ExecutionCallbacks, "onThreadStarted" | "onProgress"> & { onUsage?: ExecutionCallbacks["onUsage"] },
 ): Promise<string> {
   let finalResponse = "";
   let turnCompleted = false;
@@ -119,6 +121,7 @@ export async function consumeTenantTurnEvents(
       finalResponse = event.item.text;
     }
     if (event.type === "turn.failed") throw new Error(event.error.message);
+    if (event.type === "turn.completed") callbacks.onUsage?.(event.usage);
     // A top-level error event is not necessarily terminal. The CLI may emit it
     // while reconnecting, then fall back from WebSockets to HTTPS and complete
     // the same turn. Only fail if the stream ends without turn.completed.

@@ -55,6 +55,7 @@ import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from 
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
 import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
+import { buildBillingState, BUILTIN_PROVIDER_ID, syncProviderPricing } from "./billing.js";
 import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
 import { locateMessageInCodexRollout } from "./message-source-locator.js";
 import {
@@ -875,6 +876,43 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     if (!requireProviderManagement(session, res)) return;
     return res.json({ providers: listProvidersPublic(db, session.user_id), models: listProviderModelsPublic(db, session.user_id) });
+  });
+
+  api.get("/billing", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
+    return res.json(buildBillingState(db, session.user_id, rawDays));
+  });
+
+  api.put("/billing/pricing-rules/:providerId/:modelId", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const providerId = String(req.params.providerId);
+    const modelId = String(req.params.modelId);
+    const raw = req.body as Record<string, unknown> | undefined;
+    const values = ["inputPerMillion", "cachedInputPerMillion", "cacheWritePerMillion", "outputPerMillion"]
+      .map((key) => Number(raw?.[key]));
+    if (!values.every((value) => Number.isFinite(value) && value >= 0)) return res.status(400).json({ error: "费率必须是非负数字。" });
+    if (providerId !== BUILTIN_PROVIDER_ID && !db.getProvider(session.user_id, providerId)) return res.status(404).json({ error: "API 源不存在。" });
+    if (!modelId.trim() || modelId.length > 160) return res.status(400).json({ error: "模型标识无效。" });
+    const currency = typeof raw?.currency === "string" && /^[A-Za-z]{3}$/.test(raw.currency.trim()) ? raw.currency.trim().toUpperCase() : "USD";
+    db.upsertPricingRule({
+      user_id: session.user_id, provider_id: providerId, model_id: modelId,
+      input_per_million: values[0], cached_input_per_million: values[1], cache_write_per_million: values[2], output_per_million: values[3],
+      currency, source: "manual", pricing_url: null,
+    });
+    return res.json(buildBillingState(db, session.user_id, Number(req.query.days) || 30));
+  });
+
+  api.post("/billing/providers/:id/sync-pricing", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const provider = db.getProvider(session.user_id, String(req.params.id));
+    if (!provider) return res.status(404).json({ error: "API 源不存在。" });
+    try {
+      const result = await syncProviderPricing(db, session.user_id, provider, typeof req.body?.pricingUrl === "string" ? req.body.pricingUrl : undefined);
+      return res.json({ ...result, billing: buildBillingState(db, session.user_id) });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "同步计费标准失败。" });
+    }
   });
 
   api.post("/providers", (req, res) => {
