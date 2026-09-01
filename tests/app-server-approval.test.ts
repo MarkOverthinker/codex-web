@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startAppServerTurn, summarizeAppServerItem } from "../server/app-server-turn.js";
+import type { TokenUsage } from "../server/billing.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES } from "../server/optional-capabilities.js";
 import { buildProcessJournal } from "../src/process-journal.js";
 import { mergeJobEvents, PROCESS_EVENT_WINDOW } from "../src/recovery.js";
@@ -135,6 +136,79 @@ input.on("line", (line) => {
   assert.equal(completedReview?.riskLevel, "medium");
   assert.match(completedReview?.detail ?? "", /审核依据/);
   assert.ok(progress.some((event) => event.reviewId === "fallback:approval-1" && event.reviewStatus === "denied"));
+});
+
+test("app-server records cumulative token usage updates when a turn completes", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-token-usage-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "fake-app-server.mjs");
+  const workspace = path.join(root, "workspace");
+  const library = path.join(root, "library");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(library);
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+import readline from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ id: message.id, result: {} });
+  if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: "thread-usage" } } });
+  if (message.method === "turn/start") {
+    send({ id: message.id, result: { turn: { id: "turn-usage" } } });
+    send({ method: "thread/tokenUsage/updated", params: {
+      threadId: "thread-usage", turnId: "turn-usage",
+      tokenUsage: {
+        total: { totalTokens: 145, inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 3, outputTokens: 40, reasoningOutputTokens: 5 },
+        last: { totalTokens: 145, inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 3, outputTokens: 40, reasoningOutputTokens: 5 },
+        modelContextWindow: 128000,
+      },
+    } });
+    send({ method: "thread/tokenUsage/updated", params: {
+      threadId: "thread-usage", turnId: "turn-usage",
+      tokenUsage: {
+        total: { totalTokens: 220, inputTokens: 160, cachedInputTokens: 30, cacheWriteInputTokens: 3, outputTokens: 55, reasoningOutputTokens: 7 },
+        last: { totalTokens: 75, inputTokens: 60, cachedInputTokens: 10, cacheWriteInputTokens: 0, outputTokens: 15, reasoningOutputTokens: 2 },
+        modelContextWindow: 128000,
+      },
+    } });
+    send({ method: "turn/completed", params: { threadId: "thread-usage", turn: { id: "turn-usage", status: "completed", error: null } } });
+  }
+});
+`, { mode: 0o755 });
+
+  const controller = new AbortController();
+  let usage: TokenUsage | undefined;
+  const execution = startAppServerTurn({
+    executablePath: executable,
+    cwd: workspace,
+    env: process.env,
+    threadId: null,
+    prompt: "record usage",
+    imagePaths: [],
+    model: "test-model",
+    reasoningEffort: "medium",
+    sandboxMode: "workspace-write",
+    library,
+    shellEnvironment: {},
+    networkAccessEnabled: false,
+    webSearchMode: "cached",
+    optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
+  }, {
+    signal: controller.signal,
+    onThreadStarted: () => undefined,
+    onProgress: () => undefined,
+    onUsage: (value) => { usage = value; },
+  });
+
+  assert.equal(await withTimeout(execution.result), "");
+  assert.deepEqual(usage, {
+    input_tokens: 160,
+    cached_input_tokens: 30,
+    cache_write_input_tokens: 3,
+    output_tokens: 55,
+    reasoning_output_tokens: 7,
+  });
 });
 
 test("app-server forks a thread before the edited turn and reports the new turn", async (context) => {

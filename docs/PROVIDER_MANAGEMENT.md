@@ -49,7 +49,7 @@ Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SS
 
 ## 用量与计费统计
 
-电脑版顶栏的“API 计费统计”会在每个 Codex turn 完成后持久化 SDK/app-server 上报的输入、缓存输入、缓存写入、输出与推理输出 token。面板按用户隔离，支持按 API 源和模型汇总；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
+电脑版顶栏的“API 计费统计”会在每个 Codex turn 完成后，汇总该 turn 期间 `thread/tokenUsage/updated` 推送的 `last` 增量并持久化输入、缓存输入、缓存写入、输出与推理输出 token；同时兼容旧版完成事件中直接携带的 usage。面板按用户隔离，支持按 API 源和模型汇总；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
 
 费率规则以每 1,000,000 tokens 为单位，分别设置 input、cached input、cache write 和 output 的单价与三位货币代码。费用为估算值；没有规则的调用不会计入费用。内置 Codex 源使用 `Codex 内置源` 单独归类，外部源使用实际 provider 与上游模型 ID，避免别名影响定价。
 

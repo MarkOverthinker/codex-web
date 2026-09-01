@@ -9,6 +9,39 @@ import type { TokenUsage } from "./billing.js";
 
 type JsonObject = Record<string, unknown>;
 
+function nonNegativeInteger(value: unknown): number {
+  const numeric = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.trunc(numeric) : 0;
+}
+
+function parseTokenUsage(value: unknown): TokenUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as JsonObject;
+  const knownKeys = [
+    "input_tokens", "inputTokens", "cached_input_tokens", "cachedInputTokens",
+    "cache_write_input_tokens", "cacheWriteInputTokens", "output_tokens", "outputTokens",
+    "reasoning_output_tokens", "reasoningOutputTokens",
+  ];
+  if (!knownKeys.some((key) => key in record)) return null;
+  return {
+    input_tokens: nonNegativeInteger(record.input_tokens ?? record.inputTokens),
+    cached_input_tokens: nonNegativeInteger(record.cached_input_tokens ?? record.cachedInputTokens),
+    cache_write_input_tokens: nonNegativeInteger(record.cache_write_input_tokens ?? record.cacheWriteInputTokens),
+    output_tokens: nonNegativeInteger(record.output_tokens ?? record.outputTokens),
+    reasoning_output_tokens: nonNegativeInteger(record.reasoning_output_tokens ?? record.reasoningOutputTokens),
+  };
+}
+
+function addTokenUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+  return {
+    input_tokens: left.input_tokens + right.input_tokens,
+    cached_input_tokens: left.cached_input_tokens + right.cached_input_tokens,
+    cache_write_input_tokens: left.cache_write_input_tokens + right.cache_write_input_tokens,
+    output_tokens: left.output_tokens + right.output_tokens,
+    reasoning_output_tokens: left.reasoning_output_tokens + right.reasoning_output_tokens,
+  };
+}
+
 export type RuntimeModelProvider = {
   id: string;
   name: string;
@@ -107,6 +140,7 @@ class AppServerTurnClient {
   private reconnectNotices = 0;
   private reconnectWarningSent = false;
   private stderr = "";
+  private readonly turnUsages = new Map<string, TokenUsage>();
   private readonly completion: Promise<string>;
   private resolveCompletion!: (value: string) => void;
   private rejectCompletion!: (error: Error) => void;
@@ -348,6 +382,12 @@ class AppServerTurnClient {
     if (message.method === "thread/tokenUsage/updated") {
       const tokenUsage = params.tokenUsage as JsonObject | undefined;
       const last = tokenUsage?.last as JsonObject | undefined;
+      const lastUsage = parseTokenUsage(last);
+      const turnId = typeof params.turnId === "string" ? params.turnId : this.activeTurnId;
+      if (turnId && lastUsage) {
+        const accumulated = this.turnUsages.get(turnId);
+        this.turnUsages.set(turnId, accumulated ? addTokenUsage(accumulated, lastUsage) : lastUsage);
+      }
       const usedTokens = Number(last?.totalTokens);
       if (Number.isFinite(usedTokens) && usedTokens >= 0) {
         const rawWindow = Number(tokenUsage?.modelContextWindow);
@@ -411,21 +451,19 @@ class AppServerTurnClient {
     if (message.method !== "turn/completed") return;
     const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | null } | undefined;
     if (turn?.id && this.activeTurnId && turn.id !== this.activeTurnId) return;
+    const completedTurnId = turn?.id ?? this.activeTurnId;
     this.terminal = true;
     this.activeTurnId = null;
     if (turn?.status === "completed") {
-      const usage = (params.usage ?? (turn as JsonObject | undefined)?.usage) as Partial<TokenUsage> | undefined;
-      if (usage) this.callbacks.onUsage?.({
-        input_tokens: Number(usage.input_tokens) || 0,
-        cached_input_tokens: Number(usage.cached_input_tokens) || 0,
-        cache_write_input_tokens: Number(usage.cache_write_input_tokens) || 0,
-        output_tokens: Number(usage.output_tokens) || 0,
-        reasoning_output_tokens: Number(usage.reasoning_output_tokens) || 0,
-      });
+      const explicitUsage = parseTokenUsage(params.usage ?? (turn as JsonObject | undefined)?.usage);
+      const usage = explicitUsage ?? (completedTurnId ? this.turnUsages.get(completedTurnId) : undefined);
+      if (usage) this.callbacks.onUsage?.(usage);
+      if (completedTurnId) this.turnUsages.delete(completedTurnId);
       this.callbacks.onProgress({ kind: "status", label: "工作已完成，正在整理结果" });
       this.resolveCompletion(this.finalResponse);
       return;
     }
+    if (completedTurnId) this.turnUsages.delete(completedTurnId);
     const error = new Error(turn?.error?.message || (turn?.status === "interrupted" ? "任务已停止" : "Agent 任务失败"));
     if (turn?.status === "interrupted" || this.callbacks.signal.aborted) error.name = "AbortError";
     this.rejectCompletion(error);
