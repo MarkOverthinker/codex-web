@@ -196,6 +196,13 @@ tar -C "$NEW_ROOT" \
   --exclude='./app/workspaces' \
   -cf - . | tar -C "$DEPLOY_ROOT" -xf -
 
+# 校验并报告内置 codex-relay（较旧包可能不含该二进制，属正常情况）
+RELAY_VERSION="未捆绑"
+if [[ -x "$DEPLOY_ROOT/bin/codex-relay" ]]; then
+  RELAY_VERSION="$("$DEPLOY_ROOT/bin/codex-relay" --version 2>/dev/null || echo "未知")"
+fi
+echo "==> 内置 codex-relay: $RELAY_VERSION"
+
 # 启动服务
 if [[ "$NO_START" -eq 1 ]]; then
   echo "==> 已跳过自动启动（--no-start），请手动启动："
@@ -235,6 +242,7 @@ fi
 echo
 echo "==> 升级完成"
 echo "    包 SHA256: $(sha256sum "$ARCHIVE" | awk '{print $1}')"
+echo "    codex-relay: $RELAY_VERSION"
 echo "    数据备份: $BACKUP_FILE"
 echo "    回滚命令: $DEPLOY_ROOT/autostart.sh stop && tar --zstd -xf '$BACKUP_FILE' -C '$DEPLOY_ROOT' && $DEPLOY_ROOT/autostart.sh"
 echo "    提示: 若新版本 .env.example 新增了配置项，请对比后手动补充到 $APP_ROOT/.env"
