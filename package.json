@@ -7,12 +7,12 @@
   },
   "scripts": {
     "dev": "concurrently -k -n api,web \"tsx watch server/index.ts\" \"vite --host 127.0.0.1 --port 5173\"",
-    "build": "vite build && tsc -p tsconfig.server.json",
+    "build": "node scripts/prepare-build.mjs && vite build && tsc -p tsconfig.server.json",
     "start": "node dist-server/server/index.js",
     "reload": "node scripts/reload-codex-web.mjs",
     "init-providers": "node scripts/init-provider-sources.mjs",
     "hash-password": "node scripts/hash-password.mjs",
-    "test": "npm run build && node --import tsx --test tests/*.test.ts",
+    "test": "tsc -p tsconfig.server.json && node --import tsx --test tests/*.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
