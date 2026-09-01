@@ -291,6 +291,14 @@ The config directory is owned by `root` with the checkout owner's group and
 mode `0750`, so only root and the checkout owner can enter it and read the
 token.
 
+Because the reloader builds as root, `dist/` can end up owned by root. A
+subsequent `npm run build` as the checkout owner would then fail after Vite
+has already emptied part of `dist/`, leaving the frontend broken (the site
+shows a maintenance page instead of `Cannot GET /codex-web/`). The build
+script now checks this up front and aborts before deleting anything, printing
+the exact `chown` command to run (or pointing at `npm run reload` as the safe
+root-managed rebuild).
+
 ## Offline bundle (host mode)
 
 For a Linux x86_64 machine without a checkout or npm registry access, build a
