@@ -73,6 +73,22 @@ const COOKIE_NAME = "cww_session";
 const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
 const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例如“把图片背景改为白色”或“汇总这些表格”。收到明确指令后才会开始处理。";
 const USERNAME_PATTERN = /^[a-z_][a-z0-9._-]{0,31}$/i;
+
+function parseBillingMinute(value: unknown): number | null {
+  if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) return null;
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function validBillingTimezone(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 80) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value.trim() }).format();
+    return value.trim();
+  } catch {
+    return null;
+  }
+}
 const MIN_PASSWORD_LENGTH = 12;
 type AuthenticatedRequest = Request & { appSession?: SessionRow };
 const FRONTEND_NOT_BUILT_HTML = `<!doctype html>
@@ -1103,10 +1119,32 @@ export function createApp(overrides: AppOverrides = {}) {
     if (providerId !== BUILTIN_PROVIDER_ID && !db.getProvider(session.user_id, providerId)) return res.status(404).json({ error: "API 源不存在。" });
     if (!modelId.trim() || modelId.length > 160) return res.status(400).json({ error: "模型标识无效。" });
     const currency = typeof raw?.currency === "string" && /^[A-Za-z]{3}$/.test(raw.currency.trim()) ? raw.currency.trim().toUpperCase() : "USD";
+    const peakEnabled = raw?.peakEnabled === true || raw?.peakEnabled === 1;
+    const peakValues = ["peakInputPerMillion", "peakCachedInputPerMillion", "peakCacheWritePerMillion", "peakOutputPerMillion"]
+      .map((key) => Number(raw?.[key]));
+    if (peakEnabled && !peakValues.every((value) => Number.isFinite(value) && value >= 0)) return res.status(400).json({ error: "峰时费率必须是非负数字。" });
+    const peakStartMinute = parseBillingMinute(raw?.peakStart);
+    const peakEndMinute = parseBillingMinute(raw?.peakEnd);
+    if (peakEnabled && (peakStartMinute === null || peakEndMinute === null || peakStartMinute === peakEndMinute)) return res.status(400).json({ error: "峰时必须设置不同的起止时间。" });
+    const weekdays = Array.isArray(raw?.peakWeekdays)
+      ? [...new Set(raw.peakWeekdays.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 1 && value <= 7))].sort((left, right) => left - right)
+      : [1, 2, 3, 4, 5];
+    if (peakEnabled && weekdays.length === 0) return res.status(400).json({ error: "峰时至少选择一个星期。" });
+    const timezone = validBillingTimezone(raw?.timezone ?? "Asia/Shanghai");
+    if (!timezone) return res.status(400).json({ error: "时区无效。" });
     db.upsertPricingRule({
       user_id: session.user_id, provider_id: providerId, model_id: modelId,
       input_per_million: values[0], cached_input_per_million: values[1], cache_write_per_million: values[2], output_per_million: values[3],
       currency, source: "manual", pricing_url: null,
+      peak_enabled: peakEnabled ? 1 : 0,
+      peak_input_per_million: peakEnabled ? peakValues[0] : null,
+      peak_cached_input_per_million: peakEnabled ? peakValues[1] : null,
+      peak_cache_write_per_million: peakEnabled ? peakValues[2] : null,
+      peak_output_per_million: peakEnabled ? peakValues[3] : null,
+      peak_start_minute: peakEnabled ? peakStartMinute : null,
+      peak_end_minute: peakEnabled ? peakEndMinute : null,
+      peak_weekdays: weekdays.join(","),
+      timezone,
     });
     return res.json(buildBillingState(db, session.user_id, Number(req.query.days) || 30));
   });
