@@ -3253,13 +3253,15 @@ type MessageCardProps = {
   onOpenSourceReference: (reference: MessageSourceReference) => void;
   onEditMessage: (message: Message) => void;
   onForkSideChat: (messageId: string) => void;
+  forkSourceMessageId?: string;
+  forkEnabled: boolean;
 };
 
-const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat, forkSourceMessageId, forkEnabled }: MessageCardProps) {
   return <article className={`message ${message.role}`} data-message-id={message.id}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
-      <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><span className="message-meta-actions">{message.role === "user" && message.can_edit && <button type="button" className="message-edit-button" onClick={() => onEditMessage(message)} title="编辑并重发"><Pencil size={12} /><span>编辑并重发</span></button>}{message.role === "user" && message.can_fork && <button type="button" className="message-fork-button" onClick={() => onForkSideChat(message.id)} title="Fork 到侧边聊天"><GitFork size={12} /><span>Fork 到侧边聊天</span></button>}<time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></span></div>
+      <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><span className="message-meta-actions">{message.role === "user" && message.can_edit && <button type="button" className="message-edit-button" onClick={() => onEditMessage(message)} title="编辑并重发"><Pencil size={12} /><span>编辑并重发</span></button>}{message.role === "assistant" && forkSourceMessageId && <button type="button" className="message-fork-button" onClick={() => onForkSideChat(forkSourceMessageId)} disabled={!forkEnabled} title={forkEnabled ? "保留到此回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={12} /><span>Fork 到这里</span></button>}<time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></span></div>
       {message.role === "assistant" ? <div className="markdown" data-agent-selectable="true"><ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
@@ -3317,6 +3319,7 @@ type MessageListProps = {
   onOpenSnippet: (target: FileLineRef) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
   onForkSideChat: (messageId: string) => void;
+  forkEnabled: boolean;
   onEditMessage: (message: Message) => void;
   userInitials: string;
   chatFontSize: number;
@@ -3335,15 +3338,18 @@ function LiveProcessPanel({ detail, onSkipQueue, skipQueueBusy }: { detail: Conv
     activeJobId={activeJobId} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} />;
 }
 
-const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, detail, hasMore, loadingOlderMessages, sending, reasoningSteps, taskDurationSeconds, messagesRef, onMessagesScroll, onJumpToUserMessage, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat, forkEnabled, userInitials, chatFontSize, citationFiles, onPreview, onSkipQueue, skipQueueBusy }: MessageListProps) {
   const reasoningMessageIndex = messages.findLastIndex((message) => message.role === "assistant");
+  let previousUserMessage: Message | null = null;
   return <div ref={messagesRef} className="messages" onScroll={onMessagesScroll} style={{ "--chat-font-size": `${chatFontSize}px` } as CSSProperties}>
     {hasMore && <div className="history-loader" aria-live="polite">{loadingOlderMessages ? <><LoaderCircle className="spin" size={14} /><span>正在加载更早消息…</span></> : <span>向上滚动加载更早消息</span>}</div>}
     {messages.map((message, index) => {
       const reasoningAbove = !sending && index === reasoningMessageIndex && reasoningSteps.length > 0;
+      const forkSourceMessageId = message.role === "assistant" && previousUserMessage?.can_fork ? previousUserMessage.id : undefined;
+      if (message.role === "user") previousUserMessage = message;
       return <Fragment key={message.id}>
         {reasoningAbove && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
-        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} onEditMessage={onEditMessage} onForkSideChat={onForkSideChat} />
+        <MessageCard message={message} userInitials={userInitials} chatFontSize={chatFontSize} citationFiles={citationFiles} onPreview={onPreview} onOpenSnippet={onOpenSnippet} onOpenSourceReference={onOpenSourceReference} onEditMessage={onEditMessage} onForkSideChat={onForkSideChat} forkSourceMessageId={forkSourceMessageId} forkEnabled={forkEnabled} />
       </Fragment>;
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} /></div></article>}
@@ -3409,6 +3415,17 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
     [detail.outputFiles, previewedOutputFileIds],
   );
 
+  const latestForkableMessage = useMemo(
+    () => [...detail.messages].reverse().find((message) => message.role === "user" && message.can_fork) ?? null,
+    [detail.messages],
+  );
+  const forkEnabled = Boolean(latestForkableMessage)
+    && !sending
+    && detail.conversation.status !== "running"
+    && detail.conversation.has_pending_work === 0
+    && detail.pendingPrompts.length === 0
+    && !detail.editingPrompt
+    && !detail.conversation.archived_at;
   useEffect(() => {
     const outputFileIds = new Set(detail.outputFiles.map((file) => file.id));
     setPreviewedOutputFileIds((current) => {
@@ -3502,7 +3519,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
         if (value === "__browse__") { onBrowseWorkingDir(detail.conversation.working_dir ?? undefined); return; }
         onWorkingDirChange(value || null);
       }}
-    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button type="button" className={`chat-tool-trigger ${fileExplorerOpen ? "active" : ""}`} onClick={onToggleFileExplorer} aria-pressed={fileExplorerOpen} aria-label="打开文件浏览器" title="打开文件浏览器"><FolderTree size={16} /><span>文件</span></button><button type="button" className="chat-tool-trigger" onClick={onOpenBilling} aria-label="查看 API 计费统计" title="查看 API 计费统计"><BarChart3 size={16} /><span>API 统计</span></button><button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
+    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}{latestForkableMessage && <button type="button" className="chat-tool-trigger chat-fork-trigger" onClick={() => onForkSideChat(latestForkableMessage.id)} disabled={!forkEnabled} aria-label="从最新回答 Fork 到侧边聊天" title={forkEnabled ? "保留到最新回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={16} /><span>Fork 最新回答</span></button>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button type="button" className={`chat-tool-trigger ${fileExplorerOpen ? "active" : ""}`} onClick={onToggleFileExplorer} aria-pressed={fileExplorerOpen} aria-label="打开文件浏览器" title="打开文件浏览器"><FolderTree size={16} /><span>文件</span></button><button type="button" className="chat-tool-trigger" onClick={onOpenBilling} aria-label="查看 API 计费统计" title="查看 API 计费统计"><BarChart3 size={16} /><span>API 统计</span></button><button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
     <OutputFilesPanel key={detail.conversation.id} files={orderedOutputFiles} onPreview={handlePreview} />
     <MessageList
       messages={detail.messages}
@@ -3516,6 +3533,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
       onMessagesScroll={onMessagesScroll}
       onJumpToUserMessage={onJumpToUserMessage}
       onEditMessage={onEditMessage}
+      forkEnabled={forkEnabled}
       onForkSideChat={onForkSideChat}
       onOpenSnippet={onOpenSnippet}
       onOpenSourceReference={onOpenSourceReference}

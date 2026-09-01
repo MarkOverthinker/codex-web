@@ -12,7 +12,7 @@ The interaction borrows the Windows app's split-workspace idea: keep the main ta
 2. When the pane opens, restore the most recently used side thread created from that primary conversation; if none exists, show an empty state without creating data.
 3. Create additional side threads with **新建**, or choose any active side thread from the history selector.
 4. Keep the selected side thread open while navigating to another primary task.
-5. On a completed primary-conversation user message, choose **Fork 到侧边聊天**. The server creates a new sidecar, copies the visible history through that turn, and stores the source thread/turn without changing the primary conversation.
+5. Use the persistent header action **Fork 最新回答** to branch through the latest completed turn, or choose **Fork 到这里** on any completed assistant answer to branch through that answer's turn. The server creates a new sidecar, copies the visible history through that turn, and stores the source thread/turn without changing the primary conversation.
 6. Select text in the currently visible primary-conversation message and choose **侧边提问**.
 7. The side composer receives a structured source reference containing:
    - source conversation and message IDs;
@@ -44,7 +44,8 @@ If the source message has not reached a persisted Codex rollout yet, creating a 
 
 - Desktop: a right pane beside the main conversation; drag its left edge to adjust the width, and preserve the setting locally for the next visit.
 - Context shortcut: click **引用主对话上下文** to snapshot all persisted user and assistant messages from the primary conversation into the side composer; this is separate from selecting text in one message.
-- Primary message actions expose **Fork 到侧边聊天** for completed user turns with a persisted Codex turn; the pane shows a pending-fork banner until the new thread is created.
+- The chat header keeps **Fork 最新回答** available while browsing. Each loaded completed assistant answer also exposes **Fork 到这里**, which targets that answer's completed turn; the pane shows a pending-fork banner until the new thread is created.
+- The app-server fork boundary is a completed turn, not an arbitrary character or tool-item position inside a turn. `lastTurnId` includes the selected turn; the edit flow's `beforeTurnId` starts before the selected turn.
 - Mobile: a full-height overlay pane.
 - Header: origin-task label, history selector, new-thread action, close action, independent model/reasoning selectors, and running state.
 - Body: compact message history using the existing Markdown safety/rendering rules.
