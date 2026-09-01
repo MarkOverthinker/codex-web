@@ -472,6 +472,9 @@ test("offline bundle packaging ships the in-place upgrade script", () => {
   assert.match(packageScript, /export CODEX_RUNTIME_PATH="\$\{CODEX_RUNTIME_PATH:-\$\{env_runtime_path:-\$PACKAGE_ROOT\/bin\/codex\}\}"/);
   assert.match(packageScript, /CODEX_RELAY_VERSION="0\.5\.8"/);
   assert.match(packageScript, /CODEX_RELAY_WHEEL_SHA256="d493b4fc30cbb3fe99f9c3cc367d44a121d43ae5478f2d9791d7bab11b2c8f9f"/);
+  assert.match(packageScript, /--relay-binary PATH/);
+  assert.match(packageScript, /bundling codex-relay from local binary/);
+  assert.match(packageScript, /licenses\/codex-relay/);
   assert.match(packageScript, /install -m 0755 .*codex-relay.* "\$STAGING\/bin\/codex-relay"/);
   assert.match(packageScript, /export CODEX_RELAY_PATH="\$\{CODEX_RELAY_PATH:-\$\{env_relay_path:-\$PACKAGE_ROOT\/bin\/codex-relay\}\}"/);
   assert.match(dockerfile, /ARG CODEX_RELAY_VERSION=0\.5\.8/);

@@ -302,6 +302,13 @@ its license and SBOM, a Node.js runtime, and the shared Python runtime:
 scripts/package-offline.sh --output-dir /path/to/outputs
 ```
 
+`codex-relay` is pinned to `0.5.8`. The packager prefers an existing
+`bin/codex-relay` in the checkout root (or the file given with
+`--relay-binary PATH`), which lets the archive be built on a machine without
+PyPI access; otherwise it downloads the pinned manylinux wheel and extracts
+the same binary. The license and SBOM are vendored in `licenses/codex-relay/`
+and always bundled with the archive.
+
 The bundle contains `start.sh`, which generates `.env` on first run, asks for
 the web login password, and repairs the Python runtime from the bundled wheels
 cache when the unpack path differs from the build machine. It deliberately
