@@ -563,6 +563,15 @@ test("provider management stays vertically scrollable on mobile web", () => {
   assert.match(providerMobileBlock, /\.provider-manager-list,[\s\S]*?\.provider-form-fields \{ overflow-y: scroll; \}/);
 });
 
+test("provider model submenu stays above the viewport bottom", () => {
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  const submenuRule = styles.match(/\.model-provider-submenu \{[^}]+\}/)?.[0] ?? "";
+  assert.match(submenuRule, /bottom: -6px;/);
+  assert.match(submenuRule, /max-height: min\(360px, calc\(100dvh - 80px\)\);/);
+  assert.match(submenuRule, /overflow-y: auto;/);
+  assert.match(styles, /\.model-provider-submenu \{ left: 0; bottom: -6px;/);
+});
+
 test("offscreen user messages stay out of scroll painting", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
   assert.match(styles, /\.message\.user \{[^}]*content-visibility: auto;[^}]*contain-intrinsic-size: auto 320px;/);
