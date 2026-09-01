@@ -64,6 +64,27 @@ test("user-visible branding uses Codex Web without the private product name", ()
   assert.equal(redactBrandForDisplay("Codex / CHATGPT / agent"), "Codex / Codex Web / agent");
 });
 
+test("missing frontend bundle serves a clear maintenance page instead of Cannot GET", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-no-bundle-test-"));
+  const instance = createApp({
+    projectRoot: root, dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("No-Bundle-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const page = await request(instance.app)
+    .get("/codex-web/")
+    .set("Accept", "text/html")
+    .expect(503);
+  assert.match(page.text, /dist\/index\.html/);
+  assert.match(page.text, /npm run build/);
+  assert.doesNotMatch(page.text, /Cannot GET/);
+
+  const health = await request(instance.app).get("/codex-web/api/health").expect(200);
+  assert.equal(health.body.ok, true);
+});
+
 test("login form leaves the username empty for each user to enter", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   assert.match(appSource, /const \[username, setUsername\] = useState\(""\)/);

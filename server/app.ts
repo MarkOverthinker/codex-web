@@ -73,6 +73,28 @@ const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例
 const USERNAME_PATTERN = /^[a-z_][a-z0-9._-]{0,31}$/i;
 const MIN_PASSWORD_LENGTH = 12;
 type AuthenticatedRequest = Request & { appSession?: SessionRow };
+const FRONTEND_NOT_BUILT_HTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>前端资源未构建 · Codex Web</title>
+<style>
+  body { margin: 0; color: #1f2333; background: #f7f8f6; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 640px; margin: 12vh auto; padding: 32px; border: 1px solid #e0e3ec; border-radius: 12px; background: #fff; }
+  h1 { margin: 0 0 12px; font-size: 20px; }
+  p { margin: 8px 0; line-height: 1.7; }
+  code { padding: 2px 6px; border-radius: 6px; color: #29356f; background: #eef0fa; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>前端资源未构建或构建不完整</h1>
+  <p>服务端 API 正常，但缺少前端入口文件 <code>dist/index.html</code>，无法加载页面。</p>
+  <p>请在仓库根目录运行 <code>npm run build</code>（或使用已安装的 reloader 执行 <code>npm run reload</code>），然后刷新本页。</p>
+</main>
+</body>
+</html>`;
 
 export type AppOverrides = Partial<AppConfig> & { logger?: Logger };
 
@@ -2607,9 +2629,14 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.sendFile(path.basename(absolute), { root: path.dirname(absolute) });
   });
   const distPath = path.join(config.projectRoot, "dist");
+  const distIndexPath = path.join(distPath, "index.html");
   if (fs.existsSync(distPath)) router.use(express.static(distPath, { index: false, maxAge: "1h" }));
   router.use((req, res, next) => {
-    if (req.method !== "GET" || !req.accepts("html") || !fs.existsSync(path.join(distPath, "index.html"))) return next();
+    if (req.method !== "GET" || !req.accepts("html")) return next();
+    if (!fs.existsSync(distIndexPath)) {
+      logger.warn({ url: req.originalUrl }, "frontend bundle missing; serving maintenance page");
+      return res.status(503).type("html").send(FRONTEND_NOT_BUILT_HTML);
+    }
     return res.sendFile("index.html", { root: distPath });
   });
   app.get(config.basePath, (_req, res) => res.redirect(308, `${config.basePath}/`));
