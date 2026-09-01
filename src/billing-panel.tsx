@@ -61,7 +61,19 @@ export function BillingPanel({ open, onClose, providers, builtinModels }: Props)
   }
 
   useEffect(() => {
-    if (open) void refresh();
+    if (!open) return;
+    let active = true;
+    void (async () => {
+      await refresh();
+      try {
+        const result = await api.syncBillingPricing();
+        if (!active) return;
+        setState(result.billing);
+        if (result.imported > 0) setNotice(`已自动同步 ${result.imported} 条远程费率。`);
+      } catch {
+      }
+    })();
+    return () => { active = false; };
   }, [open]);
 
   function ruleFor(model: BillingModel): BillingPricingRule | undefined {

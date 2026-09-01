@@ -925,6 +925,20 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json(buildBillingState(db, session.user_id, Number(req.query.days) || 30));
   });
 
+  api.post("/billing/sync-pricing", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const results: Array<{ providerId: string; imported: number; error?: string }> = [];
+    for (const provider of db.listProviders(session.user_id).filter((candidate) => candidate.enabled)) {
+      try {
+        const result = await syncProviderPricing(db, session.user_id, provider);
+        results.push({ providerId: provider.id, imported: result.imported });
+      } catch (error) {
+        results.push({ providerId: provider.id, imported: 0, error: error instanceof Error ? error.message : "同步失败" });
+      }
+    }
+    return res.json({ results, imported: results.reduce((sum, result) => sum + result.imported, 0), billing: buildBillingState(db, session.user_id) });
+  });
+
   api.post("/billing/providers/:id/sync-pricing", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const provider = db.getProvider(session.user_id, String(req.params.id));
