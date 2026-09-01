@@ -26,6 +26,7 @@ PACKAGE_DIR="codex-web"
 SKIP_BUILD=0
 SKIP_NODE=0
 KEEP_STAGING=0
+RELAY_BINARY=""
 STAGING_ROOT="${STAGING_ROOT:-$REPO_ROOT/tmp/offline-package-staging}"
 
 while [[ $# -gt 0 ]]; do
@@ -50,12 +51,16 @@ while [[ $# -gt 0 ]]; do
       NODE_VERSION="$2"
       shift 2
       ;;
+    --relay-binary)
+      RELAY_BINARY="$2"
+      shift 2
+      ;;
     --staging-root)
       STAGING_ROOT="$2"
       shift 2
       ;;
     *)
-      echo "usage: $0 [--output-dir DIR] [--skip-build] [--skip-node] [--node-version X.Y.Z] [--keep-staging]" >&2
+      echo "usage: $0 [--output-dir DIR] [--skip-build] [--skip-node] [--node-version X.Y.Z] [--relay-binary PATH] [--keep-staging]" >&2
       exit 2
       ;;
   esac
@@ -81,6 +86,7 @@ tar -C "$REPO_ROOT" \
   --exclude='dist' \
   --exclude='dist-server' \
   --exclude='dist-unusable-*' \
+  --exclude='bin' \
   --exclude='data' \
   --exclude='tenants' \
   --exclude='workspaces' \
@@ -127,16 +133,38 @@ else
 fi
 
 echo "==> bundling codex-relay $CODEX_RELAY_VERSION ($PLATFORM)"
-relay_wheel="$WORK/codex-relay.whl"
-relay_extract="$WORK/codex-relay-wheel"
-curl -fsSL -o "$relay_wheel" "$CODEX_RELAY_WHEEL_URL"
-printf '%s  %s\n' "$CODEX_RELAY_WHEEL_SHA256" "$relay_wheel" | sha256sum -c -
-mkdir -p "$relay_extract"
-"$REPO_ROOT/data/python/shared/bin/python" -m zipfile -e "$relay_wheel" "$relay_extract"
 mkdir -p "$STAGING/bin" "$STAGING/licenses/codex-relay"
-install -m 0755 "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.data/scripts/codex-relay" "$STAGING/bin/codex-relay"
-cp "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.dist-info/licenses/LICENSE" "$STAGING/licenses/codex-relay/LICENSE"
-cp "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.dist-info/sboms/codex-relay.cyclonedx.json" "$STAGING/licenses/codex-relay/codex-relay.cyclonedx.json"
+relay_src=""
+if [[ -n "$RELAY_BINARY" ]]; then
+  relay_src="$RELAY_BINARY"
+elif [[ -x "$REPO_ROOT/bin/codex-relay" ]]; then
+  relay_src="$REPO_ROOT/bin/codex-relay"
+fi
+if [[ -n "$relay_src" ]]; then
+  echo "==> bundling codex-relay from local binary: $relay_src"
+  install -m 0755 "$relay_src" "$STAGING/bin/codex-relay"
+  relay_actual="$("$STAGING/bin/codex-relay" --version 2>/dev/null | head -n1 || true)"
+  echo "    bundled: ${relay_actual:-unknown} (pinned: $CODEX_RELAY_VERSION)"
+else
+  echo "==> downloading codex-relay $CODEX_RELAY_VERSION wheel"
+  relay_wheel="$WORK/codex-relay.whl"
+  relay_extract="$WORK/codex-relay-wheel"
+  curl -fsSL -o "$relay_wheel" "$CODEX_RELAY_WHEEL_URL"
+  printf '%s  %s\n' "$CODEX_RELAY_WHEEL_SHA256" "$relay_wheel" | sha256sum -c -
+  mkdir -p "$relay_extract"
+  "$REPO_ROOT/data/python/shared/bin/python" -m zipfile -e "$relay_wheel" "$relay_extract"
+  install -m 0755 "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.data/scripts/codex-relay" "$STAGING/bin/codex-relay"
+fi
+# license/SBOM: prefer the vendored directory in the repo, otherwise extract
+# from the wheel (only available when the wheel download path was taken)
+if [[ -d "$REPO_ROOT/licenses/codex-relay" ]]; then
+  cp -a "$REPO_ROOT/licenses/codex-relay/." "$STAGING/licenses/codex-relay/"
+elif [[ -f "$WORK/codex-relay.whl" ]]; then
+  cp "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.dist-info/licenses/LICENSE" "$STAGING/licenses/codex-relay/LICENSE"
+  cp "$relay_extract/codex_relay-$CODEX_RELAY_VERSION.dist-info/sboms/codex-relay.cyclonedx.json" "$STAGING/licenses/codex-relay/codex-relay.cyclonedx.json"
+else
+  echo "warning: no codex-relay license/SBOM bundled (offline build without licenses/codex-relay in the repo)" >&2
+fi
 
 echo "==> writing launchers"
 cat > "$STAGING/autostart.sh" <<'EOF'
@@ -367,7 +395,10 @@ scripts/package-offline.sh --output-dir /path/to/outputs
 ```
 
 常用参数：`--skip-build` 复用现有构建产物；`--skip-node` 不内置 Node.js；
-`--node-version 22.21.0` 指定内置 Node 版本；`--keep-staging` 保留中间目录。
+`--node-version 22.21.0` 指定内置 Node 版本；`--relay-binary PATH` 指定本地
+codex-relay 二进制；`--keep-staging` 保留中间目录。codex-relay 优先使用仓库
+根 `bin/codex-relay`（或 `--relay-binary` 指定的文件），找不到时才从固定的
+PyPI wheel 下载 `0.5.8`，许可与 SBOM 一并捆绑在 `licenses/codex-relay/`。
 
 ## 升级已部署的实例
 
