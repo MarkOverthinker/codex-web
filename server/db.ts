@@ -9,6 +9,8 @@ import { type TaskListCategorySettings, type TaskListCustomCategory } from "../s
 import { isDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName } from "./paths.js";
 
 export const LEGACY_USER_ID = "00000000-0000-4000-8000-000000000001";
+export const DEFAULT_MODEL_CONTEXT_WINDOW = 1_000_000;
+export const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 900_000;
 
 export type UserRow = {
   id: string;
@@ -36,6 +38,9 @@ export type ConversationRow = {
   has_unread_result: number;
   has_pending_work: number;
   rollout_bytes: number | null;
+  context_used_tokens: number | null;
+  context_window: number | null;
+  context_updated_at: string | null;
   archived_at: string | null;
   deleted_at: string | null;
   created_at: string;
@@ -207,6 +212,8 @@ export type ProviderModelRow = {
   description: string;
   reasoning_efforts: string;
   input_modalities: string;
+  model_context_window: number | null;
+  auto_compact_token_limit: number | null;
   priority: number;
   visible: boolean;
   created_at: string;
@@ -318,6 +325,9 @@ export class AppDatabase {
         status TEXT NOT NULL DEFAULT 'idle',
         has_unread_result INTEGER NOT NULL DEFAULT 0,
         rollout_bytes INTEGER,
+        context_used_tokens INTEGER,
+        context_window INTEGER,
+        context_updated_at TEXT,
         archived_at TEXT,
         deleted_at TEXT,
         created_at TEXT NOT NULL,
@@ -458,6 +468,8 @@ export class AppDatabase {
         description TEXT NOT NULL DEFAULT '',
         reasoning_efforts TEXT NOT NULL DEFAULT '[]',
         input_modalities TEXT NOT NULL DEFAULT '["text","image"]',
+        model_context_window INTEGER,
+        auto_compact_token_limit INTEGER,
         priority INTEGER NOT NULL DEFAULT 0,
         visible INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
@@ -504,6 +516,9 @@ export class AppDatabase {
     if (!conversationColumns.has("reasoning_effort")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT");
     if (!conversationColumns.has("has_unread_result")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN has_unread_result INTEGER NOT NULL DEFAULT 0");
     if (!conversationColumns.has("rollout_bytes")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN rollout_bytes INTEGER");
+    if (!conversationColumns.has("context_used_tokens")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN context_used_tokens INTEGER");
+    if (!conversationColumns.has("context_window")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN context_window INTEGER");
+    if (!conversationColumns.has("context_updated_at")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN context_updated_at TEXT");
     if (!conversationColumns.has("archived_at")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN archived_at TEXT");
     if (!conversationColumns.has("deleted_at")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN deleted_at TEXT");
     if (!conversationColumns.has("title_source")) this.sqlite.exec("ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL DEFAULT 'legacy'");
@@ -536,6 +551,9 @@ export class AppDatabase {
     if (!providerColumns.has("models_file")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN models_file TEXT");
     if (!providerColumns.has("auto_review_model_override")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN auto_review_model_override TEXT");
     if (!providerColumns.has("extra_config")) this.sqlite.exec("ALTER TABLE providers ADD COLUMN extra_config TEXT");
+    const providerModelColumns = this.columnNames("provider_models");
+    if (!providerModelColumns.has("model_context_window")) this.sqlite.exec("ALTER TABLE provider_models ADD COLUMN model_context_window INTEGER");
+    if (!providerModelColumns.has("auto_compact_token_limit")) this.sqlite.exec("ALTER TABLE provider_models ADD COLUMN auto_compact_token_limit INTEGER");
     const fileColumns = this.columnNames("files");
     if (!fileColumns.has("pending_prompt_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN pending_prompt_id TEXT REFERENCES pending_prompts(id) ON DELETE CASCADE");
     if (!fileColumns.has("composer_draft_id")) this.sqlite.exec("ALTER TABLE files ADD COLUMN composer_draft_id TEXT REFERENCES composer_drafts(conversation_id) ON DELETE CASCADE");
@@ -1011,6 +1029,13 @@ export class AppDatabase {
   setConversationRolloutBytes(id: string, bytes: number | null): void {
     const normalized = bytes === null || !Number.isFinite(bytes) ? null : Math.max(0, Math.trunc(bytes));
     this.sqlite.prepare("UPDATE conversations SET rollout_bytes=? WHERE id=? AND deleted_at IS NULL").run(normalized, id);
+  }
+
+  setConversationContextUsage(id: string, usedTokens: number, contextWindow: number | null): void {
+    const used = Number.isFinite(usedTokens) ? Math.max(0, Math.trunc(usedTokens)) : 0;
+    const window = contextWindow === null || !Number.isFinite(contextWindow) ? null : Math.max(1, Math.trunc(contextWindow));
+    this.sqlite.prepare("UPDATE conversations SET context_used_tokens=?,context_window=?,context_updated_at=? WHERE id=? AND deleted_at IS NULL")
+      .run(used, window, new Date().toISOString(), id);
   }
 
   setAiConversationTitleIfDefault(id: string, title: string): boolean {
@@ -1568,19 +1593,23 @@ export class AppDatabase {
     description?: string;
     reasoningEfforts?: string[];
     inputModalities?: string[];
+    modelContextWindow?: number | null;
+    autoCompactTokenLimit?: number | null;
     priority?: number;
     visible?: boolean;
   }): ProviderModelRow {
     const now = new Date().toISOString();
     this.sqlite.prepare(`
-      INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,model_context_window,auto_compact_token_limit,priority,visible,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       input.userId, input.id, input.providerId, input.modelId.trim(), input.slug,
       input.displayName.trim() || input.modelId.trim(),
       input.description?.trim() ?? "",
       JSON.stringify(input.reasoningEfforts ?? ["low", "medium", "high", "xhigh"]),
       JSON.stringify(input.inputModalities ?? ["text", "image"]),
+      input.modelContextWindow === null ? null : Number.isFinite(input.modelContextWindow) ? Math.max(1, Math.trunc(input.modelContextWindow ?? 0)) : null,
+      input.autoCompactTokenLimit === null ? null : Number.isFinite(input.autoCompactTokenLimit) ? Math.max(1, Math.trunc(input.autoCompactTokenLimit ?? 0)) : null,
       Number.isFinite(input.priority) ? Math.max(0, Math.trunc(input.priority ?? 0)) : 0,
       input.visible === false ? 0 : 1,
       now, now,
@@ -1598,6 +1627,8 @@ export class AppDatabase {
       description?: string;
       reasoningEfforts?: string[];
       inputModalities?: string[];
+      modelContextWindow?: number | null;
+      autoCompactTokenLimit?: number | null;
       priority?: number;
       visible?: boolean;
     },
@@ -1611,14 +1642,16 @@ export class AppDatabase {
       description: fields.description?.trim() ?? existing.description,
       reasoningEfforts: fields.reasoningEfforts ? JSON.stringify(fields.reasoningEfforts) : existing.reasoning_efforts,
       inputModalities: fields.inputModalities ? JSON.stringify(fields.inputModalities) : existing.input_modalities,
+      modelContextWindow: fields.modelContextWindow === undefined ? existing.model_context_window : fields.modelContextWindow,
+      autoCompactTokenLimit: fields.autoCompactTokenLimit === undefined ? existing.auto_compact_token_limit : fields.autoCompactTokenLimit,
       priority: Number.isFinite(fields.priority) ? Math.max(0, Math.trunc(fields.priority ?? 0)) : existing.priority,
       visible: fields.visible ?? Boolean(existing.visible),
     };
     this.sqlite.prepare(`
-      UPDATE provider_models SET model_id=?,slug=?,display_name=?,description=?,reasoning_efforts=?,input_modalities=?,priority=?,visible=?,updated_at=?
+      UPDATE provider_models SET model_id=?,slug=?,display_name=?,description=?,reasoning_efforts=?,input_modalities=?,model_context_window=?,auto_compact_token_limit=?,priority=?,visible=?,updated_at=?
       WHERE user_id=? AND id=?
     `).run(
-      next.modelId, next.slug, next.displayName, next.description, next.reasoningEfforts, next.inputModalities,
+      next.modelId, next.slug, next.displayName, next.description, next.reasoningEfforts, next.inputModalities, next.modelContextWindow, next.autoCompactTokenLimit,
       next.priority, next.visible ? 1 : 0, new Date().toISOString(), userId, id,
     );
     return this.getProviderModel(userId, id);

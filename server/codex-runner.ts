@@ -11,7 +11,7 @@ import type { AgentSelection } from "./model-options.js";
 import { startTenantTurn } from "./tenant-worker-execution.js";
 import { TenantWorkerClient } from "./tenant-worker-client.js";
 import type { TenantWorkerRunRequest } from "./tenant-worker-protocol.js";
-import type { AppServerTurnExecution } from "./app-server-turn.js";
+import type { AppServerTurnExecution, ContextUsage } from "./app-server-turn.js";
 import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "./retry-policy.js";
 import { buildAgentSteerPrompt, buildAgentTurnPrompt, type AgentAttachmentContext } from "./agent-context.js";
 import { detectOptionalAgentCapabilities } from "./optional-capabilities.js";
@@ -234,6 +234,10 @@ export class CodexRunner {
         onThreadStarted: (threadId: string) => {
           request.codexThreadId = threadId;
           this.db.updateConversation(conversationId, { codexThreadId: threadId });
+        },
+        onContextUsage: (usage: ContextUsage) => {
+          this.db.setConversationContextUsage(conversationId, usage.usedTokens, usage.contextWindow);
+          this.publish(jobId, "context_usage", usage);
         },
         onProgress: (payload: unknown) => this.publish(jobId, "progress", payload),
         onUsage: (usage: TokenUsage) => recordTokenUsage(this.db, {

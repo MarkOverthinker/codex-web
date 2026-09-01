@@ -109,6 +109,7 @@ function conversationFieldsEqual(left: Conversation, right: Conversation): boole
     && left.status === right.status
     && left.has_unread_result === right.has_unread_result
     && left.has_pending_work === right.has_pending_work
+    && JSON.stringify(left.contextUsage) === JSON.stringify(right.contextUsage)
     && left.rollout_bytes === right.rollout_bytes
     && left.archived_at === right.archived_at
     && left.created_at === right.created_at
@@ -1122,6 +1123,14 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       const data = JSON.parse(event.data) as JobEvent;
       const seq = Number(event.lastEventId || data.seq || 0);
       const stored = { ...data, seq };
+      if (data.type === "context_usage" && typeof data.usedTokens === "number") {
+        const contextUsage = {
+          usedTokens: data.usedTokens,
+          contextWindow: typeof data.contextWindow === "number" ? data.contextWindow : null,
+          updatedAt: data.created_at ?? new Date().toISOString(),
+        };
+        setDetail((current) => current?.conversation.id === activeJob.conversation_id ? { ...current, contextUsage } : current);
+      }
       if (seq) lastEventIdRef.current = Math.max(lastEventIdRef.current, seq);
       if (data.type && ["status", "progress"].includes(data.type)) queueActivity(stored);
       if (data.type && ["done", "failed"].includes(data.type)) {
@@ -3109,6 +3118,7 @@ const ConversationRow = memo(function ConversationRow({
         : Boolean(conversation.has_pending_work)
           ? <CircleDashed size={14} className="conversation-waiting" role="img" aria-label="等待发送" />
           : null}
+      {conversation.contextUsage && <small className="conversation-context-usage">{formatContextTokens(conversation.contextUsage.usedTokens)}{conversation.contextUsage.contextWindow ? ` / ${formatContextTokens(conversation.contextUsage.contextWindow)}` : ""}</small>}
     </button>
     <div className="row-actions">
       <button type="button" className="task-menu-trigger" data-task-menu aria-label={`任务 ${conversation.title} 操作`} aria-haspopup="menu" aria-expanded={menuOpen} title="任务操作" onClick={(event) => onMenu(conversation, event.currentTarget)}><MoreHorizontal size={15} /></button>
@@ -3249,6 +3259,17 @@ function CompletedReasoningPanel({ steps, durationSeconds }: { steps: ReasoningS
     </div>
   </article>;
 }
+function formatContextTokens(value: number): string {
+  return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 2 }).format(value);
+}
+
+function ContextUsageBadge({ usage }: { usage: ConversationDetail["contextUsage"] }) {
+  if (!usage) return <span className="context-usage-badge context-usage-empty" title="尚未收到 Codex 的上下文状态">上下文暂无</span>;
+  const percent = usage.contextWindow ? Math.min(100, Math.max(0, usage.usedTokens / usage.contextWindow * 100)) : null;
+  return <span className="context-usage-badge" title={`最近更新：${usage.updatedAt ? formatFullDateTime(usage.updatedAt) : "未知"}`}>
+    <span>上下文</span><strong>{formatContextTokens(usage.usedTokens)}{usage.contextWindow ? ` / ${formatContextTokens(usage.contextWindow)}` : ""}</strong>{percent !== null && <em>{percent.toFixed(1)}%</em>}
+  </span>;
+}
 
 const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
   detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
@@ -3353,7 +3374,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
     window.getSelection()?.removeAllRanges();
   }
 
-  return <section ref={chatRef} className="chat"><div className="chat-header"><div><span className="chat-kicker">CODEX WEB <i>/</i> AI 工作台</span><h1>{detail.conversation.title}</h1>{workingDirSettings?.enabled && <div className="chat-working-dir" title={detail.conversation.working_dir ?? undefined}>{detail.conversation.working_dir ?? "独立工作区"}</div>}</div><div className="chat-header-actions"><span className="message-count">已加载 {detail.messages.length} 条</span>{workingDirSettings?.enabled && <SettingMenu
+  return <section ref={chatRef} className="chat"><div className="chat-header"><div><span className="chat-kicker">CODEX WEB <i>/</i> AI 工作台</span><h1>{detail.conversation.title}</h1>{workingDirSettings?.enabled && <div className="chat-working-dir" title={detail.conversation.working_dir ?? undefined}>{detail.conversation.working_dir ?? "独立工作区"}</div>}</div><div className="chat-header-actions"><ContextUsageBadge usage={detail.contextUsage} /><span className="message-count">已加载 {detail.messages.length} 条</span>{workingDirSettings?.enabled && <SettingMenu
       className="working-dir"
       label="目录"
       value={detail.conversation.working_dir ?? ""}

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import type { ThreadEvent } from "@openai/codex-sdk";
-import { startAppServerTurn, type AppServerTurnExecution } from "./app-server-turn.js";
+import { startAppServerTurn, type AppServerTurnExecution, type ContextUsage } from "./app-server-turn.js";
 import { buildCodexEnvironment, buildShellEnvironment, resolvePythonRuntime } from "./python-runtime.js";
 import { summarizeEvent } from "./codex-events.js";
 import type { TenantWorkerRunRequest } from "./tenant-worker-protocol.js";
@@ -14,6 +14,7 @@ type ExecutionCallbacks = {
   onThreadStarted(threadId: string): void;
   onProgress(payload: unknown): void;
   onUsage(usage: TokenUsage): void;
+  onContextUsage?(usage: ContextUsage): void;
 };
 
 export async function executeTenantTurn(request: TenantWorkerRunRequest, callbacks: ExecutionCallbacks): Promise<string> {
@@ -34,6 +35,8 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
   }
   const baseOptions = {
     executablePath: process.env.CODEX_RUNTIME_PATH || undefined,
+    modelContextWindow: request.selection.modelContextWindow,
+    autoCompactTokenLimit: request.selection.autoCompactTokenLimit,
     cwd: request.workingDir ?? request.workspace,
     env: codexEnvironment,
     threadId: request.codexThreadId,

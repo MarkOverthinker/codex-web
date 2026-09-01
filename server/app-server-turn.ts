@@ -16,11 +16,17 @@ export type RuntimeModelProvider = {
   envKey: string;
 };
 
+export type ContextUsage = {
+  usedTokens: number;
+  contextWindow: number | null;
+};
+
 type AppServerCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
   onProgress(payload: unknown): void;
   onUsage?(usage: TokenUsage): void;
+  onContextUsage?(usage: ContextUsage): void;
 };
 
 export type AppServerTurnOptions = {
@@ -33,6 +39,8 @@ export type AppServerTurnOptions = {
   outputSchema?: Record<string, unknown>;
   model: string;
   reasoningEffort: string;
+  modelContextWindow?: number;
+  autoCompactTokenLimit?: number;
   modelProvider?: string | null;
   runtimeModelProvider?: RuntimeModelProvider;
   sandboxMode: SandboxMode;
@@ -115,6 +123,12 @@ class AppServerTurnClient {
       "-c", `approvals_reviewer="${APPROVALS_REVIEWER}"`,
       "-c", `sandbox_mode="${options.sandboxMode}"`,
     ];
+    if (options.modelContextWindow !== undefined) {
+      appServerArgs.push("-c", `model_context_window=${Math.max(1, Math.trunc(options.modelContextWindow))}`);
+    }
+    if (options.autoCompactTokenLimit !== undefined) {
+      appServerArgs.push("-c", `model_auto_compact_token_limit=${Math.max(1, Math.trunc(options.autoCompactTokenLimit))}`);
+    }
     if (options.runtimeModelProvider) {
       const provider = options.runtimeModelProvider;
       if (provider.id !== options.modelProvider || !/^[a-z0-9][a-z0-9._-]{1,80}$/i.test(provider.id)) {
@@ -316,6 +330,19 @@ class AppServerTurnClient {
 
   private handleNotification(message: RpcNotification): void {
     const params = message.params ?? {};
+    if (message.method === "thread/tokenUsage/updated") {
+      const tokenUsage = params.tokenUsage as JsonObject | undefined;
+      const last = tokenUsage?.last as JsonObject | undefined;
+      const usedTokens = Number(last?.totalTokens);
+      if (Number.isFinite(usedTokens) && usedTokens >= 0) {
+        const rawWindow = Number(tokenUsage?.modelContextWindow);
+        this.callbacks.onContextUsage?.({
+          usedTokens: Math.trunc(usedTokens),
+          contextWindow: Number.isFinite(rawWindow) && rawWindow > 0 ? Math.trunc(rawWindow) : null,
+        });
+      }
+      return;
+    }
     if (message.method === "turn/started") {
       const turn = params.turn as { id?: string } | undefined;
       if (turn?.id) this.activeTurnId = turn.id;

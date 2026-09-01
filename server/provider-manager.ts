@@ -3,7 +3,7 @@ import path from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import modelCatalogTemplateLibraryJson from "./model-catalog-templates.json" with { type: "json" };
 import type { AppConfig } from "./config.js";
-import type { AppDatabase, ProviderModelRow, ProviderRow } from "./db.js";
+import { DEFAULT_AUTO_COMPACT_TOKEN_LIMIT, DEFAULT_MODEL_CONTEXT_WINDOW, type AppDatabase, type ProviderModelRow, type ProviderRow } from "./db.js";
 import { newId } from "./paths.js";
 import type { AgentModelOption, ModelReasoningEffort } from "./model-options.js";
 import type { CodexRelayRequest } from "./tenant-worker-protocol.js";
@@ -65,6 +65,8 @@ export type ProviderModelPublic = {
   description: string;
   reasoningEfforts: string[];
   inputModalities: string[];
+  modelContextWindow: number;
+  autoCompactTokenLimit: number;
   priority: number;
   visible: boolean;
   createdAt: string;
@@ -188,6 +190,8 @@ function publicModel(model: ProviderModelRow): ProviderModelPublic {
     description: model.description,
     reasoningEfforts: parseStringArray(model.reasoning_efforts, DEFAULT_REASONING_EFFORTS),
     inputModalities: parseStringArray(model.input_modalities, ["text", "image"]),
+    modelContextWindow: model.model_context_window ?? DEFAULT_MODEL_CONTEXT_WINDOW,
+    autoCompactTokenLimit: model.auto_compact_token_limit ?? DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     priority: model.priority,
     visible: Boolean(model.visible),
     createdAt: model.created_at,
@@ -412,6 +416,8 @@ export function listCatalogModelOptions(db: AppDatabase, userId: string): AgentM
       providerName: provider.name,
       upstreamModel: model.model_id,
       displayName: model.display_name || model.model_id,
+      modelContextWindow: model.model_context_window ?? DEFAULT_MODEL_CONTEXT_WINDOW,
+      autoCompactTokenLimit: model.auto_compact_token_limit ?? DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     });
   }
   return options;
@@ -617,6 +623,8 @@ export function importCatalogModels(providerId: string, codexHome: string, db: A
       description: typeof template.description === "string" ? template.description : "",
       reasoningEfforts: reasoningEfforts.length > 0 ? reasoningEfforts : DEFAULT_REASONING_EFFORTS,
       inputModalities,
+      modelContextWindow: null,
+      autoCompactTokenLimit: null,
       priority: typeof template.priority === "number" ? template.priority : 0,
       visible: template.visibility !== "hidden",
     });

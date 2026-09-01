@@ -1,5 +1,6 @@
 import type { AgentSelection, SandboxMode } from "./model-options.js";
 import type { OptionalAgentCapabilities } from "./optional-capabilities.js";
+import type { ContextUsage } from "./app-server-turn.js";
 import type { TokenUsage } from "./billing.js";
 
 export type CodexRelayRequest = {
@@ -43,6 +44,7 @@ export type TenantWorkerRunRequest = {
 
 export type TenantWorkerEvent =
   | { type: "thread_started"; threadId: string }
+  | { type: "context_usage"; usage: ContextUsage }
   | { type: "progress"; payload: unknown }
   | { type: "usage"; usage: TokenUsage }
   | { type: "steer_completed"; requestId: string; turnId: string }

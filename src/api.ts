@@ -8,6 +8,7 @@ export const BASE_PATH = "/codex-web";
 export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean; canChangeUsername?: boolean; providerManagementEnabled?: boolean };
 export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
+  contextUsage?: { usedTokens: number; contextWindow: number | null; updatedAt: string | null } | null;
   working_dir: string | null;
 };
 export type SideChatSummary = {
@@ -131,6 +132,8 @@ export type ProviderModel = {
   displayName: string;
   description: string;
   reasoningEfforts: string[];
+  modelContextWindow: number;
+  autoCompactTokenLimit: number;
   inputModalities: string[];
   priority: number;
   visible: boolean;
@@ -196,6 +199,8 @@ export type JobEvent = {
   riskLevel?: string;
   userAuthorization?: string;
   subagentTool?: string;
+  usedTokens?: number;
+  contextWindow?: number | null;
   subagentStatus?: string;
   subagentActivity?: string;
   agentThreadIds?: string[];
@@ -213,6 +218,7 @@ export type ConversationDetail = {
   composerDraft: ComposerDraft | null;
   enabledPresetPromptIds: string[];
   activeJob: Job | null;
+  contextUsage: { usedTokens: number; contextWindow: number | null; updatedAt: string | null } | null;
   latestJob: Job | null;
   jobEvents: JobEvent[];
   rolloutBytes: number | null;
@@ -306,9 +312,9 @@ export const api = {
   importProviderModels: (providerId: string) => request<{ models: ProviderModel[] }>(
     `/providers/${providerId}/import-models`, { method: "POST" },
   ),
-  createProviderModel: (providerId: string, payload: { modelId: string; displayName?: string; description?: string; reasoningEfforts?: string[]; inputModalities?: string[]; priority?: number; visible?: boolean }) =>
+  createProviderModel: (providerId: string, payload: { modelId: string; displayName?: string; description?: string; reasoningEfforts?: string[]; inputModalities?: string[]; modelContextWindow?: number | null; autoCompactTokenLimit?: number | null; priority?: number; visible?: boolean }) =>
     request<{ models: ProviderModel[] }>(`/providers/${providerId}/models`, { method: "POST", body: JSON.stringify(payload) }),
-  updateProviderModel: (providerId: string, modelId: string, payload: Partial<Omit<ProviderModel, "id" | "providerId" | "slug" | "createdAt" | "updatedAt">>) =>
+  updateProviderModel: (providerId: string, modelId: string, payload: Partial<Omit<ProviderModel, "id" | "providerId" | "slug" | "createdAt" | "updatedAt" | "modelContextWindow" | "autoCompactTokenLimit">> & { modelContextWindow?: number | null; autoCompactTokenLimit?: number | null }) =>
     request<{ models: ProviderModel[] }>(`/providers/${providerId}/models/${modelId}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteProviderModel: (providerId: string, modelId: string) => request<void>(
     `/providers/${providerId}/models/${modelId}`, { method: "DELETE" },

@@ -22,6 +22,8 @@ import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat
 import { buildConversationContextExcerpt, buildDerivedTaskPrompt, normalizeMessageSourceReference, normalizeSourceExcerpt, type MessageSourceReference } from "../src/message-source.js";
 import {
   AppDatabase,
+  DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_MODEL_CONTEXT_WINDOW,
   MAX_CONVERSATION_PRESET_PROMPTS,
   MAX_PRESET_PROMPTS_PER_USER,
   PRESET_PROMPT_CONTENT_MAX,
@@ -339,6 +341,13 @@ export function createApp(overrides: AppOverrides = {}) {
     };
   }
 
+
+  function conversationForClient(conversation: ConversationRow) {
+    return {
+      ...conversation,
+      contextUsage: conversation.context_used_tokens === null ? null : { usedTokens: conversation.context_used_tokens, contextWindow: conversation.context_window, updatedAt: conversation.context_updated_at },
+    };
+  }
   function sideConversationForClient(sideChat: SideConversationRow) {
     const { parent_conversation_id, parent_title, side_created_at, last_opened_at, ...conversation } = sideChat;
     return {
@@ -817,13 +826,13 @@ export function createApp(overrides: AppOverrides = {}) {
 
   api.get("/conversations", (_req, res) => {
     const session = res.locals.session as SessionRow;
-    return res.json({ conversations: db.listPrimaryConversations(session.user_id) });
+    return res.json({ conversations: db.listPrimaryConversations(session.user_id).map(conversationForClient) });
   });
 
   api.get("/conversations/archived", (req, res) => {
     const session = res.locals.session as SessionRow;
     const query = typeof req.query.query === "string" ? req.query.query : "";
-    return res.json({ conversations: db.listArchivedConversations(session.user_id, query) });
+    return res.json({ conversations: db.listArchivedConversations(session.user_id, query).map(conversationForClient) });
   });
 
   api.get("/conversations/importable-sessions", async (_req, res) => {
@@ -1101,6 +1110,8 @@ export function createApp(overrides: AppOverrides = {}) {
         inputModalities: Array.isArray(raw?.inputModalities) ? raw.inputModalities.filter((item): item is string => typeof item === "string") : undefined,
         priority: typeof raw?.priority === "number" ? raw.priority : undefined,
         visible: raw?.visible !== false,
+        modelContextWindow: typeof raw?.modelContextWindow === "number" ? raw.modelContextWindow : null,
+        autoCompactTokenLimit: typeof raw?.autoCompactTokenLimit === "number" ? raw.autoCompactTokenLimit : null,
       });
       writeProviderConfig(codexHomeFor(session.user_id), db, session.user_id, providerConfigOwner(session.user_id));
       return res.status(201).json({ models: listProviderModelsPublic(db, session.user_id, providerId) });
@@ -1128,6 +1139,12 @@ export function createApp(overrides: AppOverrides = {}) {
       fields.inputModalities = raw.inputModalities.filter((item): item is string => typeof item === "string");
     }
     if (typeof raw?.priority === "number") fields.priority = raw.priority;
+    if (raw?.modelContextWindow === null || typeof raw?.modelContextWindow === "number") {
+      fields.modelContextWindow = raw.modelContextWindow;
+    }
+    if (raw?.autoCompactTokenLimit === null || typeof raw?.autoCompactTokenLimit === "number") {
+      fields.autoCompactTokenLimit = raw.autoCompactTokenLimit;
+    }
     if (typeof raw?.visible === "boolean") fields.visible = raw.visible;
     try {
       db.updateProviderModel(session.user_id, id, fields);
@@ -1847,6 +1864,7 @@ export function createApp(overrides: AppOverrides = {}) {
       latestJob: latestJobWithStartedAt,
       jobEvents,
       rolloutBytes,
+      contextUsage: conversation.context_used_tokens === null ? null : { usedTokens: conversation.context_used_tokens, contextWindow: conversation.context_window, updatedAt: conversation.context_updated_at },
     });
   });
 
