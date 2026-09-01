@@ -77,6 +77,8 @@ input.on("line", (line) => {
     imagePaths: [],
     model: "test-model",
     reasoningEffort: "medium",
+    modelContextWindow: 128_000,
+    autoCompactTokenLimit: 115_200,
     modelProvider: "chat-provider",
     runtimeModelProvider: {
       id: "chat-provider",
@@ -108,6 +110,8 @@ input.on("line", (line) => {
     "-c", 'approval_policy="on-request"',
     "-c", 'approvals_reviewer="auto_review"',
     "-c", 'sandbox_mode="workspace-write"',
+    "-c", "model_context_window=128000",
+    "-c", "model_auto_compact_token_limit=115200",
     "-c", 'model_providers.chat-provider.name="Chat Provider"',
     "-c", 'model_providers.chat-provider.base_url="http://127.0.0.1:43123/v1"',
     "-c", 'model_providers.chat-provider.wire_api="responses"',

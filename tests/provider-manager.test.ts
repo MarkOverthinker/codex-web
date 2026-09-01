@@ -190,6 +190,8 @@ test("colliding model ids get unique source-prefixed catalog slugs", () => {
   assert.deepEqual(resolveAgentExecutionSelection(options, persistedSelection), {
     model: "gpt-5.6-sol",
     reasoningEffort: "high",
+    modelContextWindow: 1_000_000,
+    autoCompactTokenLimit: 900_000,
     provider: "proxy",
     sandbox: "workspace-write",
   });
@@ -474,5 +476,41 @@ test("chat providers use codex-relay at runtime and stay out of persistent Codex
     () => assertProviderProtocolConfiguration({ wireApi: "chat", requiresOpenaiAuth: true }),
     /只有原生 Responses 源支持官方 OAuth/,
   );
+  db.close();
+});
+test("model context settings default and support per-model overrides", () => {
+  const root = tempRoot();
+  const db = testDb(root);
+  db.createProvider({ userId: LEGACY_USER_ID, id: "proxy", name: "Proxy", baseUrl: "https://proxy.example.com/v1" });
+  db.createProviderModel({ userId: LEGACY_USER_ID, id: "default", providerId: "proxy", modelId: "default-model", slug: "default-model", displayName: "Default" });
+  db.createProviderModel({
+    userId: LEGACY_USER_ID,
+    id: "custom",
+    providerId: "proxy",
+    modelId: "custom-model",
+    slug: "custom-model",
+    displayName: "Custom",
+    modelContextWindow: 128_000,
+    autoCompactTokenLimit: 115_200,
+  });
+  const models = listProviderModelsPublic(db, LEGACY_USER_ID, "proxy");
+  assert.deepEqual(models.map((model) => [model.modelId, model.modelContextWindow, model.autoCompactTokenLimit]), [
+    ["default-model", 1_000_000, 900_000],
+    ["custom-model", 128_000, 115_200],
+  ]);
+  const options = loadAgentOptions({} as AppConfig, "", db, LEGACY_USER_ID);
+  assert.deepEqual(resolveAgentExecutionSelection(options, {
+    model: "custom-model",
+    reasoningEffort: "medium",
+    provider: "proxy",
+    sandbox: "workspace-write",
+  }), {
+    model: "custom-model",
+    reasoningEffort: "medium",
+    modelContextWindow: 128_000,
+    autoCompactTokenLimit: 115_200,
+    provider: "proxy",
+    sandbox: "workspace-write",
+  });
   db.close();
 });

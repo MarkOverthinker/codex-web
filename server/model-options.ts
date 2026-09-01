@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import type { AppConfig } from "./config.js";
-import { LEGACY_USER_ID, type AppDatabase } from "./db.js";
+import { DEFAULT_AUTO_COMPACT_TOKEN_LIMIT, DEFAULT_MODEL_CONTEXT_WINDOW, LEGACY_USER_ID, type AppDatabase } from "./db.js";
 import { listCatalogModelOptions, providerManaged } from "./provider-manager.js";
 
 export type { ModelReasoningEffort } from "@openai/codex-sdk";
@@ -37,6 +37,8 @@ export type AgentModelOption = {
   providerName?: string;
   upstreamModel?: string;
   displayName?: string;
+  modelContextWindow?: number;
+  autoCompactTokenLimit?: number;
 };
 
 export type AgentProviderOption = {
@@ -55,6 +57,8 @@ export type AgentOptions = {
 export type AgentSelection = {
   model: string;
   reasoningEffort: ModelReasoningEffort;
+  modelContextWindow?: number;
+  autoCompactTokenLimit?: number;
   provider?: string | null;
   sandbox?: SandboxMode;
 };
@@ -132,6 +136,8 @@ function catalogModels(config: AppConfig, codexHome = config.codexHome): AgentMo
           id: typeof model.slug === "string" ? model.slug : "",
           label: typeof model.display_name === "string" ? model.display_name : String(model.slug ?? ""),
           description: typeof model.description === "string" ? model.description : "",
+          modelContextWindow: DEFAULT_MODEL_CONTEXT_WINDOW,
+          autoCompactTokenLimit: DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
           reasoningEfforts: reasoningEfforts(model.supported_reasoning_levels),
           priority: typeof model.priority === "number" ? model.priority : Number.MAX_SAFE_INTEGER,
         }))
@@ -246,6 +252,8 @@ export function resolveAgentExecutionSelection(options: AgentOptions, selection:
   return {
     ...selection,
     model: model.upstreamModel || model.id,
+    modelContextWindow: model.modelContextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW,
+    autoCompactTokenLimit: model.autoCompactTokenLimit ?? DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     sandbox: normalizeSandbox(options, selection.sandbox),
   };
 }
