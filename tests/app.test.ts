@@ -26,7 +26,7 @@ import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js
 import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
-import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, resolveMessageFileLink } from "../src/file-links.js";
+import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, firstMarkdownPreviewFile, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "../src/file-links.js";
 import { parseCodexSnippetUrl, parseFileLine, parseFileRef, parseSnippetHref } from "../src/code-snippet.js";
 import { findUserMessageJump, findViewportAnchorMessageId } from "../src/message-jump.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -1460,6 +1460,17 @@ test("in-page preview distinguishes Markdown, text, images, and PDFs with a text
   assert.equal(canPreviewInline(file("image/png", 100 * 1024 * 1024)), true);
 });
 
+test("output preview ordering keeps the latest previewed files first and selects small Markdown", () => {
+  const files = [
+    { id: "a", mime_type: "application/pdf", size: 10, original_name: "a.pdf", relative_path: "outputs/a.pdf" },
+    { id: "b", mime_type: "text/plain", size: 10, original_name: "report.md", relative_path: "outputs/report.md" },
+    { id: "c", mime_type: "application/octet-stream", size: 10, original_name: "data.bin", relative_path: "outputs/data.bin" },
+  ] as WorkFile[];
+  assert.deepEqual(orderPreviewedFiles(files, ["c", "b", "missing", "b"]).map((file) => file.id), ["c", "b", "a"]);
+  assert.equal(firstMarkdownPreviewFile(files)?.id, "b");
+  assert.equal(firstMarkdownPreviewFile([{ ...files[1], size: FILE_PREVIEW_TEXT_LIMIT_BYTES + 1 }]), null);
+});
+
 test("deliverable mime detection covers code and config files", () => {
   assert.equal(mimeTypeForPath("outputs/script.py"), "text/x-python");
   assert.equal(mimeTypeForPath("outputs/app.ts"), "text/x-typescript");
@@ -1488,7 +1499,11 @@ test("output files are maintained in conversation details and open in a side-by-
   assert.match(serverSource, /outputFiles = db\.listFiles\(conversation\.id\)\.filter\(\(file\) => file\.kind === "output"\)\.map/);
   assert.match(serverSource, /outputFiles,/);
   assert.match(serverSource, /host_path:/);
-  assert.match(appSource, /className="chat-outputs"/);
+  assert.match(appSource, /className=\{`chat-outputs \$\{expanded \? "expanded" : ""\}`\}/);
+  assert.match(appSource, /function OutputFilesPanel/);
+  assert.match(appSource, /firstMarkdownPreviewFile/);
+  assert.match(appSource, /orderPreviewedFiles/);
+  assert.match(appSource, /aria-expanded=\{expanded\}/);
   assert.match(appSource, /function FilePreviewPane/);
   assert.match(appSource, /className="file-preview-trigger"/);
   assert.match(copyPathSource, /function CopyPathButton/);
@@ -1620,6 +1635,69 @@ test("conversation archive API keeps history readable, blocks new turns, and res
   assert.equal(restored.body.conversation.archived_at, null);
   assert.equal(restored.body.conversation.working_dir, null);
   assert.equal((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations[0].id, conversationId);
+});
+
+test("new tasks and persisted outputs avoid workspace initialization until needed", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-lazy-workspace-api-test-"));
+  const dataRoot = path.join(root, "data");
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot,
+    tenantRoot,
+    username: "owner",
+    passwordHash: bcrypt.hashSync("Lazy-Workspace-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Lazy-Workspace-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const conversationId = created.body.conversation.id as string;
+  const userId = instance.db.getConversation(conversationId)?.user_id ?? LEGACY_USER_ID;
+  const workspace = path.join(tenantRoot, userId, "conversations", conversationId);
+  assert.equal(fs.existsSync(workspace), false);
+
+  const fileIds: string[] = [];
+  const filePaths: string[] = [];
+  const fileCount = 128;
+  for (let index = 0; index < fileCount; index += 1) {
+    const fileId = crypto.randomUUID();
+    const relativePath = `deliverables/${fileId}/result-${index}.txt`;
+    const absolute = resolveInside(dataRoot, relativePath);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, `result-${index}`, "utf8");
+    instance.db.addFile({
+      id: fileId,
+      conversation_id: conversationId,
+      message_id: null,
+      original_name: `result-${index}.txt`,
+      relative_path: relativePath,
+      mime_type: "text/plain",
+      size: `result-${index}`.length,
+      kind: "output",
+      created_at: new Date(Date.now() + index).toISOString(),
+    });
+    fileIds.push(fileId);
+    filePaths.push(relativePath);
+  }
+
+  const detail = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  assert.equal(detail.body.outputFiles.length, fileCount);
+  assert.equal(fs.existsSync(workspace), false);
+
+  const file = await agent.get(`/codex-web/api/files/${fileIds[0]}`).expect(200);
+  assert.equal(file.text, "result-0");
+  assert.equal(fs.existsSync(workspace), false);
+
+  await agent.delete(`/codex-web/api/conversations/${conversationId}`).set("X-CSRF-Token", csrf).expect(204);
+  assert.equal(fs.existsSync(workspace), false);
+  for (const relativePath of filePaths) assert.equal(fs.existsSync(resolveInside(dataRoot, relativePath)), false);
+  assert.equal(instance.db.getFile(fileIds[0])?.relative_path, filePaths[0]);
+  assert.ok(instance.db.getConversation(conversationId)?.deleted_at);
 });
 
 test("quote-derived task creates an independent draft and sends a source-linked message", async (context) => {
@@ -2062,7 +2140,7 @@ test("single-user login and CSRF protection", async (context) => {
   const fileId = crypto.randomUUID();
   const originalName = "高三生物复习大纲与冲刺指南.pptx";
   const relativePath = path.join("outputs", originalName);
-  const absolutePath = path.join(ensureTenant(tenantRoot, LEGACY_USER_ID).conversations, created.body.conversation.id, relativePath);
+  const absolutePath = path.join(ensureTenantWorkspace(tenantRoot, LEGACY_USER_ID, created.body.conversation.id), relativePath);
   fs.writeFileSync(absolutePath, Buffer.from("pptx-test"));
   instance.db.addFile({
     id: fileId, conversation_id: created.body.conversation.id, message_id: null,

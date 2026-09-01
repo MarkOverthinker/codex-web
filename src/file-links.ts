@@ -86,6 +86,27 @@ export function canPreviewInline(file: WorkFile): boolean {
   return true;
 }
 
+export function orderPreviewedFiles(files: readonly WorkFile[], previewedFileIds: readonly string[]): WorkFile[] {
+  const filesById = new Map(files.map((file) => [file.id, file]));
+  const ordered: WorkFile[] = [];
+  const added = new Set<string>();
+  for (const fileId of previewedFileIds) {
+    const file = filesById.get(fileId);
+    if (!file || added.has(file.id)) continue;
+    ordered.push(file);
+    added.add(file.id);
+  }
+  for (const file of files) {
+    if (added.has(file.id)) continue;
+    ordered.push(file);
+  }
+  return ordered;
+}
+
+export function firstMarkdownPreviewFile(files: readonly WorkFile[]): WorkFile | null {
+  return files.find((file) => filePreviewKind(file) === "markdown" && canPreviewInline(file)) ?? null;
+}
+
 export function resolveMessageFileLink(href: string | undefined, files: WorkFile[]): ResolvedMessageLink {
   if (!href) return { kind: "unavailable" };
   const normalized = normalizePath(href);
