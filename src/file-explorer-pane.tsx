@@ -181,7 +181,7 @@ export function FileExplorerPane({ conversationId, width, onResizeStart, onResiz
       return <Fragment key={entryKey}>
         <button
           type="button"
-          className={`file-tree-row ${selected ? "selected" : ""}`}
+          className={`file-tree-row ${entry.type === "dir" ? "directory" : "file"} ${isExpanded ? "expanded" : ""} ${selected ? "selected" : ""}`}
           style={{ "--tree-level": level } as CSSProperties}
           title={entry.display_path}
           aria-expanded={entry.type === "dir" ? isExpanded : undefined}
@@ -230,7 +230,7 @@ export function FileExplorerPane({ conversationId, width, onResizeStart, onResiz
           const key = directoryKey(root.id, "");
           const isExpanded = expanded.has(key);
           return <Fragment key={root.id}>
-            <button type="button" className={`file-tree-root ${root.available ? "" : "unavailable"}`} title={root.path} aria-expanded={root.available ? isExpanded : undefined} disabled={!root.available} onClick={() => root.available && toggleDirectory(root.id, "")}>
+            <button type="button" className={`file-tree-root ${root.available ? "" : "unavailable"} ${isExpanded ? "expanded" : ""}`} title={root.path} aria-expanded={root.available ? isExpanded : undefined} disabled={!root.available} onClick={() => root.available && toggleDirectory(root.id, "")}>
               <span className="file-tree-chevron">{root.available ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : null}</span>
               <span className="file-tree-entry-icon"><FolderOpen size={16} /></span>
               <span className="file-tree-entry-name"><strong>{root.label}</strong><small>{root.available ? root.path : "目录不可用"}</small></span>

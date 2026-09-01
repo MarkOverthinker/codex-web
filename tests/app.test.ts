@@ -363,6 +363,18 @@ test("side chat pane resizes independently by pointer and keyboard", () => {
   assert.match(styles, /\.side-chat-pane \{ width: 100vw !important; \}/);
 });
 
+test("file explorer shows visible nesting and expanded directory states", () => {
+  const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "file-explorer-pane.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(paneSource, /style=\{\{ "--tree-level": level \}/);
+  assert.match(paneSource, /file-tree-row \$\{entry\.type === "dir" \? "directory" : "file"\}/);
+  assert.match(styles, /--file-tree-indent: 18px/);
+  assert.match(styles, /\.file-tree-row \{[^}]*padding-left: calc\(7px \+ var\(--tree-level\) \* var\(--file-tree-indent\)\)/);
+  assert.match(styles, /\.file-tree-row::before/);
+  assert.match(styles, /\.file-tree-row::after/);
+  assert.match(styles, /\.file-tree-row\.directory\.expanded/);
+});
+
 test("side chat keeps history available while primary tasks change", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "side-chat-pane.tsx"), "utf8");
