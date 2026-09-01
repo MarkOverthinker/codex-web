@@ -33,6 +33,14 @@ the activity order after an upgrade. New explicit drags remain persistent.
 The working-dir feature is host-mode only; isolated tenants keep the
 per-conversation workspace model and the tenant boundary is unchanged.
 
+The right-side file explorer is conversation-scoped. It exposes the conversation
+workspace and tenant library in every deployment, plus the selected host working
+directory in host mode. Directory contents are loaded lazily through the
+authenticated file-tree API. Previewable text is returned through a bounded
+preview endpoint; images and PDFs are served through a separately authorized
+file endpoint. The explorer hides runtime directories and common credential
+names, rejects traversal, and does not provide filesystem mutation operations.
+
 The browser keeps the long-running task view responsive by batching SSE
 progress events into short render frames and by memoizing the message list,
 individual Markdown messages, and conversation rows. Conversation polling

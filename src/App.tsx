@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import {
-  Archive, ArrowDown, ArrowUp, BarChart3, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen,
+  Archive, ArrowDown, ArrowUp, BarChart3, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen, FolderTree,
   ChevronUp, ListChecks,
   Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
@@ -39,6 +39,7 @@ import { BillingPanel } from "./billing-panel";
 import { SideChatPane, type SideChatReferenceRequest } from "./side-chat-pane";
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
+import { FileExplorerPane } from "./file-explorer-pane";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
@@ -52,6 +53,7 @@ const TASK_VIEW_MODE_KEY = "codex-web:task-view-mode";
 const SIDEBAR_WIDTH_KEY = "codex-web:sidebar-width";
 const PREVIEW_WIDTH_KEY = "codex-web:preview-width";
 const SIDE_CHAT_WIDTH_KEY = "codex-web:side-chat-width";
+const FILE_EXPLORER_WIDTH_KEY = "codex-web:file-explorer-width";
 const SIDEBAR_WIDTH_DEFAULT = 280;
 const SIDEBAR_WIDTH_MIN = 220;
 const SIDEBAR_WIDTH_MAX = 460;
@@ -60,6 +62,9 @@ const PREVIEW_WIDTH_MAX = 960;
 const SIDE_CHAT_WIDTH_DEFAULT = 410;
 const SIDE_CHAT_WIDTH_MIN = 320;
 const SIDE_CHAT_WIDTH_MAX = 720;
+const FILE_EXPLORER_WIDTH_DEFAULT = 480;
+const FILE_EXPLORER_WIDTH_MIN = 340;
+const FILE_EXPLORER_WIDTH_MAX = 760;
 const COMPOSER_TEXT_HEIGHT_MIN = 72;
 const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
@@ -402,6 +407,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sideChatOpen, setSideChatOpen] = useState(false);
+  const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
   const [sideChatReferenceRequest, setSideChatReferenceRequest] = useState<SideChatReferenceRequest | null>(null);
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
@@ -491,6 +497,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
   const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
   const [sideChatWidth, setSideChatWidth] = useState(() => readPaneWidth(SIDE_CHAT_WIDTH_KEY, SIDE_CHAT_WIDTH_DEFAULT, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX));
+  const [fileExplorerWidth, setFileExplorerWidth] = useState(() => readPaneWidth(FILE_EXPLORER_WIDTH_KEY, FILE_EXPLORER_WIDTH_DEFAULT, FILE_EXPLORER_WIDTH_MIN, FILE_EXPLORER_WIDTH_MAX));
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
   const [favoriteLabelInput, setFavoriteLabelInput] = useState("");
@@ -567,7 +574,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const toggleSideChat = useCallback(() => {
     setPreviewFile(null);
     setSnippetPreview(null);
+    setFileExplorerOpen(false);
     setSideChatOpen((open) => !open);
+  }, []);
+
+  const toggleFileExplorer = useCallback(() => {
+    setPreviewFile(null);
+    setSnippetPreview(null);
+    setSideChatOpen(false);
+    setSideChatReferenceRequest(null);
+    setFileExplorerOpen((open) => !open);
   }, []);
 
   const askSideChatAbout = useCallback((selectedText: string, messageId: string) => {
@@ -576,16 +592,18 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     if (!excerpt || !sourceConversation) return;
     setPreviewFile(null);
     setSnippetPreview(null);
+    setFileExplorerOpen(false);
     setSideChatOpen(true);
     sideChatReferenceSequenceRef.current += 1;
     setSideChatReferenceRequest({ id: sideChatReferenceSequenceRef.current, sourceConversation, sourceMessageId: messageId, excerpt });
   }, []);
 
-  const openFilePreview = useCallback((file: WorkFile) => { setSideChatOpen(false); setPreviewFile(file); }, []);
+  const openFilePreview = useCallback((file: WorkFile) => { setFileExplorerOpen(false); setSideChatOpen(false); setPreviewFile(file); }, []);
   const closeFilePreview = useCallback(() => setPreviewFile(null), []);
   const openCodeSnippet = useCallback((target: FileLineRef) => {
     const conversation = detailRef.current;
     if (!conversation) return;
+    setFileExplorerOpen(false);
     setSideChatOpen(false);
     setPreviewFile(null);
     setSnippetPreview({ conversationId: conversation.conversation.id, path: target.path, line: target.line });
@@ -1590,6 +1608,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       setPreviewFile(null);
       setSnippetPreview(null);
       setSideChatOpen(false);
+      setFileExplorerOpen(false);
       setSelectedId(null);
     }
     try {
@@ -2000,12 +2019,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     />;
   }
 
-  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview" | "side-chat") {
+  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview" | "side-chat" | "file-explorer") {
     const isSidebar = kind === "sidebar";
     const isSideChat = kind === "side-chat";
-    const min = isSidebar ? SIDEBAR_WIDTH_MIN : isSideChat ? SIDE_CHAT_WIDTH_MIN : PREVIEW_WIDTH_MIN;
-    const max = isSidebar ? SIDEBAR_WIDTH_MAX : isSideChat ? SIDE_CHAT_WIDTH_MAX : PREVIEW_WIDTH_MAX;
-    const current = isSidebar ? sidebarWidth : isSideChat ? sideChatWidth : previewWidth;
+    const isFileExplorer = kind === "file-explorer";
+    const min = isSidebar ? SIDEBAR_WIDTH_MIN : isSideChat ? SIDE_CHAT_WIDTH_MIN : isFileExplorer ? FILE_EXPLORER_WIDTH_MIN : PREVIEW_WIDTH_MIN;
+    const max = isSidebar ? SIDEBAR_WIDTH_MAX : isSideChat ? SIDE_CHAT_WIDTH_MAX : isFileExplorer ? FILE_EXPLORER_WIDTH_MAX : PREVIEW_WIDTH_MAX;
+    const current = isSidebar ? sidebarWidth : isSideChat ? sideChatWidth : isFileExplorer ? fileExplorerWidth : previewWidth;
     const step = event.shiftKey ? 40 : 16;
     let next: number | null = null;
     if (event.key === "ArrowLeft") next = isSidebar ? current - step : current + step;
@@ -2017,8 +2037,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const clamped = clampPaneWidth(next, min, max);
     if (isSidebar) setSidebarWidth(clamped);
     else if (isSideChat) setSideChatWidth(clamped);
+    else if (isFileExplorer) setFileExplorerWidth(clamped);
     else setPreviewWidth(clamped);
-    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : isSideChat ? SIDE_CHAT_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
+    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : isSideChat ? SIDE_CHAT_WIDTH_KEY : isFileExplorer ? FILE_EXPLORER_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
   }
 
   function renderCategoryView(category: TaskListCategoryView, style?: CSSProperties) {
@@ -2959,8 +2980,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     <PathBrowserDialog request={pathBrowser} onClose={() => setPathBrowser(null)} />
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
-      <header className="desktop-header"><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div><button type="button" className="desktop-billing-trigger" onClick={() => setBillingPanelOpen(true)}><BarChart3 size={16} /><span>API 计费统计</span></button></header>
-      <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
+      <header className="desktop-header"><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div><div className="desktop-header-actions"><button type="button" className={`desktop-tool-trigger ${fileExplorerOpen ? "active" : ""}`} disabled={!currentDetail} onClick={toggleFileExplorer}><FolderTree size={16} /><span>文件</span></button><button type="button" className="desktop-billing-trigger" onClick={() => setBillingPanelOpen(true)}><BarChart3 size={16} /><span>API 计费统计</span></button></div></header>
+      <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div><button className={`icon-button mobile-file-trigger ${fileExplorerOpen ? "active" : ""}`} disabled={!currentDetail} onClick={toggleFileExplorer} aria-label="打开文件浏览器" title="文件"><FolderTree size={19} /></button></header>
       {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => applyExternalComposerText(text)} />}
@@ -2988,6 +3009,13 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       widthMax={SIDE_CHAT_WIDTH_MAX}
       onResizeStart={(event) => beginPaneResize(event, sideChatWidth, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX, "grow-left", setSideChatWidth, (width) => commitPaneWidth(SIDE_CHAT_WIDTH_KEY, width))}
       onResizeKeyDown={(event) => handlePaneResizerKey(event, "side-chat")}
+    />}
+    {fileExplorerOpen && currentDetail && <FileExplorerPane
+      conversationId={currentDetail.conversation.id}
+      width={fileExplorerWidth}
+      onResizeStart={(event) => beginPaneResize(event, fileExplorerWidth, FILE_EXPLORER_WIDTH_MIN, FILE_EXPLORER_WIDTH_MAX, "grow-left", setFileExplorerWidth, (width) => commitPaneWidth(FILE_EXPLORER_WIDTH_KEY, width))}
+      onResizeKeyDown={(event) => handlePaneResizerKey(event, "file-explorer")}
+      onClose={() => setFileExplorerOpen(false)}
     />}
     <BillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} providers={agentOptions?.providers ?? []} builtinModels={agentOptions?.models.filter((model) => !model.provider) ?? []} />
     {snippetPreview

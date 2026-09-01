@@ -21,6 +21,12 @@
   workspace, registered deliverables, tenant library, and (in host mode) the
   conversation's selected working directory; path traversal and arbitrary
   host paths are rejected.
+- The right-side file explorer uses the same conversation ownership check
+  and path confinement. It lazily lists only the conversation workspace,
+  tenant library, and (in host mode) the selected working directory. Runtime
+  directories and common credential names are hidden, text previews are
+  bounded, and the explorer is read-only; it does not expose delete, rename,
+  or move operations.
 - Output preview share links are HMAC-signed, expire after 7 days, and work
   without login. They are minted only for previewable files with `kind=output`;
   uploads and other files can never be shared, and the public routes expose
