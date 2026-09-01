@@ -290,7 +290,7 @@ The container binds to loopback by default. Proxy `/codex-web/` to `http://127.0
 
 ## Usage and billing
 
-Open **API usage and billing** from account settings to review 7/30/90/365-day input, output, and cache token totals, cache-hit rate, and estimated cost grouped by provider and model. Prices are configured per million tokens for input, cached input, cache writes, and output. A provider can also sync a compatible JSON pricing endpoint; because upstreams do not share one pricing API, sync only imports responses that expose a model plus input/output token prices. Calls without a configured rule remain visible but are deliberately excluded from estimated cost.
+On desktop, click **API usage and billing** in the top bar (the mobile layout does not show this button) to review 7/30/90/365-day input, output, and cache token totals, cache-hit rate, and estimated cost grouped by provider and model. Prices are configured per million tokens for input, cached input, cache writes, and output. Opening the panel automatically tries the compatible pricing endpoints for every enabled provider, prioritizing New API `/api/pricing`; because upstreams do not share one pricing API, sync only imports responses that expose a model plus input/output token prices. Calls without a configured rule remain visible but are deliberately excluded from estimated cost.
 
 ## Development
 
