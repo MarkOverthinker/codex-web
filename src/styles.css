@@ -1901,10 +1901,19 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .file-explorer-error { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; margin: 9px 11px 0; padding: 8px 10px; border: 1px solid #f0c4c4; border-radius: 9px; color: #a33; background: #fff4f4; font-size: 11px; line-height: 1.45; }
 .file-explorer-error svg { flex: 0 0 auto; color: #c07d10; }
 .file-explorer-body { min-height: 0; flex: 1; display: flex; flex-direction: column; }
-.file-explorer-tree { min-height: 160px; flex: 0 0 48%; overflow: auto; padding: 8px 7px 10px; border-bottom: 1px solid #e2e4ec; overscroll-behavior: contain; scrollbar-width: thin; }
+.file-explorer-tree { --file-tree-indent: 18px; --file-tree-guide: #d2d7e7; min-height: 160px; flex: 0 0 48%; overflow: auto; padding: 8px 7px 10px; border-bottom: 1px solid #e2e4ec; overscroll-behavior: contain; scrollbar-width: thin; }
 .file-explorer-status { min-height: 120px; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 18px; color: var(--muted); font-size: 11px; text-align: center; }
-.file-tree-root, .file-tree-row { width: 100%; min-width: 0; display: grid; grid-template-columns: 18px 20px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 6px 7px; border: 0; border-radius: 8px; color: #40465b; background: transparent; cursor: pointer; text-align: left; }
+.file-tree-root, .file-tree-row { position: relative; width: 100%; min-width: 0; display: grid; grid-template-columns: 18px 20px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 6px 7px; border: 0; border-radius: 8px; color: #40465b; background: transparent; cursor: pointer; text-align: left; transition: color .14s ease, background .14s ease, box-shadow .14s ease; }
+.file-tree-root { min-height: 36px; margin-bottom: 3px; border: 1px solid #e5e7f0; color: #343d70; background: #f7f8fc; font-weight: 650; }
+.file-tree-root.expanded { border-color: #d6daf0; background: #f0f2fa; box-shadow: inset 3px 0 0 #7885bd; }
+.file-tree-row { padding-left: calc(7px + var(--tree-level) * var(--file-tree-indent)); }
+.file-tree-row::before, .file-tree-loading-row::before, .file-tree-empty-row::before { position: absolute; top: 0; bottom: 0; left: 16px; width: calc((var(--tree-level) - 1) * var(--file-tree-indent) + 1px); background: repeating-linear-gradient(to right, var(--file-tree-guide) 0 1px, transparent 1px var(--file-tree-indent)); content: ""; pointer-events: none; }
+.file-tree-row::after { position: absolute; top: 50%; left: calc(16px + (var(--tree-level) - 1) * var(--file-tree-indent)); width: calc(var(--file-tree-indent) - 9px); height: 1px; background: var(--file-tree-guide); content: ""; transform: translateY(-50%); pointer-events: none; }
+.file-tree-row > * { position: relative; z-index: 1; }
 .file-tree-root:hover, .file-tree-row:hover, .file-tree-row.selected { color: var(--indigo); background: #f0f2fa; }
+.file-tree-row.directory { color: #343d70; font-weight: 650; }
+.file-tree-row.directory.expanded { color: #2d376b; background: #f7f8fc; }
+.file-tree-row.directory.expanded:hover, .file-tree-row.directory:hover, .file-tree-row.selected:hover { background: #eef1fb; }
 .file-tree-root.unavailable { color: #a3a6b1; cursor: default; }
 .file-tree-chevron { width: 18px; height: 18px; display: grid; place-items: center; color: #898fa2; }
 .file-tree-entry-icon { width: 20px; height: 20px; display: grid; place-items: center; color: #6873aa; }
@@ -1912,7 +1921,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .file-tree-entry-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .file-tree-entry-name small { display: block; overflow: hidden; margin-top: 2px; color: #969aaa; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; font-weight: 500; }
 .file-tree-entry-meta { min-width: 34px; color: #9a9eac; font-size: 9px; text-align: right; }
-.file-tree-loading-row, .file-tree-empty-row { display: flex; align-items: center; gap: 6px; padding: 5px 7px 5px calc(7px + var(--tree-level) * 16px); color: #9a9eac; font-size: 10px; }
+.file-tree-loading-row, .file-tree-empty-row { position: relative; display: flex; align-items: center; gap: 6px; padding: 5px 7px 5px calc(7px + var(--tree-level) * var(--file-tree-indent)); color: #9a9eac; font-size: 10px; }
 .file-tree-empty-row { font-style: italic; }
 .file-explorer-preview { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .file-explorer-preview-empty { min-height: 180px; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; color: #8b90a0; text-align: center; font-size: 11px; line-height: 1.5; }
@@ -1952,12 +1961,19 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .file-explorer-header > div > svg,
 :root[data-theme="dark"] .file-explorer-preview-header > svg { color: #aeb9f5; }
 :root[data-theme="dark"] .file-explorer-actions .icon-button { color: #b8bac4; }
-:root[data-theme="dark"] .file-explorer-tree { border-bottom-color: #3b3e47; }
+:root[data-theme="dark"] .file-explorer-tree { --file-tree-guide: #484c5a; border-bottom-color: #3b3e47; }
 :root[data-theme="dark"] .file-tree-root,
 :root[data-theme="dark"] .file-tree-row { color: #d6d8df; }
+:root[data-theme="dark"] .file-tree-root { border-color: #3b3e47; background: #282a31; }
+:root[data-theme="dark"] .file-tree-root.expanded { border-color: #4a5070; background: #303342; box-shadow: inset 3px 0 0 #8995d0; }
 :root[data-theme="dark"] .file-tree-root:hover,
 :root[data-theme="dark"] .file-tree-row:hover,
 :root[data-theme="dark"] .file-tree-row.selected { color: #c5ceff; background: rgba(91, 104, 166, .18); }
+:root[data-theme="dark"] .file-tree-row.directory { color: #cbd3ff; }
+:root[data-theme="dark"] .file-tree-row.directory.expanded { color: #d7ddff; background: #282b38; }
+:root[data-theme="dark"] .file-tree-row.directory.expanded:hover,
+:root[data-theme="dark"] .file-tree-row.directory:hover,
+:root[data-theme="dark"] .file-tree-row.selected:hover { background: rgba(91, 104, 166, .24); }
 :root[data-theme="dark"] .file-tree-root.unavailable { color: #777b87; }
 :root[data-theme="dark"] .file-tree-entry-icon { color: #aeb9f5; }
 :root[data-theme="dark"] .file-tree-entry-name small,
