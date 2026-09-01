@@ -166,10 +166,34 @@ function pricingModel(record: Record<string, unknown>): string | null {
   return null;
 }
 
+function ratioConfigEntries(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const data = payload.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const config = data as Record<string, unknown>;
+  const modelRatios = config.model_ratio;
+  if (!modelRatios || typeof modelRatios !== "object" || Array.isArray(modelRatios)) return [];
+  const ratioMaps = {
+    completion_ratio: config.completion_ratio,
+    cache_ratio: config.cache_ratio,
+    create_cache_ratio: config.create_cache_ratio,
+  } as const;
+  return Object.entries(modelRatios as Record<string, unknown>).map(([model, ratio]) => {
+    const entry: Record<string, unknown> = { model, model_ratio: ratio };
+    for (const [key, values] of Object.entries(ratioMaps)) {
+      if (values && typeof values === "object" && !Array.isArray(values) && model in values) {
+        entry[key] = (values as Record<string, unknown>)[model];
+      }
+    }
+    return entry;
+  });
+}
+
 function pricingEntries(payload: unknown): Record<string, unknown>[] {
   if (Array.isArray(payload)) return payload.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   if (!payload || typeof payload !== "object") return [];
   const record = payload as Record<string, unknown>;
+  const ratioEntries = ratioConfigEntries(record);
+  if (ratioEntries.length > 0) return ratioEntries;
   for (const key of ["data", "prices", "pricing", "models", "items", "list"]) {
     if (Array.isArray(record[key])) return pricingEntries(record[key]);
   }
@@ -179,6 +203,23 @@ function pricingEntries(payload: unknown): Record<string, unknown>[] {
   });
 }
 
+function pricingCandidates(base: URL, providerBaseUrl: string, requestedUrl?: string): string[] {
+  if (!requestedUrl) return [
+    `${base.origin}/api/pricing`,
+    `${base.origin}/api/ratio_config`,
+    `${base.origin}/api/prices`,
+    `${providerBaseUrl.replace(/\/+$/, "")}/pricing`,
+  ];
+  try {
+    const requested = new URL(requestedUrl);
+    if (requested.pathname.replace(/\/+$/, "") === "/pricing") {
+      return [requestedUrl, `${requested.origin}/api/ratio_config`, `${requested.origin}/api/pricing`];
+    }
+  } catch {
+  }
+  return [requestedUrl];
+}
+
 export async function syncProviderPricing(
   db: AppDatabase,
   userId: string,
@@ -186,9 +227,8 @@ export async function syncProviderPricing(
   pricingUrl?: string,
 ): Promise<{ imported: number; url: string }> {
   const base = new URL(provider.base_url);
-  const candidates = pricingUrl?.trim()
-    ? [pricingUrl.trim()]
-    : [`${base.origin}/api/pricing`, `${base.origin}/api/prices`, `${provider.base_url.replace(/\/+$/, "")}/pricing`];
+  const requestedUrl = pricingUrl?.trim();
+  const candidates = pricingCandidates(base, provider.base_url, requestedUrl);
   let lastError = "无法读取计费标准";
   for (const candidate of candidates) {
     let url: URL;
@@ -198,7 +238,15 @@ export async function syncProviderPricing(
     try {
       const response = await fetch(url, { headers: { Accept: "application/json", ...(provider.api_key ? { Authorization: `Bearer ${provider.api_key}` } : {}) } });
       if (!response.ok) { lastError = `计费标准接口返回 HTTP ${response.status}`; continue; }
-      const entries = pricingEntries(await response.json());
+      const responseText = await response.text();
+      let payload: unknown;
+      try {
+        payload = JSON.parse(responseText);
+      } catch {
+        lastError = "计费标准地址返回的不是 JSON；请使用 JSON 接口，例如 /api/ratio_config，而不是 /pricing 网页";
+        continue;
+      }
+      const entries = pricingEntries(payload);
       let imported = 0;
       for (const entry of entries) {
         const modelId = pricingModel(entry);

@@ -60,3 +60,56 @@ test("New API pricing ratios are converted to per-million-token prices", async (
     globalThis.fetch = savedFetch;
   }
 });
+
+
+test("New API ratio config maps are converted to per-million-token prices", async () => {
+  const savedFetch = globalThis.fetch;
+  const rules: unknown[] = [];
+  globalThis.fetch = async (input) => {
+    if (String(input).endsWith("/api/pricing")) return new Response("not found", { status: 404 });
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        model_ratio: { "gpt-test": 0.5 },
+        completion_ratio: { "gpt-test": 2 },
+        cache_ratio: { "gpt-test": 0.5 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const result = await syncProviderPricing({ upsertPricingRule: (rule: unknown) => rules.push(rule) } as never, "user-1", {
+      id: "new-api", base_url: "https://new-api.example.com/v1", api_key: null,
+    } as never);
+    assert.equal(result.imported, 1);
+    assert.deepEqual(rules[0], {
+      user_id: "user-1", provider_id: "new-api", model_id: "gpt-test",
+      input_per_million: 1, cached_input_per_million: 0.5, cache_write_per_million: 0, output_per_million: 2,
+      currency: "USD", source: "remote", pricing_url: "https://new-api.example.com/api/ratio_config",
+    });
+  } finally {
+    globalThis.fetch = savedFetch;
+  }
+});
+
+test("pricing page URL falls back to the same-origin ratio config endpoint", async () => {
+  const savedFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.endsWith("/pricing")) return new Response("<!doctype html>", { status: 200, headers: { "content-type": "text/html" } });
+    return new Response(JSON.stringify({ data: { model_ratio: { "gpt-test": 0.5 } } }), { status: 200 });
+  };
+  try {
+    const result = await syncProviderPricing({ upsertPricingRule: () => undefined } as never, "user-1", {
+      id: "new-api", base_url: "https://new-api.example.com/v1", api_key: null,
+    } as never, "https://new-api.example.com/pricing");
+    assert.equal(result.imported, 1);
+    assert.deepEqual(urls, [
+      "https://new-api.example.com/pricing",
+      "https://new-api.example.com/api/ratio_config",
+    ]);
+  } finally {
+    globalThis.fetch = savedFetch;
+  }
+});
