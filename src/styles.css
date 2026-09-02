@@ -693,6 +693,8 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .selection-actions button:hover { background: rgba(255, 255, 255, .12); }
 .selection-actions button:last-child svg { color: #aeb9f5; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 9px; margin-top: 12px; }
+.message-files-toggle { min-height: 30px; display: flex; align-items: center; justify-content: center; gap: 5px; margin: 6px auto 0; padding: 5px 11px; border: 0; border-radius: 999px; color: #6f7486; background: transparent; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.message-files-toggle:hover { color: var(--indigo); background: var(--indigo-pale); }
 .file-card { min-width: 0; display: flex; align-items: center; border: 1px solid #d5d9e8; border-radius: 12px; background: #f7f8fc; transition: border-color .16s ease, background .16s ease, transform .14s ease; }
 .file-card:hover { transform: translateY(-1px); border-color: #aeb6d7; background: #eef1fa; }
 .file-card > a:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: inherit; text-decoration: none; }
@@ -1195,6 +1197,8 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .file-card,
 :root[data-theme="dark"] .activity-card { border-color: #3d3f47; background: #27282d; box-shadow: 0 7px 22px rgba(0, 0, 0, .14); }
 :root[data-theme="dark"] .file-card:hover { border-color: #5d6275; background: #2e3036; }
+:root[data-theme="dark"] .message-files-toggle { color: #a9abb4; }
+:root[data-theme="dark"] .message-files-toggle:hover { color: #d9deff; background: #303342; }
 :root[data-theme="dark"] .download-button { border-left-color: #44464e; }
 :root[data-theme="dark"] .file-card > .file-preview-trigger small { color: #94969f; }
 :root[data-theme="dark"] .chat-outputs { border-bottom-color: #303238; background: rgba(23, 24, 27, .55); }
