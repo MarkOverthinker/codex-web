@@ -43,6 +43,33 @@ test("locates an exact excerpt in a response_item JSONL record", async (context)
   });
 });
 
+test("matches the decoded answer inside a structured first-turn response", async (context) => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "cww-source-locator-"));
+  context.after(() => fs.rmSync(codexHome, { recursive: true, force: true }));
+  const directory = path.join(codexHome, "sessions", "2026", "09", "02");
+  fs.mkdirSync(directory, { recursive: true });
+  const filePath = path.join(directory, `rollout-${THREAD_ID}.jsonl`);
+  const answer = "第一行\n选中的第二行\n最后一行";
+  fs.writeFileSync(filePath, `${JSON.stringify({
+    timestamp: "2026-09-02T01:00:01.000Z",
+    type: "response_item",
+    payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: JSON.stringify({ answer, title: "结构化回答" }) }] },
+  })}\n`);
+
+  const location = await locateMessageInCodexRollout({
+    codexHome,
+    threadId: THREAD_ID,
+    role: "assistant",
+    messageContent: answer,
+    messageCreatedAt: "2026-09-02T01:00:01.000Z",
+    excerpt: "选中的第二行\n最后一行",
+  });
+
+  assert.equal(location?.recordType, "response_item");
+  assert.equal(location?.jsonPointer, "/payload/content/0/text");
+  assert.deepEqual([location?.textStart, location?.textEnd], [4, answer.length]);
+});
+
 test("matches browser-collapsed whitespace and prefers the closest record", async (context) => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "cww-source-locator-"));
   context.after(() => fs.rmSync(codexHome, { recursive: true, force: true }));
