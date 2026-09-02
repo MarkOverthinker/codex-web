@@ -26,7 +26,7 @@ import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js
 import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
-import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "../src/file-links.js";
+import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderMarkdownFilesFirst, orderPreviewedFiles, resolveMessageFileLink } from "../src/file-links.js";
 import { parseCodexSnippetUrl, parseFileLine, parseFileRef, parseSnippetHref } from "../src/code-snippet.js";
 import { findUserMessageJump, findViewportAnchorMessageId } from "../src/message-jump.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
@@ -1532,6 +1532,16 @@ test("output preview ordering keeps the latest previewed files first", () => {
   assert.deepEqual(orderPreviewedFiles(files, ["c", "b", "missing", "b"]).map((file) => file.id), ["c", "b", "a"]);
 });
 
+test("message output ordering moves Markdown first without disturbing group order", () => {
+  const files = [
+    { id: "pdf", mime_type: "application/pdf", original_name: "slides.pdf", relative_path: "outputs/slides.pdf" },
+    { id: "md-extension", mime_type: "text/plain", original_name: "summary.md", relative_path: "outputs/summary.md" },
+    { id: "sheet", mime_type: "application/octet-stream", original_name: "data.xlsx", relative_path: "outputs/data.xlsx" },
+    { id: "md-mime", mime_type: "text/markdown; charset=utf-8", original_name: "notes.txt", relative_path: "outputs/notes.txt" },
+  ] as WorkFile[];
+  assert.deepEqual(orderMarkdownFilesFirst(files).map((file) => file.id), ["md-extension", "md-mime", "pdf", "sheet"]);
+});
+
 test("deliverable mime detection covers code and config files", () => {
   assert.equal(mimeTypeForPath("outputs/script.py"), "text/x-python");
   assert.equal(mimeTypeForPath("outputs/app.ts"), "text/x-typescript");
@@ -1562,6 +1572,11 @@ test("output files are maintained in conversation details and preview on demand"
   assert.match(serverSource, /host_path:/);
   assert.match(appSource, /className=\{`chat-outputs \$\{expanded \? "expanded" : ""\}`\}/);
   assert.match(appSource, /function OutputFilesPanel/);
+  assert.match(appSource, /function MessageFiles/);
+  assert.match(appSource, /const COLLAPSED_MESSAGE_FILE_COUNT = 3/);
+  assert.match(appSource, /collapseLargeLists=\{message\.role === "assistant"\}/);
+  assert.match(appSource, /orderMarkdownFilesFirst\(files\)/);
+  assert.match(appSource, /展开其余/);
   assert.match(appSource, /orderPreviewedFiles/);
   assert.doesNotMatch(appSource, /autoPreviewedMarkdownRef|firstMarkdownPreviewFile/);
   assert.match(appSource, /aria-expanded=\{expanded\}/);
@@ -1579,6 +1594,7 @@ test("output files are maintained in conversation details and preview on demand"
   assert.match(styles, /\.file-preview-pane \{/);
   assert.match(styles, /\.file-preview-pane \{[^}]*border-left:/);
   assert.match(styles, /\.chat-outputs \{/);
+  assert.match(styles, /\.message-files-toggle \{/);
   assert.match(styles, /\.file-path-copy \{/);
   assert.match(styles, /\.chat-output-chip-wrap \{/);
   assert.match(styles, /\.unavailable-file-path \{/);

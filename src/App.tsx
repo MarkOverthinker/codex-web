@@ -16,7 +16,7 @@ import {
   buildDirectoryAssignments, buildHiddenCategoryInfos, buildTaskCategoryBodyState, buildTaskCategoryViews, countRunningConversations, customCategoryKey, EMPTY_TASK_LIST_CATEGORY_SETTINGS,
   DEFAULT_TASK_CATEGORY_VISIBLE_COUNT, normalizeTaskCategoryVisibleCount, pathLabel, type DirectoryCategoryAssignment, type TaskListCategorySettings, type TaskListCategoryView,
 } from "./task-categories";
-import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderPreviewedFiles, resolveMessageFileLink } from "./file-links";
+import { canPreviewInline, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderMarkdownFilesFirst, orderPreviewedFiles, resolveMessageFileLink } from "./file-links";
 import { parseCodexSnippetUrl, parseFileRef, parseSnippetHref, type FileLineRef } from "./code-snippet";
 import { CopyPathButton, copyText } from "./copy-path";
 import { CodeSnippetPane } from "./code-snippet-pane";
@@ -3300,7 +3300,7 @@ const MessageCard = memo(function MessageCard({ message, userInitials, chatFontS
             : null}
         {message.content && <p data-agent-selectable="true">{message.content}</p>}
       </>}
-      {message.files.length > 0 && <div className="file-grid">{message.files.map((file) => <FileCard key={file.id} file={file} onPreview={onPreview} />)}</div>}
+      {message.files.length > 0 && <MessageFiles files={message.files} collapseLargeLists={message.role === "assistant"} onPreview={onPreview} />}
     </div>
   </article>;
 });
@@ -3411,7 +3411,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
     onPreview(file);
   }, [onPreview]);
   const orderedOutputFiles = useMemo(
-    () => orderPreviewedFiles(detail.outputFiles, previewedOutputFileIds),
+    () => orderPreviewedFiles(orderMarkdownFilesFirst(detail.outputFiles), previewedOutputFileIds),
     [detail.outputFiles, previewedOutputFileIds],
   );
 
@@ -3659,6 +3659,24 @@ function OutputFilesPanel({ files, onPreview }: { files: WorkFile[]; onPreview: 
       })}
     </div>}
   </section>;
+}
+
+const COLLAPSED_MESSAGE_FILE_COUNT = 3;
+
+function MessageFiles({ files, collapseLargeLists, onPreview }: { files: WorkFile[]; collapseLargeLists: boolean; onPreview: (file: WorkFile) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const orderedFiles = collapseLargeLists ? orderMarkdownFilesFirst(files) : files;
+  const canCollapse = collapseLargeLists && orderedFiles.length > COLLAPSED_MESSAGE_FILE_COUNT;
+  const visibleFiles = canCollapse && !expanded ? orderedFiles.slice(0, COLLAPSED_MESSAGE_FILE_COUNT) : orderedFiles;
+  return <div className={`message-files ${expanded ? "expanded" : "collapsed"}`}>
+    <div className="file-grid">
+      {visibleFiles.map((file) => <FileCard key={file.id} file={file} onPreview={onPreview} />)}
+    </div>
+    {canCollapse && <button type="button" className="message-files-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
+      {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      <span>{expanded ? `收起，只显示前 ${COLLAPSED_MESSAGE_FILE_COUNT} 个` : `展开其余 ${orderedFiles.length - COLLAPSED_MESSAGE_FILE_COUNT} 个文件`}</span>
+    </button>}
+  </div>;
 }
 
 function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkFile) => void }) {

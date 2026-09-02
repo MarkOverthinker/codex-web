@@ -53,7 +53,9 @@ chat threads stay cheap to scroll on slower devices. Assistant replies stay
 fully laid out: their real height can be far larger than the 320px off-screen
 placeholder, and reserving less than the real height collapses `scrollHeight`
 and makes the browser clamp the viewport back to an earlier message while
-scrolling toward the top of a reply.
+scrolling toward the top of a reply. Assistant file lists use a stable
+Markdown-first partition and render only the first three cards until explicitly
+expanded, which bounds the default height of turns with many deliverables.
 
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;

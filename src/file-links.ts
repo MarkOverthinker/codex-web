@@ -79,6 +79,13 @@ function isMarkdownFile(file: Pick<WorkFile, "mime_type" | "original_name" | "re
     || /\.(?:md|markdown)$/i.test(file.relative_path ?? "");
 }
 
+export function orderMarkdownFilesFirst(files: readonly WorkFile[]): WorkFile[] {
+  return [
+    ...files.filter((file) => isMarkdownFile(file)),
+    ...files.filter((file) => !isMarkdownFile(file)),
+  ];
+}
+
 export function canPreviewInline(file: WorkFile): boolean {
   const kind = filePreviewKind(file);
   if (!kind) return false;
