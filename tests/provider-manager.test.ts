@@ -243,7 +243,9 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
     { effort: "high", description: "Extra high reasoning depth for complex problems" },
   ]);
   assert.equal(catalog.models[0].shell_type, "shell_command");
-  assert.equal(catalog.models[0].context_window, 1_048_576, "bundled DeepSeek template is used");
+  assert.equal(catalog.models[0].context_window, 1_000_000, "database context setting overrides the template");
+  assert.equal(catalog.models[0].max_context_window, 1_000_000);
+  assert.equal(catalog.models[0].auto_compact_token_limit, 900_000);
   assert.ok(String(catalog.models[0].base_instructions).length > 1_000, "complete bundled instructions are preserved");
   db.close();
 });
@@ -327,7 +329,8 @@ test("aggregated catalog carries Codex-required fields even when templates omit 
   assert.deepEqual(catalog.models[0].truncation_policy, { mode: "bytes", limit: 10_000 });
   assert.equal(catalog.models[0].supports_parallel_tool_calls, false);
   assert.deepEqual(catalog.models[0].experimental_supported_tools, []);
-  assert.equal(catalog.models[0].context_window, 272_000);
+  assert.equal(catalog.models[0].context_window, 1_000_000);
+  assert.equal(catalog.models[0].max_context_window, 1_000_000);
   const reasoningLevels = catalog.models[0].supported_reasoning_levels as Array<Record<string, unknown>>;
   assert.deepEqual(reasoningLevels, [{ effort: "high", description: "Deeper reasoning for complex tasks" }]);
   db.close();
@@ -347,6 +350,8 @@ test("aggregated catalog matches bundled model templates by longest upstream pre
     slug: "gpt-5.6-sol-custom",
     displayName: "Custom Sol",
     reasoningEfforts: ["low", "high"],
+    modelContextWindow: 128_000,
+    autoCompactTokenLimit: 115_200,
   });
   writeProviderConfig(codexHome, db, LEGACY_USER_ID);
   const catalog = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8")) as { models: Array<Record<string, unknown>> };
@@ -356,7 +361,9 @@ test("aggregated catalog matches bundled model templates by longest upstream pre
   assert.equal(catalog.models[0].support_verbosity, true);
   assert.deepEqual(catalog.models[0].truncation_policy, { mode: "tokens", limit: 10_000 });
   assert.equal(catalog.models[0].supports_parallel_tool_calls, true);
-  assert.equal(catalog.models[0].context_window, 272_000);
+  assert.equal(catalog.models[0].context_window, 128_000);
+  assert.equal(catalog.models[0].max_context_window, 128_000);
+  assert.equal(catalog.models[0].auto_compact_token_limit, 115_200);
   assert.equal(catalog.models[0].tool_mode, "code_mode_only");
   db.close();
 });

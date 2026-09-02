@@ -42,7 +42,7 @@ Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SS
 每个源可以指定一个 codex-home 内的 JSON 文件作为模型目录（如 `models.json`、`sssaicodeapi-models.json`）。该文件必须是 `{ "models": [...] }` 结构，条目字段与 Codex 目录一致。导入时：
 
 - 只导入 `input_modalities` 含 `text` 的条目；
-- 克隆模板条目的扩展字段（如 `context_window`）到聚合目录；
+- 克隆模板条目的扩展字段到聚合目录；模型上下文窗口、最大上下文窗口、自动压缩阈值始终以数据库中的模型设置为准；
 - 模型 slug 在当前用户的聚合目录内唯一：第一个使用上游模型名的保留原名，后续同名模型自动加源前缀别名（如 `proxy-gpt-5.6-sol`）。
 
 前端和数据库保存当前用户目录内唯一的别名；真正启动任务时，服务端会按所选源把别名反解为原始 `model_id` 再传给上游。例如选择 `sssaicodeapi-gpt-5.4-mini` 时，上游收到的是 `gpt-5.4-mini`。

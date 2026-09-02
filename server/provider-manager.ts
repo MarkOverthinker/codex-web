@@ -324,6 +324,8 @@ function buildCatalogEntry(
 ): Record<string, unknown> {
   const displayName = String(model.display_name || model.model_id);
   const description = String(model.description || `${model.provider_id} 提供的模型`);
+  const modelContextWindow = model.model_context_window ?? DEFAULT_MODEL_CONTEXT_WINDOW;
+  const autoCompactTokenLimit = model.auto_compact_token_limit ?? DEFAULT_AUTO_COMPACT_TOKEN_LIMIT;
   const entry: Record<string, unknown> = {
     ...cloneTemplateFields(template),
     slug: model.slug,
@@ -333,6 +335,11 @@ function buildCatalogEntry(
     priority: model.priority,
     input_modalities: parseStringArray(model.input_modalities, ["text", "image"]),
     supported_reasoning_levels: reasoningLevels(model, template),
+    // The provider database is the source of truth for limits. Template
+    // values describe model capabilities but must not override user settings.
+    context_window: modelContextWindow,
+    max_context_window: modelContextWindow,
+    auto_compact_token_limit: autoCompactTokenLimit,
   };
   if (autoReviewModelOverride) entry.auto_review_model_override = autoReviewModelOverride;
   return entry;
