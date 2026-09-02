@@ -645,6 +645,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setConversations((current) => [conversation, ...current.filter((item) => item.id !== conversation.id)]);
   }
 
+  const promoteSideChat = useCallback((conversation: Conversation) => {
+    setSideChatOpen(false);
+    setSideChatReferenceRequest(null);
+    setSideChatForkRequest(null);
+    showConversationInList(conversation);
+    setSelectedId(conversation.id);
+    setNotice("侧边对话已转为主任务，并已加入任务列表。");
+    void refreshList().catch(() => undefined);
+  }, [refreshList]);
+
   const refreshTaskCategories = useCallback(async () => {
     const result = await api.taskCategories(); setTaskCategorySettings(result.settings); return result.settings;
   }, []);
@@ -3098,6 +3108,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       forkRequest={sideChatForkRequest}
       onForkHandled={(requestId) => setSideChatForkRequest((current) => current?.id === requestId ? null : current)}
       onReferenceHandled={(requestId) => setSideChatReferenceRequest((current) => current?.id === requestId ? null : current)}
+      onPromoted={promoteSideChat}
       onClose={() => { setSideChatOpen(false); setSideChatReferenceRequest(null); setSideChatForkRequest(null); }}
       onError={setError}
       onOpenSourceReference={openSourceReference}
