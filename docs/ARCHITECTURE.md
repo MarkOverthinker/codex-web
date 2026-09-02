@@ -56,6 +56,9 @@ and makes the browser clamp the viewport back to an earlier message while
 scrolling toward the top of a reply. Assistant file lists use a stable
 Markdown-first partition and render only the first three cards until explicitly
 expanded, which bounds the default height of turns with many deliverables.
+Expanded lists render in batches of 24 and use browser content visibility and
+intrinsic size containment for cards, so opening a large result set does not
+create or paint every file at once.
 
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
