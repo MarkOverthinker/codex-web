@@ -1574,6 +1574,8 @@ test("output files are maintained in conversation details and preview on demand"
   assert.match(appSource, /function OutputFilesPanel/);
   assert.match(appSource, /function MessageFiles/);
   assert.match(appSource, /const COLLAPSED_MESSAGE_FILE_COUNT = 3/);
+  assert.match(appSource, /const FILE_RENDER_BATCH_SIZE = 24/);
+  assert.match(appSource, /继续显示其余/);
   assert.match(appSource, /collapseLargeLists=\{message\.role === "assistant"\}/);
   assert.match(appSource, /orderMarkdownFilesFirst\(files\)/);
   assert.match(appSource, /展开其余/);
@@ -1595,6 +1597,9 @@ test("output files are maintained in conversation details and preview on demand"
   assert.match(styles, /\.file-preview-pane \{[^}]*border-left:/);
   assert.match(styles, /\.chat-outputs \{/);
   assert.match(styles, /\.message-files-toggle \{/);
+  assert.match(styles, /\.message-files-more, \.chat-outputs-more \{/);
+  assert.match(styles, /\.file-grid > \.file-card \{ content-visibility: auto/);
+  assert.match(styles, /\.chat-output-chip-wrap \{[^}]*content-visibility: auto/);
   assert.match(styles, /\.file-path-copy \{/);
   assert.match(styles, /\.chat-output-chip-wrap \{/);
   assert.match(styles, /\.unavailable-file-path \{/);

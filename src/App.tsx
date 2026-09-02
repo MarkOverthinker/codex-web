@@ -3635,10 +3635,18 @@ function formatActivityTime(value: string): string {
 
 function OutputFilesPanel({ files, onPreview }: { files: WorkFile[]; onPreview: (file: WorkFile) => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(FILE_RENDER_BATCH_SIZE);
   if (files.length === 0) return null;
   const previewableCount = files.filter((file) => canPreviewInline(file)).length;
+  const visibleFiles = expanded ? files.slice(0, visibleCount) : [];
+  const remainingCount = Math.max(0, files.length - visibleFiles.length);
   return <section className={`chat-outputs ${expanded ? "expanded" : ""}`} aria-label="输出文件">
-    <button type="button" className="chat-outputs-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
+    <button type="button" className="chat-outputs-toggle" aria-expanded={expanded} onClick={() => {
+      setExpanded((current) => {
+        if (!current) setVisibleCount(FILE_RENDER_BATCH_SIZE);
+        return !current;
+      });
+    }}>
       <span className="chat-outputs-toggle-copy">
         <span className="chat-outputs-heading"><FolderOpen size={13} /><strong>输出文件</strong></span>
         <small>{files.length} 个文件{previewableCount > 0 ? ` · ${previewableCount} 个可预览` : ""}</small>
@@ -3646,7 +3654,7 @@ function OutputFilesPanel({ files, onPreview }: { files: WorkFile[]; onPreview: 
       <ChevronDown size={15} className="chat-outputs-toggle-icon" />
     </button>
     {expanded && <div className="chat-outputs-list" role="list">
-      {files.map((file) => {
+      {visibleFiles.map((file) => {
         const path = file.host_path ?? file.relative_path;
         const kind = filePreviewKind(file);
         const chipContent = <>{kind === "image" ? <FileImage size={13} /> : <FileText size={13} />}<span>{file.original_name}</span><small>{formatSize(file.size)}</small></>;
@@ -3657,29 +3665,41 @@ function OutputFilesPanel({ files, onPreview }: { files: WorkFile[]; onPreview: 
           <CopyPathButton value={path} className="chat-output-chip-copy" />
         </span>;
       })}
+      {remainingCount > 0 && <button type="button" className="chat-outputs-more" onClick={() => setVisibleCount((current) => Math.min(files.length, current + FILE_RENDER_BATCH_SIZE))}>继续显示其余 {remainingCount} 个文件</button>}
     </div>}
   </section>;
 }
 
 const COLLAPSED_MESSAGE_FILE_COUNT = 3;
+const FILE_RENDER_BATCH_SIZE = 24;
 
 function MessageFiles({ files, collapseLargeLists, onPreview }: { files: WorkFile[]; collapseLargeLists: boolean; onPreview: (file: WorkFile) => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(FILE_RENDER_BATCH_SIZE);
   const orderedFiles = collapseLargeLists ? orderMarkdownFilesFirst(files) : files;
   const canCollapse = collapseLargeLists && orderedFiles.length > COLLAPSED_MESSAGE_FILE_COUNT;
-  const visibleFiles = canCollapse && !expanded ? orderedFiles.slice(0, COLLAPSED_MESSAGE_FILE_COUNT) : orderedFiles;
+  const visibleFiles = canCollapse
+    ? orderedFiles.slice(0, expanded ? visibleCount : COLLAPSED_MESSAGE_FILE_COUNT)
+    : orderedFiles;
+  const remainingCount = Math.max(0, orderedFiles.length - visibleFiles.length);
   return <div className={`message-files ${expanded ? "expanded" : "collapsed"}`}>
     <div className="file-grid">
       {visibleFiles.map((file) => <FileCard key={file.id} file={file} onPreview={onPreview} />)}
     </div>
-    {canCollapse && <button type="button" className="message-files-toggle" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
+    {canCollapse && remainingCount > 0 && expanded && <button type="button" className="message-files-more" onClick={() => setVisibleCount((current) => Math.min(orderedFiles.length, current + FILE_RENDER_BATCH_SIZE))}>继续显示其余 {remainingCount} 个文件</button>}
+    {canCollapse && <button type="button" className="message-files-toggle" aria-expanded={expanded} onClick={() => {
+      setExpanded((current) => {
+        if (!current) setVisibleCount(FILE_RENDER_BATCH_SIZE);
+        return !current;
+      });
+    }}>
       {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
       <span>{expanded ? `收起，只显示前 ${COLLAPSED_MESSAGE_FILE_COUNT} 个` : `展开其余 ${orderedFiles.length - COLLAPSED_MESSAGE_FILE_COUNT} 个文件`}</span>
     </button>}
   </div>;
 }
 
-function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkFile) => void }) {
+const FileCard = memo(function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkFile) => void }) {
   const kind = filePreviewKind(file);
   const previewable = canPreviewInline(file);
   const icon = kind === "image" ? <FileImage size={20} /> : kind ? <FileText size={20} /> : <FileIcon size={20} />;
@@ -3693,7 +3713,7 @@ function FileCard({ file, onPreview }: { file: WorkFile; onPreview: (file: WorkF
     <CopyPathButton value={path} className="file-path-copy" />
     <a className="download-button" href={fileUrl(file, true)} download={file.original_name} title="下载"><Download size={16} /></a>
   </div>;
-}
+});
 
 function FilePreviewPane({ file, width, onResizeStart, onResizeKeyDown, onClose }: {
   file: WorkFile;
