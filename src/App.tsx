@@ -129,6 +129,14 @@ function conversationListEqual(left: readonly Conversation[], right: readonly Co
   return true;
 }
 
+export function orderConversationsByUpdatedAt(conversations: readonly Conversation[]): Conversation[] {
+  return [...conversations].sort((left, right) =>
+    right.updated_at.localeCompare(left.updated_at)
+      || right.created_at.localeCompare(left.created_at)
+      || left.id.localeCompare(right.id),
+  );
+}
+
 function composerDraftSignature(content: string, quoteExcerpt: string, sourceReference: MessageSourceReference | null = null): string {
   return `${content}\u0000${quoteExcerpt}\u0000${sourceReference ? JSON.stringify(sourceReference) : ""}`;
 }
@@ -644,7 +652,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const syncConversation = useCallback((conversation: Conversation) => {
     setConversations((current) => {
       const next = current.map((item) => item.id === conversation.id ? conversation : item);
-      return conversationListEqual(current, next) ? current : next;
+      const ordered = orderConversationsByUpdatedAt(next);
+      return conversationListEqual(current, ordered) ? current : ordered;
     });
     setDetail((current) => {
       if (current?.conversation.id !== conversation.id) return current;
