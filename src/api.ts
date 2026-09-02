@@ -200,7 +200,7 @@ export type BillingState = {
   from: string;
   summary: { calls: number; inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number; outputTokens: number; reasoningOutputTokens: number; cacheHitRate: number; estimatedCost: number; currency: string; unpricedCalls: number };
   byProvider: Array<{ providerId: string; providerName: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
-  byModel: Array<{ providerId: string; providerName: string; modelId: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; estimatedCost: number | null; currency: string }>;
+  byModel: Array<{ providerId: string; providerName: string; modelId: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
   rules: BillingPricingRule[];
   models: BillingModel[];
 };

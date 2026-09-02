@@ -47,6 +47,7 @@ export type BillingState = {
     inputTokens: number;
     cachedInputTokens: number;
     outputTokens: number;
+    cacheHitRate: number;
     estimatedCost: number | null;
     currency: string;
   }>;
@@ -168,6 +169,7 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
     return {
       providerId, providerName: providerName(providerId, providers), modelId,
       calls: usage.calls, inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens,
+      cacheHitRate: cacheHitRate(usage),
       estimatedCost: groupCosts.every((cost) => cost.priced) ? groupCosts.reduce((sum, cost) => sum + (cost.amount ?? 0), 0) : null,
       currency: groupCosts.find((cost) => cost.priced)?.currency ?? "USD",
     };
