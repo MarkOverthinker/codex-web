@@ -47,7 +47,7 @@ import { formatElapsed, taskElapsedSeconds } from "../src/task-timing.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES, buildOptionalCapabilityConfig, detectOptionalAgentCapabilities } from "../server/optional-capabilities.js";
 import { USER_CANCELLED_TASK_MARKER, latestUserCancellationContext } from "../server/cancellation-summary.js";
 import { formatRolloutBytes, ROLLOUT_WARNING_BYTES, shouldWarnAboutRollout } from "../src/rollout-capacity.js";
-import { readLocalStorageValue, removeLocalStorageValue, writeLocalStorageValue } from "../src/App.js";
+import { orderConversationsByUpdatedAt, readLocalStorageValue, removeLocalStorageValue, writeLocalStorageValue } from "../src/App.js";
 
 // A developer .env (loaded by server/config.ts) must not leak deployment mode
 // flags into the suite; the tests control these through createApp overrides.
@@ -62,6 +62,16 @@ test("user-visible branding uses Codex Web without the private product name", ()
   assert.doesNotMatch(`${index}\n${appSource}`, /PP Agent/i);
   assert.doesNotMatch(appSource, /localStorage\.setItem\([^)]*codex-web:(?:model|reasoning)/);
   assert.equal(redactBrandForDisplay("Codex / CHATGPT / agent"), "Codex / Codex Web / agent");
+});
+
+test("single conversation updates restore newest-first list order", () => {
+  const conversations = [
+    { id: "older", updated_at: "2026-09-02T10:00:00.000Z", created_at: "2026-09-02T09:00:00.000Z" },
+    { id: "newer", updated_at: "2026-09-02T11:00:00.000Z", created_at: "2026-09-02T10:00:00.000Z" },
+  ] as Conversation[];
+  assert.deepEqual(orderConversationsByUpdatedAt(conversations).map((item) => item.id), ["newer", "older"]);
+  const refreshed = { ...conversations[0], updated_at: "2026-09-02T12:00:00.000Z" };
+  assert.deepEqual(orderConversationsByUpdatedAt([refreshed, conversations[1]]).map((item) => item.id), ["older", "newer"]);
 });
 
 test("missing frontend bundle serves a clear maintenance page instead of Cannot GET", async (context) => {
@@ -1572,6 +1582,8 @@ test("output files are maintained in conversation details and preview on demand"
   assert.match(serverSource, /host_path:/);
   assert.match(appSource, /className=\{`chat-outputs \$\{expanded \? "expanded" : ""\}`\}/);
   assert.match(appSource, /function OutputFilesPanel/);
+  assert.match(appSource, /function orderConversationsByUpdatedAt/);
+  assert.match(appSource, /const ordered = orderConversationsByUpdatedAt\(next\)/);
   assert.match(appSource, /function MessageFiles/);
   assert.match(appSource, /const COLLAPSED_MESSAGE_FILE_COUNT = 3/);
   assert.match(appSource, /const FILE_RENDER_BATCH_SIZE = 24/);
