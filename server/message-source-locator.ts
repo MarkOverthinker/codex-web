@@ -19,6 +19,22 @@ type JsonlLine = {
   byteOffset: number;
 };
 
+function structuredAnswer(value: string): string | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    return typeof record.answer === "string" && typeof record.title === "string" ? record.answer : null;
+  } catch {
+    return null;
+  }
+}
+
+function messageContentVariants(value: string): string[] {
+  const answer = structuredAnswer(value);
+  return answer && answer !== value ? [value, answer] : [value];
+}
+
 async function* readJsonlLines(filePath: string): AsyncGenerator<JsonlLine> {
   let fragments: Buffer[] = [];
   let fragmentBytes = 0;
@@ -87,11 +103,11 @@ function messageCandidates(
     const key = eventType === "task_complete" ? "last_agent_message" : "message";
     const content = role && typeof payload[key] === "string" ? payload[key] as string : "";
     if (!role || !content) return [];
-    return [{
-      kind: "codex-rollout", threadId, path: relativePath, line, byteOffset,
-      recordType: "event_msg", jsonPointer: `/payload/${key}`, itemId: null,
-      textStart: 0, textEnd: content.length, role, content, timestamp, preferred: false,
-    }];
+    return messageContentVariants(content).map((candidateContent) => ({
+      kind: "codex-rollout" as const, threadId, path: relativePath, line, byteOffset,
+      recordType: "event_msg" as const, jsonPointer: `/payload/${key}`, itemId: null,
+      textStart: 0, textEnd: candidateContent.length, role, content: candidateContent, timestamp, preferred: false,
+    }));
   }
   if (recordType !== "response_item" || payload.type !== "message") return [];
   const role = payload.role === "user" || payload.role === "assistant" ? payload.role : null;
@@ -101,11 +117,11 @@ function messageCandidates(
     if (!part || typeof part !== "object" || Array.isArray(part)) return [];
     const text = (part as Record<string, unknown>).text;
     if (typeof text !== "string" || !text) return [];
-    return [{
+    return messageContentVariants(text).map((candidateContent) => ({
       kind: "codex-rollout" as const, threadId, path: relativePath, line, byteOffset,
       recordType: "response_item" as const, jsonPointer: `/payload/content/${index}/text`, itemId,
-      textStart: 0, textEnd: text.length, role, content: text, timestamp, preferred: true,
-    }];
+      textStart: 0, textEnd: candidateContent.length, role, content: candidateContent, timestamp, preferred: true,
+    }));
   });
 }
 
