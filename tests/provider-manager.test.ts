@@ -521,3 +521,26 @@ test("model context settings default and support per-model overrides", () => {
   });
   db.close();
 });
+
+test("database migration upgrades the old fixed model context pair", () => {
+  const root = tempRoot();
+  const db = testDb(root);
+  db.createProvider({ userId: LEGACY_USER_ID, id: "proxy", name: "Proxy", baseUrl: "https://proxy.example.com/v1" });
+  db.createProviderModel({
+    userId: LEGACY_USER_ID,
+    id: "legacy",
+    providerId: "proxy",
+    modelId: "legacy-model",
+    slug: "legacy-model",
+    displayName: "Legacy",
+    modelContextWindow: 272_000,
+    autoCompactTokenLimit: 250_000,
+  });
+  db.close();
+
+  const reopened = testDb(root);
+  const model = reopened.getProviderModel(LEGACY_USER_ID, "legacy");
+  assert.equal(model?.model_context_window, 1_000_000);
+  assert.equal(model?.auto_compact_token_limit, 900_000);
+  reopened.close();
+});
