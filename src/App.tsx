@@ -3400,7 +3400,7 @@ function formatContextTokens(value: number): string {
 function ContextUsageBadge({ usage }: { usage: ConversationDetail["contextUsage"] }) {
   if (!usage) return <span className="context-usage-badge context-usage-empty" title="尚未收到 Codex 的上下文状态">上下文暂无</span>;
   const percent = usage.contextWindow ? Math.min(100, Math.max(0, usage.usedTokens / usage.contextWindow * 100)) : null;
-  return <span className="context-usage-badge" title={`最近更新：${usage.updatedAt ? formatFullDateTime(usage.updatedAt) : "未知"}`}>
+  return <span className="context-usage-badge" title={`按本任务自动压缩阈值计算；最近更新：${usage.updatedAt ? formatFullDateTime(usage.updatedAt) : "未知"}`}>
     <span>上下文</span><strong>{formatContextTokens(usage.usedTokens)}{usage.contextWindow ? ` / ${formatContextTokens(usage.contextWindow)}` : ""}</strong>{percent !== null && <em>{percent.toFixed(1)}%</em>}
   </span>;
 }

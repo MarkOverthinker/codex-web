@@ -179,6 +179,7 @@ input.on("line", (line) => {
 
   const controller = new AbortController();
   let usage: TokenUsage | undefined;
+  let contextUsage: { usedTokens: number; contextWindow: number | null } | undefined;
   const execution = startAppServerTurn({
     executablePath: executable,
     cwd: workspace,
@@ -188,6 +189,7 @@ input.on("line", (line) => {
     imagePaths: [],
     model: "test-model",
     reasoningEffort: "medium",
+    autoCompactTokenLimit: 115_200,
     sandboxMode: "workspace-write",
     library,
     shellEnvironment: {},
@@ -199,6 +201,7 @@ input.on("line", (line) => {
     onThreadStarted: () => undefined,
     onProgress: () => undefined,
     onUsage: (value) => { usage = value; },
+    onContextUsage: (value) => { contextUsage = value; },
   });
 
   assert.equal(await withTimeout(execution.result), "");
@@ -209,6 +212,7 @@ input.on("line", (line) => {
     output_tokens: 55,
     reasoning_output_tokens: 7,
   });
+  assert.deepEqual(contextUsage, { usedTokens: 75, contextWindow: 115_200 });
 });
 
 test("app-server forks a thread before the edited turn and reports the new turn", async (context) => {
