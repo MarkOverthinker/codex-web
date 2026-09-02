@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { ApiUsageRow, AppDatabase, PricingRuleRow, ProviderModelRow, ProviderRow } from "./db.js";
+import type { ApiUsageRow, AppDatabase, PricingRuleHistoryRow, PricingRuleRow, ProviderModelRow, ProviderRow } from "./db.js";
 
 export const BUILTIN_PROVIDER_ID = "__builtin__";
 
@@ -122,6 +122,17 @@ function calculateCost(row: ApiUsageRow, rule: PricingRuleRow | undefined): Bill
   return { amount, currency: rule.currency, priced: true };
 }
 
+function pricingRuleForUsage(row: ApiUsageRow, current: PricingRuleRow | undefined, history: PricingRuleHistoryRow[]): PricingRuleRow | undefined {
+  if (!current) return undefined;
+  const usageTime = Date.parse(row.created_at);
+  const currentTime = Date.parse(current.updated_at);
+  if (!Number.isFinite(usageTime) || !Number.isFinite(currentTime) || usageTime >= currentTime) return current;
+  const previous = history
+    .filter((version) => version.provider_id === row.provider_id && version.model_id === row.model_id)
+    .find((version) => usageTime >= Date.parse(version.effective_from) && usageTime < Date.parse(version.effective_to));
+  return previous ? { ...previous, updated_at: previous.effective_from } : current;
+}
+
 function cacheHitRate(usage: TokenUsage): number {
   return usage.input_tokens > 0 ? usage.cached_input_tokens / usage.input_tokens : 0;
 }
@@ -141,8 +152,10 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
   const providers = db.listProviders(userId);
   const models = db.listProviderModels(userId);
   const rules = db.listPricingRules(userId);
+  const ruleHistory = db.listPricingRuleHistory(userId);
   const ruleMap = new Map(rules.map((rule) => [`${rule.provider_id}:${rule.model_id}`, rule]));
-  const costs = rows.map((row) => calculateCost(row, ruleMap.get(`${row.provider_id}:${row.model_id}`)));
+  const ruleForUsage = (row: ApiUsageRow) => pricingRuleForUsage(row, ruleMap.get(`${row.provider_id}:${row.model_id}`), ruleHistory);
+  const costs = rows.map((row) => calculateCost(row, ruleForUsage(row)));
   const total = sumUsage(rows);
   const pricedCosts = costs.filter((cost) => cost.priced);
   const currencies = new Set(pricedCosts.map((cost) => cost.currency));
@@ -154,7 +167,7 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
   };
   const byProvider = [...groups((row) => row.provider_id)].map(([providerId, group]) => {
     const usage = sumUsage(group);
-    const groupCosts = group.map((row) => calculateCost(row, ruleMap.get(`${row.provider_id}:${row.model_id}`)));
+    const groupCosts = group.map((row) => calculateCost(row, ruleForUsage(row)));
     return {
       providerId, providerName: providerName(providerId, providers), calls: usage.calls,
       inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens,
@@ -165,7 +178,7 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
   const byModel = [...groups((row) => `${row.provider_id}:${row.model_id}`)].map(([key, group]) => {
     const [providerId, modelId] = key.split(":");
     const usage = sumUsage(group);
-    const groupCosts = group.map((row) => calculateCost(row, ruleMap.get(`${row.provider_id}:${row.model_id}`)));
+    const groupCosts = group.map((row) => calculateCost(row, ruleForUsage(row)));
     return {
       providerId, providerName: providerName(providerId, providers), modelId,
       calls: usage.calls, inputTokens: usage.input_tokens, cachedInputTokens: usage.cached_input_tokens, outputTokens: usage.output_tokens,

@@ -1158,8 +1158,16 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json(buildBillingState(db, session.user_id, Number(req.query.days) || 30));
   });
 
+  api.post("/billing/recalculate", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    db.clearPricingRuleHistory(session.user_id);
+    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
+    return res.json(buildBillingState(db, session.user_id, rawDays));
+  });
+
   api.post("/billing/sync-pricing", async (req, res) => {
     const session = res.locals.session as SessionRow;
+    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
     const results: Array<{ providerId: string; imported: number; error?: string }> = [];
     for (const provider of db.listProviders(session.user_id).filter((candidate) => candidate.enabled)) {
       try {
@@ -1169,16 +1177,17 @@ export function createApp(overrides: AppOverrides = {}) {
         results.push({ providerId: provider.id, imported: 0, error: error instanceof Error ? error.message : "同步失败" });
       }
     }
-    return res.json({ results, imported: results.reduce((sum, result) => sum + result.imported, 0), billing: buildBillingState(db, session.user_id) });
+    return res.json({ results, imported: results.reduce((sum, result) => sum + result.imported, 0), billing: buildBillingState(db, session.user_id, rawDays) });
   });
 
   api.post("/billing/providers/:id/sync-pricing", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const provider = db.getProvider(session.user_id, String(req.params.id));
     if (!provider) return res.status(404).json({ error: "API 源不存在。" });
+    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
     try {
       const result = await syncProviderPricing(db, session.user_id, provider, typeof req.body?.pricingUrl === "string" ? req.body.pricingUrl : undefined);
-      return res.json({ ...result, billing: buildBillingState(db, session.user_id) });
+      return res.json({ ...result, billing: buildBillingState(db, session.user_id, rawDays) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "同步计费标准失败。" });
     }

@@ -338,11 +338,12 @@ export const api = {
   ),
   providers: () => request<ProviderState>("/providers"),
   billing: (days = 30) => request<BillingState>(`/billing?days=${days}`),
-  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cacheReadPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string; peakEnabled?: boolean; peakInputPerMillion?: number; peakCacheReadPerMillion?: number; peakCacheWritePerMillion?: number; peakOutputPerMillion?: number; peakStart?: string; peakEnd?: string; peakWeekdays?: number[]; timezone?: string }) =>
-    request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { method: "PUT", body: JSON.stringify(payload) }),
-  syncBillingPricing: (providerId?: string, pricingUrl?: string) => providerId
-    ? request<{ imported: number; url: string; billing: BillingState }>(`/billing/providers/${encodeURIComponent(providerId)}/sync-pricing`, { method: "POST", body: JSON.stringify({ pricingUrl }) })
-    : request<{ imported: number; results: Array<{ providerId: string; imported: number; error?: string }>; billing: BillingState }>("/billing/sync-pricing", { method: "POST", body: JSON.stringify({}) }),
+  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cacheReadPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string; peakEnabled?: boolean; peakInputPerMillion?: number; peakCacheReadPerMillion?: number; peakCacheWritePerMillion?: number; peakOutputPerMillion?: number; peakStart?: string; peakEnd?: string; peakWeekdays?: number[]; timezone?: string }, days = 30) =>
+    request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}?days=${days}`, { method: "PUT", body: JSON.stringify(payload) }),
+  recalculateBilling: (days = 30) => request<BillingState>(`/billing/recalculate?days=${days}`, { method: "POST", body: JSON.stringify({}) }),
+  syncBillingPricing: (providerId?: string, pricingUrl?: string, days = 30) => providerId
+    ? request<{ imported: number; url: string; billing: BillingState }>(`/billing/providers/${encodeURIComponent(providerId)}/sync-pricing?days=${days}`, { method: "POST", body: JSON.stringify({ pricingUrl }) })
+    : request<{ imported: number; results: Array<{ providerId: string; imported: number; error?: string }>; billing: BillingState }>(`/billing/sync-pricing?days=${days}`, { method: "POST", body: JSON.stringify({}) }),
   createProvider: (payload: { name: string; baseUrl: string; apiKey?: string; modelsFile?: string; autoReviewModelOverride?: string | null; wireApi?: Provider["wireApi"]; requiresOpenaiAuth?: boolean; enabled?: boolean }) =>
     request<{ provider: Provider }>("/providers", { method: "POST", body: JSON.stringify(payload) }),
   updateProvider: (id: string, payload: Partial<Omit<Provider, "id" | "createdAt" | "updatedAt" | "hasApiKey" | "apiKeyHint" | "extraConfig">> & { apiKey?: string | null }) =>

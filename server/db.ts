@@ -195,6 +195,12 @@ export type PricingRuleRow = {
   updated_at: string;
 };
 
+export type PricingRuleHistoryRow = Omit<PricingRuleRow, "updated_at"> & {
+  id: number;
+  effective_from: string;
+  effective_to: string;
+};
+
 export type StoredAgentSelection = {
   model: string;
   reasoningEffort: string;
@@ -539,6 +545,31 @@ export class AppDatabase {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(user_id, provider_id, model_id)
       );
+      CREATE TABLE IF NOT EXISTS pricing_rule_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        input_per_million REAL NOT NULL,
+        cached_input_per_million REAL NOT NULL,
+        cache_write_per_million REAL NOT NULL,
+        output_per_million REAL NOT NULL,
+        currency TEXT NOT NULL,
+        source TEXT NOT NULL,
+        pricing_url TEXT,
+        peak_enabled INTEGER NOT NULL DEFAULT 0,
+        peak_input_per_million REAL,
+        peak_cached_input_per_million REAL,
+        peak_cache_write_per_million REAL,
+        peak_output_per_million REAL,
+        peak_start_minute INTEGER,
+        peak_end_minute INTEGER,
+        peak_weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5',
+        timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+        effective_from TEXT NOT NULL,
+        effective_to TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS pricing_rule_history_lookup_idx ON pricing_rule_history(user_id, provider_id, model_id, effective_from, effective_to);
     `);
 
     const conversationColumns = this.columnNames("conversations");
@@ -1885,6 +1916,14 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT * FROM pricing_rules WHERE user_id=? ORDER BY provider_id,model_id").all(userId) as PricingRuleRow[];
   }
 
+  listPricingRuleHistory(userId: string): PricingRuleHistoryRow[] {
+    return this.sqlite.prepare("SELECT * FROM pricing_rule_history WHERE user_id=? ORDER BY effective_from DESC,id DESC").all(userId) as PricingRuleHistoryRow[];
+  }
+
+  clearPricingRuleHistory(userId: string): number {
+    return Number(this.sqlite.prepare("DELETE FROM pricing_rule_history WHERE user_id=?").run(userId).changes);
+  }
+
   getPricingRule(userId: string, providerId: string, modelId: string): PricingRuleRow | undefined {
     return this.sqlite.prepare("SELECT * FROM pricing_rules WHERE user_id=? AND provider_id=? AND model_id=?").get(userId, providerId, modelId) as PricingRuleRow | undefined;
   }
@@ -1903,6 +1942,49 @@ export class AppDatabase {
   }): PricingRuleRow {
     const updatedAt = input.updated_at ?? new Date().toISOString();
     const existing = this.getPricingRule(input.user_id, input.provider_id, input.model_id);
+    const next = {
+      inputPerMillion: input.input_per_million,
+      cachedInputPerMillion: input.cached_input_per_million,
+      cacheWritePerMillion: input.cache_write_per_million,
+      outputPerMillion: input.output_per_million,
+      currency: input.currency,
+      peakEnabled: input.peak_enabled ?? existing?.peak_enabled ?? 0,
+      peakInputPerMillion: input.peak_input_per_million !== undefined ? input.peak_input_per_million : existing?.peak_input_per_million ?? null,
+      peakCachedInputPerMillion: input.peak_cached_input_per_million !== undefined ? input.peak_cached_input_per_million : existing?.peak_cached_input_per_million ?? null,
+      peakCacheWritePerMillion: input.peak_cache_write_per_million !== undefined ? input.peak_cache_write_per_million : existing?.peak_cache_write_per_million ?? null,
+      peakOutputPerMillion: input.peak_output_per_million !== undefined ? input.peak_output_per_million : existing?.peak_output_per_million ?? null,
+      peakStartMinute: input.peak_start_minute !== undefined ? input.peak_start_minute : existing?.peak_start_minute ?? null,
+      peakEndMinute: input.peak_end_minute !== undefined ? input.peak_end_minute : existing?.peak_end_minute ?? null,
+      peakWeekdays: input.peak_weekdays !== undefined ? input.peak_weekdays : existing?.peak_weekdays ?? "1,2,3,4,5",
+      timezone: input.timezone !== undefined ? input.timezone : existing?.timezone ?? "Asia/Shanghai",
+    };
+    const pricingChanged = !existing || existing.input_per_million !== next.inputPerMillion
+      || existing.cached_input_per_million !== next.cachedInputPerMillion
+      || existing.cache_write_per_million !== next.cacheWritePerMillion
+      || existing.output_per_million !== next.outputPerMillion
+      || existing.currency !== next.currency
+      || existing.peak_enabled !== next.peakEnabled
+      || existing.peak_input_per_million !== next.peakInputPerMillion
+      || existing.peak_cached_input_per_million !== next.peakCachedInputPerMillion
+      || existing.peak_cache_write_per_million !== next.peakCacheWritePerMillion
+      || existing.peak_output_per_million !== next.peakOutputPerMillion
+      || existing.peak_start_minute !== next.peakStartMinute
+      || existing.peak_end_minute !== next.peakEndMinute
+      || existing.peak_weekdays !== next.peakWeekdays
+      || existing.timezone !== next.timezone;
+    const effectiveAt = existing && !pricingChanged ? existing.updated_at : updatedAt;
+    if (existing && pricingChanged && Date.parse(updatedAt) > Date.parse(existing.updated_at)) {
+      this.sqlite.prepare(`
+        INSERT INTO pricing_rule_history(user_id,provider_id,model_id,input_per_million,cached_input_per_million,cache_write_per_million,output_per_million,currency,source,pricing_url,peak_enabled,peak_input_per_million,peak_cached_input_per_million,peak_cache_write_per_million,peak_output_per_million,peak_start_minute,peak_end_minute,peak_weekdays,timezone,effective_from,effective_to)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        existing.user_id, existing.provider_id, existing.model_id, existing.input_per_million, existing.cached_input_per_million,
+        existing.cache_write_per_million, existing.output_per_million, existing.currency, existing.source, existing.pricing_url,
+        existing.peak_enabled, existing.peak_input_per_million, existing.peak_cached_input_per_million, existing.peak_cache_write_per_million,
+        existing.peak_output_per_million, existing.peak_start_minute, existing.peak_end_minute, existing.peak_weekdays, existing.timezone,
+        existing.updated_at, updatedAt,
+      );
+    }
     this.sqlite.prepare(`
       INSERT INTO pricing_rules(user_id,provider_id,model_id,input_per_million,cached_input_per_million,cache_write_per_million,output_per_million,currency,source,pricing_url,peak_enabled,peak_input_per_million,peak_cached_input_per_million,peak_cache_write_per_million,peak_output_per_million,peak_start_minute,peak_end_minute,peak_weekdays,timezone,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -1927,16 +2009,9 @@ export class AppDatabase {
     `).run(
       input.user_id, input.provider_id, input.model_id, input.input_per_million, input.cached_input_per_million,
       input.cache_write_per_million, input.output_per_million, input.currency, input.source, input.pricing_url,
-      input.peak_enabled ?? existing?.peak_enabled ?? 0,
-      input.peak_input_per_million !== undefined ? input.peak_input_per_million : existing?.peak_input_per_million ?? null,
-      input.peak_cached_input_per_million !== undefined ? input.peak_cached_input_per_million : existing?.peak_cached_input_per_million ?? null,
-      input.peak_cache_write_per_million !== undefined ? input.peak_cache_write_per_million : existing?.peak_cache_write_per_million ?? null,
-      input.peak_output_per_million !== undefined ? input.peak_output_per_million : existing?.peak_output_per_million ?? null,
-      input.peak_start_minute !== undefined ? input.peak_start_minute : existing?.peak_start_minute ?? null,
-      input.peak_end_minute !== undefined ? input.peak_end_minute : existing?.peak_end_minute ?? null,
-      input.peak_weekdays !== undefined ? input.peak_weekdays : existing?.peak_weekdays ?? "1,2,3,4,5",
-      input.timezone !== undefined ? input.timezone : existing?.timezone ?? "Asia/Shanghai",
-      updatedAt,
+      next.peakEnabled, next.peakInputPerMillion, next.peakCachedInputPerMillion, next.peakCacheWritePerMillion,
+      next.peakOutputPerMillion, next.peakStartMinute, next.peakEndMinute, next.peakWeekdays, next.timezone,
+      effectiveAt,
     );
     return this.getPricingRule(input.user_id, input.provider_id, input.model_id)!;
   }
