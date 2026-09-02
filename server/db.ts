@@ -274,6 +274,8 @@ export const PRESET_PROMPT_NAME_MAX = 50;
 export const PRESET_PROMPT_CONTENT_MAX = 10_000;
 export const PRESET_PROMPT_TOTAL_MAX = 50_000;
 const TASK_LIST_CATEGORY_ORDER_RESET_MIGRATION = "task_list_category_order_reset_v1";
+const LEGACY_MODEL_CONTEXT_WINDOW = 272_000;
+const LEGACY_AUTO_COMPACT_TOKEN_LIMIT = 250_000;
 
 const conversationSelect = `
   conversations.*,
@@ -653,6 +655,7 @@ export class AppDatabase {
     `).run(LEGACY_USER_ID, legacyUser.username, legacyUser.displayName ?? legacyUser.username, legacyUser.passwordHash, "owner", now, now);
 
     this.migrateProvidersToUsers();
+    this.migrateLegacyModelContextLimits();
     this.migrateProviderManagementSettings();
     this.migrateLegacyTaskCategoryOrders();
 
@@ -809,6 +812,8 @@ export class AppDatabase {
           description TEXT NOT NULL DEFAULT '',
           reasoning_efforts TEXT NOT NULL DEFAULT '[]',
           input_modalities TEXT NOT NULL DEFAULT '["text","image"]',
+          model_context_window INTEGER,
+          auto_compact_token_limit INTEGER,
           priority INTEGER NOT NULL DEFAULT 0,
           visible INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
@@ -821,9 +826,10 @@ export class AppDatabase {
         SELECT account.id,provider.id,provider.name,provider.base_url,provider.api_key,provider.models_file,provider.auto_review_model_override,provider.extra_config,
           provider.wire_api,provider.requires_openai_auth,provider.enabled,provider.created_at,provider.updated_at
         FROM users account CROSS JOIN providers_legacy_global provider;
-        INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,priority,visible,created_at,updated_at)
+        INSERT INTO provider_models(user_id,id,provider_id,model_id,slug,display_name,description,reasoning_efforts,input_modalities,model_context_window,auto_compact_token_limit,priority,visible,created_at,updated_at)
         SELECT account.id,model.id,model.provider_id,model.model_id,model.slug,model.display_name,model.description,
-          model.reasoning_efforts,model.input_modalities,model.priority,model.visible,model.created_at,model.updated_at
+          model.reasoning_efforts,model.input_modalities,model.model_context_window,model.auto_compact_token_limit,
+          model.priority,model.visible,model.created_at,model.updated_at
         FROM users account CROSS JOIN provider_models_legacy_global model;
         DROP TABLE provider_models_legacy_global;
         DROP TABLE providers_legacy_global;
@@ -835,6 +841,23 @@ export class AppDatabase {
     } finally {
       this.sqlite.exec("PRAGMA foreign_keys=ON");
     }
+  }
+
+  private migrateLegacyModelContextLimits(): void {
+    // 272k/250k was an intermediate hard-coded setting from before the
+    // configurable defaults were introduced. Upgrade only that exact pair;
+    // other explicit per-model values remain user-owned settings.
+    this.sqlite.prepare(`
+      UPDATE provider_models
+      SET model_context_window=?, auto_compact_token_limit=?, updated_at=?
+      WHERE model_context_window=? AND auto_compact_token_limit=?
+    `).run(
+      DEFAULT_MODEL_CONTEXT_WINDOW,
+      DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+      new Date().toISOString(),
+      LEGACY_MODEL_CONTEXT_WINDOW,
+      LEGACY_AUTO_COMPACT_TOKEN_LIMIT,
+    );
   }
 
   /**
