@@ -12,9 +12,10 @@ The interaction borrows the Windows app's split-workspace idea: keep the main ta
 2. When the pane opens, restore the most recently used side thread created from that primary conversation; if none exists, show an empty state without creating data.
 3. Create additional side threads with **新建**, or choose any active side thread from the history selector.
 4. Keep the selected side thread open while navigating to another primary task.
-5. Use the persistent header action **Fork 最新回答** to branch through the latest completed turn, or choose **Fork 到这里** on any completed assistant answer to branch through that answer's turn. The server creates a new sidecar, copies the visible history through that turn, and stores the source thread/turn without changing the primary conversation.
-6. Select text in the currently visible primary-conversation message and choose **侧边提问**.
-7. The side composer receives a structured source reference containing:
+5. Choose **转为主任务** on the selected side thread when it should enter the task list. The server removes only the sidecar relation; the existing conversation ID and all persisted data remain unchanged.
+6. Use the persistent header action **Fork 最新回答** to branch through the latest completed turn, or choose **Fork 到这里** on any completed assistant answer to branch through that answer's turn. The server creates a new sidecar, copies the visible history through that turn, and stores the source thread/turn without changing the primary conversation.
+7. Select text in the currently visible primary-conversation message and choose **侧边提问**.
+8. The side composer receives a structured source reference containing:
    - source conversation and message IDs;
    - source thread ID;
    - rollout-relative JSONL path;
@@ -27,6 +28,7 @@ The interaction borrows the Windows app's split-workspace idea: keep the main ta
 
 - `conversation_side_chats` maps one primary conversation to multiple sidecar conversations and stores `last_opened_at` for task-aware reopening.
 - A sidecar remains a normal `conversations` row, so messages, jobs, events, drafts, files, Codex thread IDs, and model settings keep using existing durable storage.
+- Promoting a sidecar atomically deletes its `conversation_side_chats` row and keeps the conversation row and storage intact; the resulting primary task can be renamed through the normal task action.
 - Primary conversation lists exclude sidecars; the side-chat history API exposes active sidecars with their originating task title.
 - Archiving, restoring, or deleting a primary conversation applies to all sidecars created from it.
 - `pending_prompts.source_reference` preserves structured references when a side message waits in the queue.
@@ -47,6 +49,6 @@ Structured first-turn responses are matched through their decoded `answer` field
 - The chat header keeps **Fork 最新回答** available while browsing. Each loaded completed assistant answer also exposes **Fork 到这里**, which targets that answer's completed turn; the pane shows a pending-fork banner until the new thread is created.
 - The app-server fork boundary is a completed turn, not an arbitrary character or tool-item position inside a turn. `lastTurnId` includes the selected turn; the edit flow's `beforeTurnId` starts before the selected turn.
 - Mobile: a full-height overlay pane.
-- Header: origin-task label, history selector, new-thread action, close action, independent model/reasoning selectors, and running state.
+- Header: origin-task label, history selector, new-thread action, **转为主任务** action, close action, independent model/reasoning selectors, and running state.
 - Body: compact message history using the existing Markdown safety/rendering rules.
 - Composer: one active source card, location metadata, textarea, and send/stop action.

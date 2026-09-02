@@ -1077,6 +1077,30 @@ export class AppDatabase {
     return conversation;
   }
 
+  promoteSideConversationForUser(conversationId: string, userId: string): ConversationRow | undefined {
+    let promoted = false;
+    const now = new Date().toISOString();
+    this.sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const eligible = this.sqlite.prepare(`
+        SELECT conversations.id
+        FROM conversations
+        JOIN conversation_side_chats side ON side.conversation_id=conversations.id
+        WHERE conversations.id=? AND conversations.user_id=?
+          AND conversations.deleted_at IS NULL AND conversations.archived_at IS NULL
+      `).get(conversationId, userId) as { id: string } | undefined;
+      if (eligible) {
+        promoted = this.sqlite.prepare("DELETE FROM conversation_side_chats WHERE conversation_id=?").run(conversationId).changes > 0;
+        if (promoted) this.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id=?").run(now, conversationId);
+      }
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+    return promoted ? this.getConversationForUser(conversationId, userId) : undefined;
+  }
+
   getSideConversationParent(conversationId: string, userId: string): ConversationRow | undefined {
     return this.sqlite.prepare(`
       SELECT ${conversationSelect} FROM conversations

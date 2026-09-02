@@ -426,6 +426,21 @@ test("side chat keeps history available while primary tasks change", () => {
   assert.doesNotMatch(appSource, /key=\{currentDetail\.conversation\.id\}[\s\S]*currentConversation=/);
 });
 
+test("side chat exposes promotion into the primary task list", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "side-chat-pane.tsx"), "utf8");
+  const apiSource = fs.readFileSync(path.join(process.cwd(), "src", "api.ts"), "utf8");
+  const serverSource = fs.readFileSync(path.join(process.cwd(), "server", "app.ts"), "utf8");
+  const databaseSource = fs.readFileSync(path.join(process.cwd(), "server", "db.ts"), "utf8");
+  assert.match(paneSource, /转为主任务/);
+  assert.match(paneSource, /api\.promoteSideChat\(current\.conversation\.id\)/);
+  assert.match(apiSource, /promoteSideChat:/);
+  assert.match(serverSource, /api\.post\("\/side-chats\/:id\/promote"/);
+  assert.match(databaseSource, /promoteSideConversationForUser/);
+  assert.match(appSource, /setSelectedId\(conversation\.id\)/);
+  assert.match(appSource, /侧边对话已转为主任务/);
+});
+
 test("chat font sizing keeps readable bounds and scales from the default", () => {
   assert.equal(normalizeChatFontSize(undefined), CHAT_FONT_SIZE_DEFAULT);
   assert.equal(normalizeChatFontSize("18"), 18);
@@ -2099,9 +2114,23 @@ test("side chat keeps an independent model and persists exact JSONL references",
   assert.equal(selectedContext.body.conversation.id, secondSideId);
   assert.equal(selectedContext.body.reference.sourceConversationId, parentId);
 
+  const promoted = await agent.post(`/codex-web/api/side-chats/${secondSideId}/promote`)
+    .set("X-CSRF-Token", csrf)
+    .expect(200);
+  assert.equal(promoted.body.conversation.id, secondSideId);
+  assert.equal(promoted.body.conversation.title, secondSideCreated.body.conversation.title);
+  assert.equal(instance.db.getSideConversationParent(secondSideId, LEGACY_USER_ID), undefined);
+  assert.equal((await agent.get(`/codex-web/api/conversations/${parentId}/side-chats`).expect(200)).body.sideChats.length, 1);
+  assert.deepEqual(
+    new Set((await agent.get("/codex-web/api/conversations").expect(200)).body.conversations.map((item: { id: string }) => item.id)),
+    new Set([parentId, secondSideId]),
+  );
+  const promotedDetail = await agent.get(`/codex-web/api/conversations/${secondSideId}`).expect(200);
+  assert.equal(promotedDetail.body.composerDraft.source_reference.kind, "conversation-context");
+
   await agent.post(`/codex-web/api/conversations/${parentId}/archive`).set("X-CSRF-Token", csrf).expect(200);
   assert.ok(instance.db.getConversation(sideId)?.archived_at);
-  assert.ok(instance.db.getConversation(secondSideId)?.archived_at);
+  assert.equal(instance.db.getConversation(secondSideId)?.archived_at, null);
   await agent.post(`/codex-web/api/conversations/${parentId}/restore`).set("X-CSRF-Token", csrf).expect(200);
   assert.equal(instance.db.getConversation(sideId)?.archived_at, null);
   assert.equal(instance.db.getConversation(secondSideId)?.archived_at, null);
@@ -2112,11 +2141,14 @@ test("side chat keeps an independent model and persists exact JSONL references",
   await agent.delete(`/codex-web/api/conversations/${parentId}`).set("X-CSRF-Token", csrf).expect(204);
   assert.ok(instance.db.getConversation(parentId)?.deleted_at);
   assert.ok(instance.db.getConversation(sideId)?.deleted_at);
-  assert.ok(instance.db.getConversation(secondSideId)?.deleted_at);
+  assert.equal(instance.db.getConversation(secondSideId)?.deleted_at, null);
   assert.equal(fs.existsSync(parentWorkspace), false);
   assert.equal(fs.existsSync(sideWorkspace), false);
-  assert.equal(fs.existsSync(secondSideWorkspace), false);
+  assert.equal(fs.existsSync(secondSideWorkspace), true);
   assert.equal(fs.existsSync(rolloutPath), false);
+  await agent.delete(`/codex-web/api/conversations/${secondSideId}`).set("X-CSRF-Token", csrf).expect(204);
+  assert.ok(instance.db.getConversation(secondSideId)?.deleted_at);
+  assert.equal(fs.existsSync(secondSideWorkspace), false);
 });
 
 test("forking a completed primary turn creates an independent side branch", async (context) => {

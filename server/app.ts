@@ -1845,6 +1845,20 @@ export function createApp(overrides: AppOverrides = {}) {
     return conversation ? res.json({ conversation }) : res.status(404).json({ error: "侧边对话不存在。" });
   });
 
+  api.post("/side-chats/:id/promote", (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversationId = String(req.params.id);
+    const conversation = db.getConversationForUser(conversationId, session.user_id);
+    if (!conversation || !db.getSideConversationParent(conversationId, session.user_id)) {
+      return res.status(404).json({ error: "侧边对话不存在。" });
+    }
+    if (conversation.archived_at) return res.status(409).json({ error: "已归档的侧边对话不能转为主任务，请先恢复所属主会话。" });
+    const promoted = db.promoteSideConversationForUser(conversationId, session.user_id);
+    return promoted
+      ? res.json({ conversation: conversationForClient(promoted) })
+      : res.status(409).json({ error: "侧边对话状态已经变化，请刷新后重试。" });
+  });
+
   api.get("/conversations/:id/side-chat", (req, res) => {
     const session = res.locals.session as SessionRow;
     const parent = db.getConversationForUser(String(req.params.id), session.user_id);

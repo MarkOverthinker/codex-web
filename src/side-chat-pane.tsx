@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, Bot, Copy, CornerUpLeft, GitFork, LoaderCircle, Plus, Quote, Square, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Bot, Copy, CornerUpLeft, GitFork, LoaderCircle, Plus, Quote, Square, X } from "lucide-react";
 import {
   api,
   type AgentModelOption,
@@ -41,6 +41,7 @@ type SideChatPaneProps = {
   forkRequest: SideChatForkRequest | null;
   onForkHandled: (requestId: number) => void;
   onReferenceHandled: (requestId: number) => void;
+  onPromoted: (conversation: Conversation) => void;
   onClose: () => void;
   onError: (message: string) => void;
   onOpenSourceReference: (reference: MessageSourceReference) => void;
@@ -98,7 +99,7 @@ function SideMessage({ message, citationFiles, onOpenSourceReference }: { messag
   </article>;
 }
 
-export function SideChatPane({ currentConversation, agentOptions, referenceRequest, forkRequest, onReferenceHandled, onForkHandled, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
+export function SideChatPane({ currentConversation, agentOptions, referenceRequest, forkRequest, onReferenceHandled, onForkHandled, onPromoted, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
   const [history, setHistory] = useState<SideChatSummary[]>([]);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [input, setInput] = useState("");
@@ -106,6 +107,7 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [promoting, setPromoting] = useState(false);
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [contextSaving, setContextSaving] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -331,6 +333,22 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
     }
   }
 
+  async function promoteCurrentConversation() {
+    const current = detailRef.current;
+    if (!current || promoting) return;
+    if (!window.confirm(`将“${current.conversation.title}”转为任务列表中的主任务？其历史消息、草稿、附件和线程都会保留。`)) return;
+    setPromoting(true);
+    try {
+      await persistCurrentDraft();
+      const result = await api.promoteSideChat(current.conversation.id);
+      onPromoted(result.conversation);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "侧边对话转正失败");
+    } finally {
+      setPromoting(false);
+    }
+  }
+
   function changeModel(modelId: string) {
     if (!detail || !agentOptions) return;
     const model = agentOptions.models.find((candidate) => candidate.id === modelId);
@@ -381,7 +399,10 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
     />
     <header className="side-chat-header">
       <div><span>SECONDARY THREAD</span><strong><Bot size={16} />侧边聊天</strong><small>{activeSummary ? `来源任务：${activeSummary.parentConversationTitle}` : `当前任务：${currentConversation.title}`}</small></div>
-      <button type="button" className="icon-button" onClick={onClose} aria-label="关闭侧边聊天"><X size={18} /></button>
+      <div className="side-chat-header-actions">
+        {detail && <button type="button" className="side-chat-promote" onClick={() => void promoteCurrentConversation()} disabled={loading || promoting || selectionSaving || contextSaving || submitting} title="将当前侧边对话转为任务列表中的主任务"><ArrowUpRight size={14} />{promoting ? "转正中" : "转为主任务"}</button>}
+        <button type="button" className="icon-button" onClick={onClose} aria-label="关闭侧边聊天"><X size={18} /></button>
+      </div>
     </header>
     <div className="side-chat-thread-picker">
       <label><span>历史侧边对话</span><select value={detail?.conversation.id ?? ""} disabled={loading} onChange={(event) => {

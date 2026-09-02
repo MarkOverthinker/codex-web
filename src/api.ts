@@ -438,6 +438,9 @@ export const api = {
   openSideChat: (sideConversationId: string) => request<{ conversation: Conversation }>(
     `/side-chats/${sideConversationId}/open`, { method: "POST" },
   ),
+  promoteSideChat: (sideConversationId: string) => request<{ conversation: Conversation }>(
+    `/side-chats/${sideConversationId}/promote`, { method: "POST" },
+  ),
   setSelectedSideChatReference: (sideConversationId: string, sourceConversationId: string, sourceMessageId: string, excerpt: string, content = "") =>
     request<{ conversation: Conversation; agentSelection: AgentSelection; composerDraft: ComposerDraft; reference: MessageSourceReference }>(
       `/side-chats/${sideConversationId}/reference`,

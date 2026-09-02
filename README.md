@@ -9,7 +9,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 ## What it includes
 
 - A responsive React chat interface for Codex CLI
-- Persistent side-chat history with multiple independent threads per primary conversation, cross-task pinning, task-aware reopening, an independently resizable desktop pane, one-click primary-context snapshots, completed-turn Fork into a side chat, per-thread model/reasoning selection, and source quotes resolved to rollout JSONL path, line, byte offset, JSON Pointer, item ID, and character range
+- Persistent side-chat history with multiple independent threads per primary conversation, cross-task pinning, task-aware reopening, an independently resizable desktop pane, one-click primary-context snapshots, promotion of a side thread into the primary task list without copying its durable state, completed-turn Fork into a side chat, per-thread model/reasoning selection, and source quotes resolved to rollout JSONL path, line, byte offset, JSON Pointer, item ID, and character range
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions; queued jobs can also be promoted to start immediately
 - Edit and resend completed user turns from the browser; the server forks the Codex thread before that turn, keeps the superseded branch for audit, and hides it from the active conversation
 - Fork the latest completed primary-conversation turn from the persistent header, or fork through any loaded completed assistant answer; the side chat copies visible history through that turn and creates its independent Codex thread on first send with `lastTurnId`
