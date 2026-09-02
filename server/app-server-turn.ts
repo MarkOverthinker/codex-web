@@ -395,9 +395,13 @@ class AppServerTurnClient {
       const usedTokens = Number(last?.totalTokens);
       if (Number.isFinite(usedTokens) && usedTokens >= 0) {
         const rawWindow = Number(tokenUsage?.modelContextWindow);
+        const configuredCompactLimit = Number(this.options.autoCompactTokenLimit);
+        const contextWindow = Number.isFinite(configuredCompactLimit) && configuredCompactLimit > 0
+          ? Math.trunc(configuredCompactLimit)
+          : Number.isFinite(rawWindow) && rawWindow > 0 ? Math.trunc(rawWindow) : null;
         this.callbacks.onContextUsage?.({
           usedTokens: Math.trunc(usedTokens),
-          contextWindow: Number.isFinite(rawWindow) && rawWindow > 0 ? Math.trunc(rawWindow) : null,
+          contextWindow,
         });
       }
       return;

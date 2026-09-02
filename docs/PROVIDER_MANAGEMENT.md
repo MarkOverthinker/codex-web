@@ -36,7 +36,7 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 源级 `auto_review_model_override` 会写入该源下所有可见模型的目录条目，使该源上的自动审批审查使用指定模型；留空时保留每个模型模板自带的默认值（通常为 `null`，即 Codex 默认行为），因此不会因为某个源不支持默认审核模型而无法工作。
 
-Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SSE 中实时发送。会话页头部显示当前上下文占用、模型上下文窗口和百分比；没有收到过 Codex 状态的旧会话显示“上下文暂无”。
+Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SSE 中实时发送。会话页头部显示当前上下文占用、该任务的自动压缩阈值和百分比；这个阈值取任务启动时选定模型的 `model_auto_compact_token_limit`，没有收到过 Codex 状态的旧会话显示“上下文暂无”。
 
 ## 模型文件
 
