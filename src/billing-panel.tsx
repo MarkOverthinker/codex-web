@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, DollarSign, LoaderCircle, RefreshCw, RotateCcw, Save, X } from "lucide-react";
+import { BarChart3, CloudDownload, DollarSign, LoaderCircle, RefreshCw, RotateCcw, Save, X } from "lucide-react";
 import { api, type AgentModelOption, type BillingModel, type BillingPricingRule, type BillingState } from "./api.js";
 
 const BUILTIN_PROVIDER_ID = "__builtin__";
@@ -92,22 +92,7 @@ export function BillingPanel({ open, onClose, builtinModels }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    let active = true;
-    void (async () => {
-      await refresh();
-      if (!active) return;
-      setSyncing(true);
-      try {
-        const result = await api.syncBillingPricing(undefined, undefined, days);
-        if (!active) return;
-        setState(result.billing);
-        if (result.imported > 0) setNotice(`已自动同步 ${result.imported} 条远程费率。`);
-      } catch {
-      } finally {
-        if (active) setSyncing(false);
-      }
-    })();
-    return () => { active = false; };
+    void refresh();
   }, [open]);
 
   function ruleFor(model: BillingModel): BillingPricingRule | undefined {
@@ -156,12 +141,27 @@ export function BillingPanel({ open, onClose, builtinModels }: Props) {
     finally { setRecalculating(false); }
   }
 
+  async function syncPricing() {
+    setSyncing(true); setError(""); setNotice("");
+    try {
+      const result = await api.syncBillingPricing(undefined, undefined, days);
+      setState(result.billing);
+      const failures = "results" in result ? result.results.filter((item) => item.error) : [];
+      if (failures.length > 0) {
+        setError(`远程费率已导入 ${result.imported} 条；${failures.length} 个源同步失败。`);
+      } else {
+        setNotice(`已同步 ${result.imported} 条远程费率。`);
+      }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "同步远程费率失败"); }
+    finally { setSyncing(false); }
+  }
+
   if (!open) return null;
   const summary = state?.summary;
   return createPortal(<div className="billing-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="billing-panel" role="dialog" aria-modal="true" aria-label="API 调用计费统计">
       <header className="billing-header"><div><BarChart3 size={19} /><strong>API 调用计费统计</strong><small>费用按调用时间对应的费率版本计算；修改费率不会改写已有历史</small></div><button type="button" className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header>
-      <div className="billing-toolbar"><label>统计范围<select value={days} onChange={(event) => { const value = Number(event.target.value); setDays(value); void refresh(value); }}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option></select></label><div className="billing-actions"><button type="button" className="billing-refresh" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void refresh()}><RefreshCw size={14} className={loading ? "spin" : ""} />刷新</button><button type="button" className="billing-recalculate" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void recalculate()}><RotateCcw size={14} className={recalculating ? "spin" : ""} />强制重算历史费用</button></div></div>
+      <div className="billing-toolbar"><label>统计范围<select value={days} onChange={(event) => { const value = Number(event.target.value); setDays(value); void refresh(value); }}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option></select></label><div className="billing-actions"><button type="button" className="billing-refresh" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void refresh()}><RefreshCw size={14} className={loading ? "spin" : ""} />刷新</button><button type="button" className="billing-sync" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void syncPricing()}><CloudDownload size={14} className={syncing ? "spin" : ""} />同步远程费率</button><button type="button" className="billing-recalculate" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void recalculate()}><RotateCcw size={14} className={recalculating ? "spin" : ""} />强制重算历史费用</button></div></div>
       {error && <div className="billing-message error" role="alert">{error}</div>}
       {notice && <div className="billing-message" role="status">{notice}</div>}
       {summary && <div className="billing-summary-grid"><div><span>调用次数</span><strong>{summary.calls.toLocaleString()}</strong></div><div><span>总输入 Token</span><strong>{formatTokens(summary.inputTokens)}</strong></div><div><span>输出 Token</span><strong>{formatTokens(summary.outputTokens)}</strong></div><div><span>缓存命中率</span><strong>{percent(summary.cacheHitRate)}</strong></div><div className="billing-cost"><span>估算费用</span><strong><DollarSign size={16} />{formatCost(summary.estimatedCost, summary.currency)}</strong>{summary.unpricedCalls > 0 && <small>{summary.unpricedCalls} 次调用未配置费率</small>}</div></div>}

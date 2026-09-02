@@ -53,7 +53,7 @@ Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SS
 
 费率规则以每 1,000,000 tokens 为单位，分别设置未缓存输入（input）、缓存读取（cache read）、缓存写入（cache write）和输出（output）的单价与三位货币代码。Codex 用量事件中的 `input_tokens` 是总输入量，未缓存输入按 `max(input_tokens - cached_input_tokens - cache_write_input_tokens, 0)` 计算，避免把缓存子项重复计入普通输入。数据库中的 `cached_input_per_million` 是历史兼容列，语义为 cache read。保存新费率时会保留旧费率的生效区间，按每次调用的 `created_at` 选择对应版本并累加费用；“强制重算历史费用”会清除这些版本记录，让当前费率重新应用到全部历史用量，适合修正最初设置错误的费率。费用为估算值；没有规则的调用不会计入费用。内置 Codex 源使用 `Codex 内置源` 单独归类，外部源使用实际 provider 与上游模型 ID，避免别名影响定价。
 
-打开计费面板时会自动为所有已启用源尝试同步计费标准，依次尝试源域名下的 `/api/pricing`、`/api/ratio_config`、`/api/prices` 和该源 base URL 下的 `/pricing`。接口必须返回可识别的 JSON 模型条目，至少包含 model、input 和 output 的每百万 token 单价；同时兼容 New API 的分组比例配置格式。无法识别时不会覆盖现有规则。不同 New API 部署的接口并不统一，自动同步只采用能识别的 JSON 响应。
+打开计费面板时只读取本地计费规则，不会自动请求远程配置。点击“同步远程费率”后，才会为所有已启用源尝试同步计费标准，依次尝试源域名下的 `/api/pricing`、`/api/ratio_config`、`/api/prices` 和该源 base URL 下的 `/pricing`。接口必须返回可识别的 JSON 模型条目，至少包含 model、input 和 output 的每百万 token 单价；同时兼容 New API 的分组比例配置格式。无法识别时不会覆盖现有规则。不同 New API 部署的接口并不统一，手动同步只采用能识别的 JSON 响应。
 
 ## 刷新内置模板库
 
