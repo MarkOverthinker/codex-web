@@ -164,12 +164,18 @@ test("frontend storage cache failures never escape into rendering", () => {
   assert.doesNotMatch(appSource, /window\.localStorage\.(getItem|setItem|removeItem)/);
 });
 
-test("billing panel keeps historical rates and exposes only global refresh actions", () => {
+test("billing panel keeps historical rates and exposes global refresh and sync actions", () => {
   const billingSource = fs.readFileSync(path.join(process.cwd(), "src", "billing-panel.tsx"), "utf8");
+  const openEffect = billingSource.slice(billingSource.indexOf("useEffect(() =>"), billingSource.indexOf("function ruleFor"));
   assert.match(billingSource, /强制重算历史费用/);
   assert.match(billingSource, /recalculateBilling/);
+  assert.match(billingSource, /同步远程费率/);
+  assert.match(billingSource, /async function syncPricing\(\)/);
+  assert.match(billingSource, /syncBillingPricing\(undefined, undefined, days\)/);
+  assert.doesNotMatch(openEffect, /syncBillingPricing/);
+  assert.doesNotMatch(billingSource, /已自动同步/);
   assert.doesNotMatch(billingSource, /pricingUrl/);
-  assert.doesNotMatch(billingSource, /billing-sync/);
+  assert.match(billingSource, /className="billing-sync"/);
 });
 
 test("client error endpoint records authenticated reports and rejects anonymous ones", async (context) => {
