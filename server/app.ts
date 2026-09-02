@@ -59,7 +59,7 @@ import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { buildBillingState, BUILTIN_PROVIDER_ID, syncProviderPricing } from "./billing.js";
 import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
-import { locateMessageInCodexRollout } from "./message-source-locator.js";
+import { locateMessageInCodexRolloutEventually } from "./message-source-locator.js";
 import {
   autoDirCategoryKey,
   customCategoryKey,
@@ -720,7 +720,7 @@ export function createApp(overrides: AppOverrides = {}) {
     requireJsonlLocation = false,
   ): Promise<MessageSourceReference | null> {
     const sourceLocation = sourceConversation.codex_thread_id
-      ? await locateMessageInCodexRollout({
+      ? await locateMessageInCodexRolloutEventually({
           codexHome: codexHomeFor(sourceConversation.user_id),
           threadId: sourceConversation.codex_thread_id,
           role: sourceMessage.role === "assistant" ? "assistant" : "user",

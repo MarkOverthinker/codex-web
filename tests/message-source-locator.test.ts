@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { locateMessageInCodexRollout } from "../server/message-source-locator.js";
+import { locateMessageInCodexRollout, locateMessageInCodexRolloutEventually } from "../server/message-source-locator.js";
 
 const THREAD_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -89,4 +89,30 @@ test("reports exact byte offsets for CRLF JSONL files", async (context) => {
 
   assert.equal(location?.line, 2);
   assert.equal(location?.byteOffset, Buffer.byteLength(`${first}\r\n`, "utf8"));
+});
+
+test("retries rollout lookup when the completed turn is flushed after the first scan", async (context) => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "cww-source-locator-"));
+  context.after(() => fs.rmSync(codexHome, { recursive: true, force: true }));
+  const directory = path.join(codexHome, "sessions", "2026", "08", "31");
+  fs.mkdirSync(directory, { recursive: true });
+  const filePath = path.join(directory, `rollout-${THREAD_ID}.jsonl`);
+  const line = JSON.stringify({
+    timestamp: "2026-08-31T01:00:01.000Z",
+    type: "response_item",
+    payload: { id: "item-delayed", type: "message", role: "assistant", content: [{ type: "output_text", text: "稍后写入的完成回复" }] },
+  });
+  setTimeout(() => fs.writeFileSync(filePath, `${line}\n`), 20).unref();
+
+  const location = await locateMessageInCodexRolloutEventually({
+    codexHome,
+    threadId: THREAD_ID,
+    role: "assistant",
+    messageContent: "稍后写入的完成回复",
+    messageCreatedAt: "2026-08-31T01:00:01.000Z",
+    excerpt: "写入的完成回复",
+  }, [0, 40]);
+
+  assert.equal(location?.itemId, "item-delayed");
+  assert.equal(location?.line, 1);
 });

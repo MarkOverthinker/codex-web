@@ -38,7 +38,7 @@ The server resolves a selected excerpt against rollout files under the authentic
 
 Only a relative rollout path is returned to the browser. Absolute Codex-home paths and unrelated JSONL content are never exposed.
 
-If the source message has not reached a persisted Codex rollout yet, creating a side reference fails explicitly instead of fabricating a location.
+If the source message has not reached a persisted Codex rollout yet, creating a side reference briefly waits for the completed turn to flush, then fails explicitly instead of fabricating a location.
 
 ## Interface
 

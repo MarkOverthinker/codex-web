@@ -4,6 +4,7 @@ import { normalizeSourceExcerpt, type MessageSourceLocation } from "../src/messa
 import { findCodexThreadFiles } from "./paths.js";
 
 const MAX_JSONL_LINE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_RETRY_DELAYS_MS = [0, 100, 250, 500, 1_000, 2_000] as const;
 
 type Candidate = MessageSourceLocation & {
   role: "user" | "assistant";
@@ -184,4 +185,24 @@ export async function locateMessageInCodexRollout(input: {
   if (!best) return null;
   const { role: _role, content: _content, timestamp: _timestamp, preferred: _preferred, ...location } = best.candidate;
   return location;
+}
+
+export async function locateMessageInCodexRolloutEventually(
+  input: Parameters<typeof locateMessageInCodexRollout>[0],
+  retryDelaysMs: readonly number[] = DEFAULT_RETRY_DELAYS_MS,
+): Promise<MessageSourceLocation | null> {
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    try {
+      const location = await locateMessageInCodexRollout(input);
+      if (location) return location;
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      // A rollout can be renamed or created while the final turn is being flushed.
+      // Retry transient filesystem visibility errors, but preserve other failures.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    }
+  }
+  return null;
 }
