@@ -33,6 +33,8 @@ test("billing aggregates usage and calculates token costs", () => {
     assert.equal(state.summary.estimatedCost, 3.65);
     assert.equal(state.summary.unpricedCalls, 0);
     assert.equal(state.byModel[0]?.modelId, "gpt-test");
+    assert.equal(state.byModel[0]?.calls, 1);
+    assert.equal(state.byModel[0]?.cacheHitRate, 0.2);
   } finally {
     db.close();
     fs.rmSync(root, { recursive: true, force: true });

@@ -49,7 +49,7 @@ Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SS
 
 ## 用量与计费统计
 
-电脑版顶栏的“API 计费统计”会在每个 Codex turn 完成后，汇总该 turn 期间 `thread/tokenUsage/updated` 推送的 `last` 增量并持久化输入、缓存读取、缓存写入、输出与推理输出 token；同时兼容旧版完成事件中直接携带的 usage。面板按用户隔离，支持按 API 源和模型汇总；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
+电脑版顶栏的“API 计费统计”会在每个 Codex turn 完成后，汇总该 turn 期间 `thread/tokenUsage/updated` 推送的 `last` 增量并持久化输入、缓存读取、缓存写入、输出与推理输出 token；同时兼容旧版完成事件中直接携带的 usage。面板按用户隔离，按 API 源和模型分别展示调用次数、输入/输出 token、缓存命中率和费用；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
 
 费率规则以每 1,000,000 tokens 为单位，分别设置未缓存输入（input）、缓存读取（cache read）、缓存写入（cache write）和输出（output）的单价与三位货币代码。Codex 用量事件中的 `input_tokens` 是总输入量，未缓存输入按 `max(input_tokens - cached_input_tokens - cache_write_input_tokens, 0)` 计算，避免把缓存子项重复计入普通输入。数据库中的 `cached_input_per_million` 是历史兼容列，语义为 cache read。费用为估算值；没有规则的调用不会计入费用。内置 Codex 源使用 `Codex 内置源` 单独归类，外部源使用实际 provider 与上游模型 ID，避免别名影响定价。
 
