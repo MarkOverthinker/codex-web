@@ -3114,7 +3114,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onResizeKeyDown={(event) => handlePaneResizerKey(event, "file-explorer")}
       onClose={() => setFileExplorerOpen(false)}
     />}
-    <BillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} providers={agentOptions?.providers ?? []} builtinModels={agentOptions?.models.filter((model) => !model.provider) ?? []} />
+    <BillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} builtinModels={agentOptions?.models.filter((model) => !model.provider) ?? []} />
     {snippetPreview
       ? <CodeSnippetPane
           key={`${snippetPreview.conversationId}:${snippetPreview.path}:${snippetPreview.line}`}

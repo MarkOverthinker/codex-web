@@ -51,7 +51,7 @@ import { orderConversationsByUpdatedAt, readLocalStorageValue, removeLocalStorag
 
 // A developer .env (loaded by server/config.ts) must not leak deployment mode
 // flags into the suite; the tests control these through createApp overrides.
-for (const key of ["HOST_MODE", "CONTAINERIZED", "TENANT_WORKER_ISOLATION"]) delete process.env[key];
+for (const key of ["HOST_MODE", "CONTAINERIZED", "TENANT_WORKER_ISOLATION", "ALLOW_DANGER_FULL_ACCESS"]) delete process.env[key];
 
 test("user-visible branding uses Codex Web without the private product name", () => {
   const index = fs.readFileSync(path.join(process.cwd(), "index.html"), "utf8");
@@ -162,6 +162,14 @@ test("frontend storage cache failures never escape into rendering", () => {
   assert.match(appSource, /api\.session\(\)[\s\S]*\.catch\(/);
   assert.match(appSource, /无法连接到服务/);
   assert.doesNotMatch(appSource, /window\.localStorage\.(getItem|setItem|removeItem)/);
+});
+
+test("billing panel keeps historical rates and exposes only global refresh actions", () => {
+  const billingSource = fs.readFileSync(path.join(process.cwd(), "src", "billing-panel.tsx"), "utf8");
+  assert.match(billingSource, /强制重算历史费用/);
+  assert.match(billingSource, /recalculateBilling/);
+  assert.doesNotMatch(billingSource, /pricingUrl/);
+  assert.doesNotMatch(billingSource, /billing-sync/);
 });
 
 test("client error endpoint records authenticated reports and rejects anonymous ones", async (context) => {

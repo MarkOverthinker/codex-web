@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { BarChart3, DollarSign, LoaderCircle, RefreshCw, Save, X } from "lucide-react";
-import { api, type AgentModelOption, type AgentProviderOption, type BillingModel, type BillingPricingRule, type BillingState } from "./api.js";
+import { BarChart3, DollarSign, LoaderCircle, RefreshCw, RotateCcw, Save, X } from "lucide-react";
+import { api, type AgentModelOption, type BillingModel, type BillingPricingRule, type BillingState } from "./api.js";
 
 const BUILTIN_PROVIDER_ID = "__builtin__";
 
-type Props = { open: boolean; onClose: () => void; providers: AgentProviderOption[]; builtinModels: AgentModelOption[] };
+type Props = { open: boolean; onClose: () => void; builtinModels: AgentModelOption[] };
 
 type Draft = {
   input: string;
@@ -62,13 +62,13 @@ function formatCost(value: number | null, currency = "USD"): string {
 
 function percent(value: number): string { return `${(value * 100).toFixed(1)}%`; }
 
-export function BillingPanel({ open, onClose, providers, builtinModels }: Props) {
+export function BillingPanel({ open, onClose, builtinModels }: Props) {
   const [days, setDays] = useState(30);
   const [state, setState] = useState<BillingState | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingKey, setSavingKey] = useState("");
-  const [syncingId, setSyncingId] = useState("");
-  const [pricingUrl, setPricingUrl] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -83,11 +83,6 @@ export function BillingPanel({ open, onClose, providers, builtinModels }: Props)
     return [...known.values()];
   }, [builtinModels, state?.models]);
 
-  const sourceOptions = useMemo(() => [
-    { id: BUILTIN_PROVIDER_ID, name: "Codex 内置源" },
-    ...providers,
-  ], [providers]);
-
   async function refresh(nextDays = days) {
     setLoading(true); setError("");
     try { setState(await api.billing(nextDays)); }
@@ -100,12 +95,16 @@ export function BillingPanel({ open, onClose, providers, builtinModels }: Props)
     let active = true;
     void (async () => {
       await refresh();
+      if (!active) return;
+      setSyncing(true);
       try {
-        const result = await api.syncBillingPricing();
+        const result = await api.syncBillingPricing(undefined, undefined, days);
         if (!active) return;
         setState(result.billing);
         if (result.imported > 0) setNotice(`已自动同步 ${result.imported} 条远程费率。`);
       } catch {
+      } finally {
+        if (active) setSyncing(false);
       }
     })();
     return () => { active = false; };
@@ -144,33 +143,32 @@ export function BillingPanel({ open, onClose, providers, builtinModels }: Props)
     }
     const key = `${model.providerId}:${model.modelId}`;
     setSavingKey(key); setError(""); setNotice("");
-    try { setState(await api.updateBillingRule(model.providerId, model.modelId, payload)); setNotice(`已保存 ${model.displayName} 的 token 费率。`); }
+    try { setState(await api.updateBillingRule(model.providerId, model.modelId, payload, days)); setNotice(`已保存 ${model.displayName} 的 token 费率。`); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "保存费率失败"); }
     finally { setSavingKey(""); }
   }
 
-  async function syncPricing(providerId: string) {
-    setSyncingId(providerId); setError(""); setNotice("");
-    try {
-      const result = await api.syncBillingPricing(providerId, pricingUrl.trim() || undefined);
-      setState(result.billing); setNotice(`已从远程接口导入 ${result.imported} 条费率。`); setPricingUrl("");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "同步计费标准失败"); }
-    finally { setSyncingId(""); }
+  async function recalculate() {
+    if (!window.confirm("这会删除费率变更历史，并让当前费率应用到全部历史用量。确定继续吗？")) return;
+    setRecalculating(true); setError(""); setNotice("");
+    try { setState(await api.recalculateBilling(days)); setNotice("已按当前费率重算全部历史费用。"); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "强制重算失败"); }
+    finally { setRecalculating(false); }
   }
 
   if (!open) return null;
   const summary = state?.summary;
   return createPortal(<div className="billing-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="billing-panel" role="dialog" aria-modal="true" aria-label="API 调用计费统计">
-      <header className="billing-header"><div><BarChart3 size={19} /><strong>API 调用计费统计</strong><small>用量来自每次完成的模型调用，费用是按费率规则计算的估算值</small></div><button type="button" className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header>
-      <div className="billing-toolbar"><label>统计范围<select value={days} onChange={(event) => { const value = Number(event.target.value); setDays(value); void refresh(value); }}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option></select></label><button type="button" className="billing-refresh" disabled={loading} onClick={() => void refresh()}><RefreshCw size={14} className={loading ? "spin" : ""} />刷新</button></div>
+      <header className="billing-header"><div><BarChart3 size={19} /><strong>API 调用计费统计</strong><small>费用按调用时间对应的费率版本计算；修改费率不会改写已有历史</small></div><button type="button" className="icon-button" aria-label="关闭" onClick={onClose}><X size={18} /></button></header>
+      <div className="billing-toolbar"><label>统计范围<select value={days} onChange={(event) => { const value = Number(event.target.value); setDays(value); void refresh(value); }}><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option><option value="365">最近 1 年</option></select></label><div className="billing-actions"><button type="button" className="billing-refresh" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void refresh()}><RefreshCw size={14} className={loading ? "spin" : ""} />刷新</button><button type="button" className="billing-recalculate" disabled={loading || syncing || recalculating || Boolean(savingKey)} onClick={() => void recalculate()}><RotateCcw size={14} className={recalculating ? "spin" : ""} />强制重算历史费用</button></div></div>
       {error && <div className="billing-message error" role="alert">{error}</div>}
       {notice && <div className="billing-message" role="status">{notice}</div>}
       {summary && <div className="billing-summary-grid"><div><span>调用次数</span><strong>{summary.calls.toLocaleString()}</strong></div><div><span>总输入 Token</span><strong>{formatTokens(summary.inputTokens)}</strong></div><div><span>输出 Token</span><strong>{formatTokens(summary.outputTokens)}</strong></div><div><span>缓存命中率</span><strong>{percent(summary.cacheHitRate)}</strong></div><div className="billing-cost"><span>估算费用</span><strong><DollarSign size={16} />{formatCost(summary.estimatedCost, summary.currency)}</strong>{summary.unpricedCalls > 0 && <small>{summary.unpricedCalls} 次调用未配置费率</small>}</div></div>}
       {!state || loading ? <div className="billing-empty"><LoaderCircle size={20} className="spin" />正在加载统计…</div> : <>
         <div className="billing-section"><h3>按 API 源</h3><div className="billing-table-wrap"><table className="billing-table"><thead><tr><th>源</th><th>调用</th><th>输入 Token</th><th>输出 Token</th><th>缓存命中率</th><th>费用</th></tr></thead><tbody>{state.byProvider.length === 0 ? <tr><td colSpan={6} className="billing-empty-cell">暂无调用记录</td></tr> : state.byProvider.map((row) => <tr key={row.providerId}><td><strong>{row.providerName}</strong><small>{row.providerId === BUILTIN_PROVIDER_ID ? "默认源" : row.providerId}</small></td><td>{row.calls.toLocaleString()}</td><td>{formatTokens(row.inputTokens)}</td><td>{formatTokens(row.outputTokens)}</td><td>{percent(row.cacheHitRate)}</td><td>{formatCost(row.estimatedCost, row.currency)}</td></tr>)}</tbody></table></div></div>
         <div className="billing-section"><h3>按模型</h3><div className="billing-table-wrap"><table className="billing-table"><thead><tr><th>模型</th><th>源</th><th>调用次数</th><th>输入 / 输出</th><th>缓存命中率</th><th>费用</th></tr></thead><tbody>{state.byModel.length === 0 ? <tr><td colSpan={6} className="billing-empty-cell">暂无调用记录</td></tr> : state.byModel.map((row) => <tr key={`${row.providerId}:${row.modelId}`}><td><strong>{row.modelId}</strong></td><td>{row.providerName}</td><td>{row.calls.toLocaleString()}</td><td>{formatTokens(row.inputTokens)} / {formatTokens(row.outputTokens)}</td><td>{percent(row.cacheHitRate)}</td><td>{formatCost(row.estimatedCost, row.currency)}</td></tr>)}</tbody></table></div></div>
-        <div className="billing-section"><h3>Token 计费规则</h3><p className="billing-hint">单位为每 1,000,000 tokens，顺序为未缓存输入、输出、缓存写入、缓存读取；用量中的总输入会先扣除缓存写入和缓存读取，再按未缓存输入计费。当前费率作为谷时费率。可选启用峰时费率，计费会按调用发生时间和所选时区自动切换。</p><div className="billing-sync"><input value={pricingUrl} onChange={(event) => setPricingUrl(event.target.value)} placeholder="可选：New API 计费 JSON 地址" /><div>{sourceOptions.filter((source) => source.id !== BUILTIN_PROVIDER_ID).map((source) => <button type="button" key={source.id} disabled={Boolean(syncingId)} onClick={() => void syncPricing(source.id)}>{syncingId === source.id ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}同步 {source.name}</button>)}</div></div><div className="billing-table-wrap"><table className="billing-table billing-rules-table"><thead><tr><th>源 / 模型</th><th>谷时输入（未缓存）</th><th>谷时输出</th><th>谷时缓存写入</th><th>谷时缓存读取</th><th>货币</th><th>峰时设置</th><th /></tr></thead><tbody>{allModels.length === 0 ? <tr><td colSpan={8} className="billing-empty-cell">还没有可配置的模型；调用一次或先导入模型目录。</td></tr> : allModels.map((model) => { const draft = draftForModel(model); const key = `${model.providerId}:${model.modelId}`; return <tr key={key}><td><strong>{model.displayName}</strong><small>{model.providerName} · {model.modelId}</small></td><td><input aria-label={`${model.displayName} 谷时输入费率（未缓存）`} value={draft.input} onChange={(event) => updateDraft(model, "input", event.target.value)} /></td><td><input aria-label={`${model.displayName} 谷时输出费率`} value={draft.output} onChange={(event) => updateDraft(model, "output", event.target.value)} /></td><td><input aria-label={`${model.displayName} 谷时缓存写入费率`} value={draft.cacheWrite} onChange={(event) => updateDraft(model, "cacheWrite", event.target.value)} /></td><td><input aria-label={`${model.displayName} 谷时缓存读取费率`} value={draft.cacheRead} onChange={(event) => updateDraft(model, "cacheRead", event.target.value)} /></td><td><input aria-label={`${model.displayName} 货币`} value={draft.currency} maxLength={3} onChange={(event) => updateDraft(model, "currency", event.target.value.toUpperCase())} /></td><td><details className="billing-peak-settings"><summary>{draft.peakEnabled ? `已启用 ${draft.peakStart}-${draft.peakEnd}` : "未启用"}</summary><label className="billing-checkbox"><input type="checkbox" checked={draft.peakEnabled} onChange={(event) => updateDraft(model, "peakEnabled", event.target.checked)} />启用峰时费率</label><div className="billing-peak-grid"><label>输入（未缓存）<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时输入费率（未缓存）`} value={draft.peakInput} onChange={(event) => updateDraft(model, "peakInput", event.target.value)} /></label><label>输出<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时输出费率`} value={draft.peakOutput} onChange={(event) => updateDraft(model, "peakOutput", event.target.value)} /></label><label>缓存写入<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时缓存写入费率`} value={draft.peakCacheWrite} onChange={(event) => updateDraft(model, "peakCacheWrite", event.target.value)} /></label><label>缓存读取<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时缓存读取费率`} value={draft.peakCacheRead} onChange={(event) => updateDraft(model, "peakCacheRead", event.target.value)} /></label></div><div className="billing-peak-row"><label>开始<input disabled={!draft.peakEnabled} type="time" value={draft.peakStart} onChange={(event) => updateDraft(model, "peakStart", event.target.value)} /></label><label>结束<input disabled={!draft.peakEnabled} type="time" value={draft.peakEnd} onChange={(event) => updateDraft(model, "peakEnd", event.target.value)} /></label><label>时区<input disabled={!draft.peakEnabled} value={draft.timezone} onChange={(event) => updateDraft(model, "timezone", event.target.value)} placeholder="Asia/Shanghai" /></label></div><div className="billing-weekdays"><span>星期</span>{WEEKDAYS.map((option) => <label key={option.value}><input type="checkbox" disabled={!draft.peakEnabled} checked={draft.peakWeekdays.includes(option.value)} onChange={() => updateDraft(model, "peakWeekdays", draft.peakWeekdays.includes(option.value) ? draft.peakWeekdays.filter((day) => day !== option.value) : [...draft.peakWeekdays, option.value].sort((left, right) => left - right))} />{option.label}</label>)}</div><small>结束时间早于开始时间时，表示跨午夜峰时段。</small></details></td><td><button type="button" className="billing-save" disabled={savingKey === key} onClick={() => void saveRule(model)}>{savingKey === key ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}保存</button></td></tr>; })}</tbody></table></div></div>
+        <div className="billing-section"><h3>Token 计费规则</h3><p className="billing-hint">单位为每 1,000,000 tokens，顺序为未缓存输入、输出、缓存写入、缓存读取；用量中的总输入会先扣除缓存写入和缓存读取，再按未缓存输入计费。当前费率作为谷时费率。可选启用峰时费率，计费会按调用发生时间和所选时区自动切换。</p><div className="billing-table-wrap"><table className="billing-table billing-rules-table"><thead><tr><th>源 / 模型</th><th>谷时输入（未缓存）</th><th>谷时输出</th><th>谷时缓存写入</th><th>谷时缓存读取</th><th>货币</th><th>峰时设置</th><th /></tr></thead><tbody>{allModels.length === 0 ? <tr><td colSpan={8} className="billing-empty-cell">还没有可配置的模型；调用一次或先导入模型目录。</td></tr> : allModels.map((model) => { const draft = draftForModel(model); const key = `${model.providerId}:${model.modelId}`; return <tr key={key}><td><strong>{model.displayName}</strong><small>{model.providerName} · {model.modelId}</small></td><td><input aria-label={`${model.displayName} 谷时输入费率（未缓存）`} value={draft.input} onChange={(event) => updateDraft(model, "input", event.target.value)} /></td><td><input aria-label={`${model.displayName} 谷时输出费率`} value={draft.output} onChange={(event) => updateDraft(model, "output", event.target.value)} /></td><td><input aria-label={`${model.displayName} 谷时缓存写入费率`} value={draft.cacheWrite} onChange={(event) => updateDraft(model, "cacheWrite", event.target.value)} /></td><td><input aria-label={`${model.displayName} 谷时缓存读取费率`} value={draft.cacheRead} onChange={(event) => updateDraft(model, "cacheRead", event.target.value)} /></td><td><input aria-label={`${model.displayName} 货币`} value={draft.currency} maxLength={3} onChange={(event) => updateDraft(model, "currency", event.target.value.toUpperCase())} /></td><td><details className="billing-peak-settings"><summary>{draft.peakEnabled ? `已启用 ${draft.peakStart}-${draft.peakEnd}` : "未启用"}</summary><label className="billing-checkbox"><input type="checkbox" checked={draft.peakEnabled} onChange={(event) => updateDraft(model, "peakEnabled", event.target.checked)} />启用峰时费率</label><div className="billing-peak-grid"><label>输入（未缓存）<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时输入费率（未缓存）`} value={draft.peakInput} onChange={(event) => updateDraft(model, "peakInput", event.target.value)} /></label><label>输出<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时输出费率`} value={draft.peakOutput} onChange={(event) => updateDraft(model, "peakOutput", event.target.value)} /></label><label>缓存写入<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时缓存写入费率`} value={draft.peakCacheWrite} onChange={(event) => updateDraft(model, "peakCacheWrite", event.target.value)} /></label><label>缓存读取<input disabled={!draft.peakEnabled} aria-label={`${model.displayName} 峰时缓存读取费率`} value={draft.peakCacheRead} onChange={(event) => updateDraft(model, "peakCacheRead", event.target.value)} /></label></div><div className="billing-peak-row"><label>开始<input disabled={!draft.peakEnabled} type="time" value={draft.peakStart} onChange={(event) => updateDraft(model, "peakStart", event.target.value)} /></label><label>结束<input disabled={!draft.peakEnabled} type="time" value={draft.peakEnd} onChange={(event) => updateDraft(model, "peakEnd", event.target.value)} /></label><label>时区<input disabled={!draft.peakEnabled} value={draft.timezone} onChange={(event) => updateDraft(model, "timezone", event.target.value)} placeholder="Asia/Shanghai" /></label></div><div className="billing-weekdays"><span>星期</span>{WEEKDAYS.map((option) => <label key={option.value}><input type="checkbox" disabled={!draft.peakEnabled} checked={draft.peakWeekdays.includes(option.value)} onChange={() => updateDraft(model, "peakWeekdays", draft.peakWeekdays.includes(option.value) ? draft.peakWeekdays.filter((day) => day !== option.value) : [...draft.peakWeekdays, option.value].sort((left, right) => left - right))} />{option.label}</label>)}</div><small>结束时间早于开始时间时，表示跨午夜峰时段。</small></details></td><td><button type="button" className="billing-save" disabled={savingKey === key} onClick={() => void saveRule(model)}>{savingKey === key ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />}保存</button></td></tr>; })}</tbody></table></div></div>
       </>}
     </section>
   </div>, document.body);
