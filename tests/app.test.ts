@@ -2251,6 +2251,70 @@ test("forking a completed primary turn creates an independent side branch", asyn
   assert.equal(fs.existsSync(rolloutPath), false);
 });
 
+test("promoted fork conversations resolve copied history against the source rollout", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-promoted-fork-reference-test-"));
+  const tenantRoot = path.join(root, "tenants");
+  const instance = createApp({
+    projectRoot: process.cwd(),
+    dataRoot: path.join(root, "data"),
+    tenantRoot,
+    username: "owner",
+    passwordHash: bcrypt.hashSync("Promoted-Fork-Password-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+    queueAutoStart: false,
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  const login = await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Promoted-Fork-Password-2026!" }).expect(200);
+  const csrf = login.body.csrfToken as string;
+  const created = await agent.post("/codex-web/api/conversations").set("X-CSRF-Token", csrf).expect(201);
+  const parentId = created.body.conversation.id as string;
+  const parentThreadId = crypto.randomUUID();
+  const sourceMessageId = crypto.randomUUID();
+  const sourceCreatedAt = "2026-04-20T11:01:20.633Z";
+  const sourceContent = "请检查这个项目";
+  instance.db.updateConversation(parentId, { codexThreadId: parentThreadId });
+  instance.db.addMessage({
+    id: sourceMessageId,
+    conversation_id: parentId,
+    role: "user",
+    content: sourceContent,
+    codex_turn_id: "source-turn",
+    created_at: sourceCreatedAt,
+  });
+  instance.db.addMessage({
+    id: crypto.randomUUID(),
+    conversation_id: parentId,
+    role: "assistant",
+    content: "项目检查结果",
+    created_at: new Date(new Date(sourceCreatedAt).getTime() + 60_000).toISOString(),
+  });
+  const codexHome = ensureTenant(tenantRoot, LEGACY_USER_ID).codexHome;
+  writeSyntheticCodexSession(codexHome, parentThreadId, { message: sourceContent, timestamp: sourceCreatedAt });
+
+  const forked = await agent.post(`/codex-web/api/conversations/${parentId}/side-chats/fork`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceMessageId })
+    .expect(201);
+  const forkId = forked.body.conversation.id as string;
+  const copiedSourceMessage = instance.db.listMessages(forkId).find((message) => message.content === sourceContent);
+  assert.ok(copiedSourceMessage);
+  assert.equal(forked.body.conversation.codex_thread_id, null);
+  assert.equal(forked.body.conversation.fork_source_thread_id, parentThreadId);
+
+  await agent.post(`/codex-web/api/side-chats/${forkId}/promote`).set("X-CSRF-Token", csrf).expect(200);
+  assert.equal(instance.db.getSideConversationParent(forkId, LEGACY_USER_ID), undefined);
+
+  const side = await agent.post(`/codex-web/api/conversations/${forkId}/side-chat`).set("X-CSRF-Token", csrf).expect(201);
+  const reference = await agent.post(`/codex-web/api/side-chats/${side.body.conversation.id}/reference`)
+    .set("X-CSRF-Token", csrf)
+    .send({ sourceConversationId: forkId, sourceMessageId: copiedSourceMessage.id, excerpt: sourceContent, content: "请从这段内容继续分析" })
+    .expect(200);
+  assert.equal(reference.body.reference.sourceConversationId, forkId);
+  assert.equal(reference.body.reference.sourceLocation.threadId, parentThreadId);
+  assert.equal(reference.body.reference.sourceLocation.recordType, "event_msg");
+});
+
 test("host mode restore derives a missing working directory from the rollout and recategorizes", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-host-restore-working-dir-test-"));
   const project = path.join(root, "projects", "restored-project");
