@@ -937,6 +937,10 @@ test("structured first-turn responses separate the visible answer from a short t
 test("transient upstream failures use bounded 15/45/120 retry policy", async () => {
   assert.equal(isRetryableUpstreamError("websocket closed by server before response.completed"), true);
   assert.equal(isRetryableUpstreamError("HTTP 503 server overload"), true);
+  assert.equal(isRetryableUpstreamError("unexpected status 429 Too Many Requests"), true);
+  assert.equal(isRetryableUpstreamError('{"statusCode":429,"message":"rate_limit_exceeded"}'), true);
+  assert.equal(isRetryableUpstreamError(Object.assign(new Error("upstream request failed"), { status: 429 })), true);
+  assert.equal(isRetryableUpstreamError("local command exited with code 429"), false);
   assert.equal(isRetryableUpstreamError("authentication failed"), false);
   assert.equal(isRetryableUpstreamError("permission denied"), false);
 
@@ -954,6 +958,15 @@ test("transient upstream failures use bounded 15/45/120 retry policy", async () 
   assert.equal(value, "ok");
   assert.equal(calls, 3);
   assert.deepEqual(notices, [{ attempt: 1, delayMs: 0 }, { attempt: 2, delayMs: 0 }]);
+
+  let rateLimitCalls = 0;
+  const rateLimitValue = await runWithTransientRetries(async () => {
+    rateLimitCalls += 1;
+    if (rateLimitCalls === 1) throw new Error("unexpected status 429 Too Many Requests");
+    return "recovered after rate limit";
+  }, { signal: new AbortController().signal, delaysMs: [0, 0, 0] });
+  assert.equal(rateLimitValue, "recovered after rate limit");
+  assert.equal(rateLimitCalls, 2);
 
   let permanentCalls = 0;
   await assert.rejects(() => runWithTransientRetries(async () => {

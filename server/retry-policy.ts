@@ -1,11 +1,17 @@
 export const TRANSIENT_RETRY_DELAYS_MS = [15_000, 45_000, 120_000] as const;
 
 export function upstreamErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error ?? "");
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return String(error ?? "");
 }
 
 export function isRetryableUpstreamError(error: unknown): boolean {
-  const message = upstreamErrorMessage(error).toLowerCase();
+  const message = searchableUpstreamError(error).toLowerCase();
   return [
     /stream disconnected before completion/,
     /websocket closed by server before response\.completed/,
@@ -17,8 +23,36 @@ export function isRetryableUpstreamError(error: unknown): boolean {
     /request timed out/,
     /server[- ]overload/,
     /model (?:is )?at capacity/,
-    /\bhttp (?:429|502|503|504)\b/,
+    /\b(?:http(?:\/\d+(?:\.\d+)?)?|status(?:[_ ]?code)?|response(?:[._ ]?status)?)\b[\s"'`]*(?:[:=]\s*)?(?:429|502|503|504)\b/,
+    /(?:too many requests|rate[-_ ]limit(?:ed|ing)?|rate_limit_exceeded|请求过于频繁|频率限制)/,
   ].some((pattern) => pattern.test(message));
+}
+
+function searchableUpstreamError(error: unknown): string {
+  const message = upstreamErrorMessage(error);
+  if (!error || typeof error !== "object") return message;
+  const record = error as Record<string, unknown>;
+  const details = [
+    ["status", record.status],
+    ["statusCode", record.statusCode],
+    ["status_code", record.status_code],
+    ["responseStatus", record.responseStatus],
+    ["response_status", record.response_status],
+    ["response", record.response],
+    ["cause", record.cause],
+    ["error", record.error],
+    ["details", record.details],
+  ].map(([key, value]) => {
+    const detail = stringifyErrorDetail(value);
+    return detail ? `${key}:${detail}` : "";
+  }).filter(Boolean);
+  return [message, ...details].join(" ");
+}
+
+function stringifyErrorDetail(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try { return JSON.stringify(value); } catch { return ""; }
 }
 
 /**

@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import readline from "node:readline";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
-import { describeUpstreamError, isRetryableUpstreamError } from "./retry-policy.js";
+import { describeUpstreamError, isRetryableUpstreamError, upstreamErrorMessage } from "./retry-policy.js";
 import { buildOptionalCapabilityConfig, type OptionalAgentCapabilities } from "./optional-capabilities.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 import type { SandboxMode } from "./model-options.js";
@@ -138,6 +138,7 @@ class AppServerTurnClient {
   private activeTurnId: string | null = null;
   private finalResponse = "";
   private terminal = false;
+  private lastRetryableUpstreamError: unknown;
   private reconnectNotices = 0;
   private reconnectWarningSent = false;
   private stderr = "";
@@ -215,7 +216,13 @@ class AppServerTurnClient {
     this.child.on("error", (error) => this.fail(error));
     this.child.on("exit", (code, signal) => {
       output.close();
-      if (!this.terminal) this.fail(new Error(this.stderr.trim() || `Codex app server exited before completion (${signal ?? code ?? "unknown"})`));
+      if (!this.terminal) {
+        const retryableError = this.lastRetryableUpstreamError;
+        const error = retryableError !== undefined
+          ? new Error(upstreamErrorMessage(retryableError), { cause: retryableError })
+          : new Error(this.stderr.trim() || `Codex app server exited before completion (${signal ?? code ?? "unknown"})`);
+        this.fail(error);
+      }
       for (const request of this.pending.values()) request.reject(new Error("Codex app server disconnected"));
       this.pending.clear();
     });
@@ -347,7 +354,9 @@ class AppServerTurnClient {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message || "Codex app server request failed"));
+      if (message.error) {
+        pending.reject(new Error(message.error.message || "Codex app server request failed", { cause: message.error }));
+      }
       else pending.resolve(message.result);
       return;
     }
@@ -413,9 +422,10 @@ class AppServerTurnClient {
       return;
     }
     if (message.method === "error") {
-      const error = params.error as { message?: string } | undefined;
-      const detail = error?.message || "上游处理发生错误";
-      if (isRetryableUpstreamError(detail)) {
+      const error = params.error ?? params;
+      const detail = upstreamErrorMessage(error) || "上游处理发生错误";
+      if (isRetryableUpstreamError(error)) {
+        this.lastRetryableUpstreamError = error;
         this.callbacks.onProgress({ kind: "status", status: "retrying", label: "上游连接短暂中断，正在自动重试" });
         return;
       }
@@ -457,7 +467,7 @@ class AppServerTurnClient {
       return;
     }
     if (message.method !== "turn/completed") return;
-    const turn = params.turn as { id?: string; status?: string; error?: { message?: string } | null } | undefined;
+    const turn = params.turn as { id?: string; status?: string; error?: unknown } | undefined;
     if (turn?.id && this.activeTurnId && turn.id !== this.activeTurnId) return;
     const completedTurnId = turn?.id ?? this.activeTurnId;
     this.terminal = true;
@@ -472,7 +482,11 @@ class AppServerTurnClient {
       return;
     }
     if (completedTurnId) this.turnUsages.delete(completedTurnId);
-    const error = new Error(turn?.error?.message || (turn?.status === "interrupted" ? "任务已停止" : "Agent 任务失败"));
+    const turnError = turn?.error;
+    const error = new Error(
+      upstreamErrorMessage(turnError) || (turn?.status === "interrupted" ? "任务已停止" : "Agent 任务失败"),
+      { cause: turnError },
+    );
     if (turn?.status === "interrupted" || this.callbacks.signal.aborted) error.name = "AbortError";
     this.rejectCompletion(error);
   }
