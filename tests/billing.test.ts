@@ -96,6 +96,30 @@ test("billing keeps price versions by usage time and can force all history to th
   }
 });
 
+test("billing recalculation explicitly ignores stale price history", () => {
+  const { db, root } = makeDb();
+  try {
+    const conversation = db.createConversation("12121212-1212-4121-8121-121212121212", "Billing recalculation test");
+    const job = db.createJob("13131313-1313-4131-8131-131313131313", conversation.id, undefined, { model: "gpt-test", reasoningEffort: "medium" });
+    const baseRule = {
+      user_id: conversation.user_id, provider_id: BUILTIN_PROVIDER_ID, model_id: "gpt-test",
+      cached_input_per_million: 0, cache_write_per_million: 0, currency: "USD" as const, source: "manual" as const, pricing_url: null,
+    };
+    db.upsertPricingRule({ ...baseRule, input_per_million: 1, output_per_million: 1, updated_at: "2026-08-01T00:00:00.000Z" });
+    db.addApiUsage({
+      id: "14141414-1414-4141-8141-141414141414", user_id: conversation.user_id, job_id: job.id, conversation_id: conversation.id,
+      provider_id: BUILTIN_PROVIDER_ID, model_id: "gpt-test", input_tokens: 1_000_000, cached_input_tokens: 0,
+      cache_write_input_tokens: 0, output_tokens: 1_000_000, reasoning_output_tokens: 0, created_at: "2026-08-10T00:00:00.000Z",
+    });
+    db.upsertPricingRule({ ...baseRule, input_per_million: 3, output_per_million: 3, updated_at: "2026-08-20T00:00:00.000Z" });
+    assert.equal(buildBillingState(db, conversation.user_id, 365).summary.estimatedCost, 2);
+    assert.equal(buildBillingState(db, conversation.user_id, 365, { useCurrentPricing: true }).summary.estimatedCost, 6);
+  } finally {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("billing switches between valley and peak prices by local usage time", () => {
   const { db, root } = makeDb();
   try {

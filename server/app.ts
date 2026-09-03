@@ -1162,7 +1162,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     db.clearPricingRuleHistory(session.user_id);
     const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
-    return res.json(buildBillingState(db, session.user_id, rawDays));
+    return res.json(buildBillingState(db, session.user_id, rawDays, { useCurrentPricing: true }));
   });
 
   api.post("/billing/sync-pricing", async (req, res) => {
