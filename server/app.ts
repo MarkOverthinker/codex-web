@@ -719,10 +719,14 @@ export function createApp(overrides: AppOverrides = {}) {
     excerpt: string,
     requireJsonlLocation = false,
   ): Promise<MessageSourceReference | null> {
-    const sourceLocation = sourceConversation.codex_thread_id
+    // A Fork side conversation has no own thread until its first send. If it
+    // is promoted before then, its copied history still belongs to the source
+    // rollout and must remain referenceable there.
+    const sourceThreadId = sourceConversation.codex_thread_id ?? sourceConversation.fork_source_thread_id;
+    const sourceLocation = sourceThreadId
       ? await locateMessageInCodexRolloutEventually({
           codexHome: codexHomeFor(sourceConversation.user_id),
-          threadId: sourceConversation.codex_thread_id,
+          threadId: sourceThreadId,
           role: sourceMessage.role === "assistant" ? "assistant" : "user",
           messageContent: sourceMessage.content,
           messageCreatedAt: sourceMessage.created_at,
