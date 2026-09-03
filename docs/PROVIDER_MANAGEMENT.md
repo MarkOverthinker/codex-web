@@ -38,6 +38,8 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SSE 中实时发送。会话页头部显示当前上下文占用、该任务的自动压缩阈值和百分比；这个阈值取任务启动时选定模型的 `model_auto_compact_token_limit`，没有收到过 Codex 状态的旧会话显示“上下文暂无”。
 
+Codex app-server 的 reasoning 摘要通过 `item/reasoning/summaryTextDelta` 等增量通知传递，codex-web 会按 `itemId` 累积后显示。OpenAI GPT 只提供可展示的 reasoning summary，不提供原始 chain-of-thought；只有实际返回 reasoning 摘要或内容的模型才会显示“思考过程”。Chat Completions 源是否能显示，取决于上游是否返回 `reasoning_content` 以及 relay 是否完成映射。
+
 ## 模型文件
 
 每个源可以指定一个 codex-home 内的 JSON 文件作为模型目录（如 `models.json`、`sssaicodeapi-models.json`）。该文件必须是 `{ "models": [...] }` 结构，条目字段与 Codex 目录一致。导入时：

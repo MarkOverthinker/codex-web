@@ -101,6 +101,11 @@ type PendingRequest = {
   reject(error: Error): void;
 };
 
+type ReasoningParts = {
+  summaries: string[];
+  contents: string[];
+};
+
 type RpcId = string | number;
 type RpcResponse = { id: number; result?: unknown; error?: { message?: string; data?: unknown } };
 type RpcServerRequest = { id: RpcId; method: string; params?: JsonObject };
@@ -146,6 +151,7 @@ class AppServerTurnClient {
   private readonly completion: Promise<string>;
   private resolveCompletion!: (value: string) => void;
   private rejectCompletion!: (error: Error) => void;
+  private readonly reasoningParts = new Map<string, ReasoningParts>();
 
   constructor(private readonly options: AppServerTurnOptions, private readonly callbacks: AppServerCallbacks) {
     this.completion = new Promise<string>((resolve, reject) => {
@@ -450,6 +456,18 @@ class AppServerTurnClient {
       if (progress) this.callbacks.onProgress(progress);
       return;
     }
+    if (message.method === "item/reasoning/summaryTextDelta") {
+      this.appendReasoningDelta(params, "summary");
+      return;
+    }
+    if (message.method === "item/reasoning/textDelta") {
+      this.appendReasoningDelta(params, "content");
+      return;
+    }
+    if (message.method === "item/reasoning/summaryPartAdded") {
+      this.markReasoningSummaryPart(params);
+      return;
+    }
     if (message.method === "guardianWarning") {
       const detail = redactBrand(String(params.message ?? "自动审核发生异常"));
       this.callbacks.onProgress({ kind: "approval", label: "自动审核警告", detail, reviewStatus: "warning" });
@@ -462,7 +480,9 @@ class AppServerTurnClient {
         this.finalResponse = typeof item.text === "string" ? item.text : this.finalResponse;
         if (this.options.outputSchema) return;
       }
-      const progress = summarizeAppServerItem(item, message.method === "item/completed");
+      const progress = item.type === "reasoning"
+        ? this.summarizeReasoningItem(item, message.method === "item/completed")
+        : summarizeAppServerItem(item, message.method === "item/completed");
       if (progress) this.callbacks.onProgress(progress);
       return;
     }
@@ -497,6 +517,43 @@ class AppServerTurnClient {
     this.rejectCompletion(error);
   }
 
+  private appendReasoningDelta(params: JsonObject, part: "summary" | "content"): void {
+    const itemId = typeof params.itemId === "string" ? params.itemId : "";
+    const delta = typeof params.delta === "string" ? params.delta : "";
+    const indexKey = part === "summary" ? "summaryIndex" : "contentIndex";
+    const index = Number(params[indexKey]);
+    if (!itemId || !delta || !Number.isInteger(index) || index < 0) return;
+    const current = this.reasoningParts.get(itemId) ?? { summaries: [], contents: [] };
+    const target = part === "summary" ? current.summaries : current.contents;
+    target[index] = `${target[index] ?? ""}${delta}`;
+    const progress = summarizeReasoningParts(current.summaries, current.contents);
+    this.reasoningParts.set(itemId, current);
+    if (progress) this.callbacks.onProgress(progress);
+  }
+
+  private markReasoningSummaryPart(params: JsonObject): void {
+    const itemId = typeof params.itemId === "string" ? params.itemId : "";
+    const index = Number(params.summaryIndex);
+    if (!itemId || !Number.isInteger(index) || index < 0) return;
+    const current = this.reasoningParts.get(itemId) ?? { summaries: [], contents: [] };
+    if (current.summaries[index] === undefined) current.summaries[index] = "";
+    this.reasoningParts.set(itemId, current);
+  }
+
+  private summarizeReasoningItem(item: JsonObject, completed: boolean): unknown | null {
+    const itemId = typeof item.id === "string" ? item.id : "";
+    const current = itemId ? this.reasoningParts.get(itemId) : undefined;
+    const itemSummaries = asStringArray(item.summary);
+    const itemContents = asStringArray(item.content);
+    const summaries = itemSummaries.length > 0 ? itemSummaries : current?.summaries ?? [];
+    const contents = itemContents.length > 0 ? itemContents : current?.contents ?? [];
+    if (itemId) {
+      if (completed) this.reasoningParts.delete(itemId);
+      else this.reasoningParts.set(itemId, { summaries, contents });
+    }
+    return summarizeReasoningParts(summaries, contents);
+  }
+
   private dispose(): void {
     if (this.child.stdin.writable) this.child.stdin.end();
     if (!this.child.killed) this.child.kill("SIGTERM");
@@ -520,19 +577,7 @@ function makeUserInput(prompt: string, imagePaths: string[]): JsonObject[] {
 
 export function summarizeAppServerItem(item: JsonObject, completed: boolean): unknown | null {
   if (item.type === "reasoning") {
-    const summaries = asStringArray(item.summary)
-      .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
-      .filter(Boolean);
-    const contents = asStringArray(item.content)
-      .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
-      .filter(Boolean);
-    if (summaries.length === 0 && contents.length === 0) return null;
-    return {
-      kind: "reasoning",
-      label: "思考过程",
-      detail: summaries.join("\n\n") || contents.join("\n\n"),
-      steps: buildReasoningSteps(summaries, contents),
-    };
+    return summarizeReasoningParts(asStringArray(item.summary), asStringArray(item.content));
   }
   if (item.type === "commandExecution") {
     const command = typeof item.command === "string" ? item.command : "";
@@ -553,6 +598,22 @@ export function summarizeAppServerItem(item: JsonObject, completed: boolean): un
     return detail ? { kind: "update", label: "阶段反馈", detail } : null;
   }
   return null;
+}
+
+function summarizeReasoningParts(summaryParts: string[], contentParts: string[]): unknown | null {
+  const summaries = summaryParts
+    .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
+    .filter(Boolean);
+  const contents = contentParts
+    .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
+    .filter(Boolean);
+  if (summaries.length === 0 && contents.length === 0) return null;
+  return {
+    kind: "reasoning",
+    label: "思考过程",
+    detail: summaries.join("\n\n") || contents.join("\n\n"),
+    steps: buildReasoningSteps(summaries, contents),
+  };
 }
 
 function summarizeCollabAgentToolCall(item: JsonObject, completed: boolean): unknown {
