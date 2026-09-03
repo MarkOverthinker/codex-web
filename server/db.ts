@@ -9,8 +9,8 @@ import { type TaskListCategorySettings, type TaskListCustomCategory } from "../s
 import { isDeliverablePath, normalizeStoredRelativePath, normalizeUploadFileName } from "./paths.js";
 
 export const LEGACY_USER_ID = "00000000-0000-4000-8000-000000000001";
-export const DEFAULT_MODEL_CONTEXT_WINDOW = 1_000_000;
-export const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 900_000;
+export const DEFAULT_MODEL_CONTEXT_WINDOW = 512_000;
+export const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 435_000;
 
 export type UserRow = {
   id: string;

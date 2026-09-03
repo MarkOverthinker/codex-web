@@ -45,8 +45,8 @@ const emptyModelDraft: ModelDraft = {
   inputModalities: "text, image",
   priority: "0",
   visible: true,
-  modelContextWindow: "1000000",
-  autoCompactTokenLimit: "900000",
+  modelContextWindow: "512000",
+  autoCompactTokenLimit: "435000",
 };
 
 function providerDraft(provider: Provider): ProviderDraft {
@@ -362,8 +362,8 @@ export function ProviderManagerDialog({ open, onClose, onChanged }: {
           <label><span>说明</span><input value={modelDraftState.description} onChange={(event) => setModelDraftState((current) => ({ ...current, description: event.target.value }))} placeholder="可选" /></label>
           <label><span>思考深度（逗号分隔）</span><input value={modelDraftState.reasoningEfforts} onChange={(event) => setModelDraftState((current) => ({ ...current, reasoningEfforts: event.target.value }))} /></label>
           <label><span>输入模态（逗号分隔）</span><input value={modelDraftState.inputModalities} onChange={(event) => setModelDraftState((current) => ({ ...current, inputModalities: event.target.value }))} /></label>
-          <label><span>上下文窗口（tokens）</span><input type="number" min={1} value={modelDraftState.modelContextWindow} onChange={(event) => setModelDraftState((current) => ({ ...current, modelContextWindow: event.target.value }))} placeholder="默认 1000000" /></label>
-          <label><span>自动压缩阈值（tokens）</span><input type="number" min={1} value={modelDraftState.autoCompactTokenLimit} onChange={(event) => setModelDraftState((current) => ({ ...current, autoCompactTokenLimit: event.target.value }))} placeholder="默认 900000" /></label>
+          <label><span>上下文窗口（tokens）</span><input type="number" min={1} value={modelDraftState.modelContextWindow} onChange={(event) => setModelDraftState((current) => ({ ...current, modelContextWindow: event.target.value }))} placeholder="默认 512000" /></label>
+          <label><span>自动压缩阈值（tokens）</span><input type="number" min={1} value={modelDraftState.autoCompactTokenLimit} onChange={(event) => setModelDraftState((current) => ({ ...current, autoCompactTokenLimit: event.target.value }))} placeholder="默认 435000" /></label>
           <label><span>优先级（数字，越小越靠前）</span><input type="number" min={0} value={modelDraftState.priority} onChange={(event) => setModelDraftState((current) => ({ ...current, priority: event.target.value }))} /></label>
           <label className="provider-form-check"><input type="checkbox" checked={modelDraftState.visible} onChange={(event) => setModelDraftState((current) => ({ ...current, visible: event.target.checked }))} /><span>在模型菜单中可见</span></label>
         </div>

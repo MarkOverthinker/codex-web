@@ -190,8 +190,8 @@ test("colliding model ids get unique source-prefixed catalog slugs", () => {
   assert.deepEqual(resolveAgentExecutionSelection(options, persistedSelection), {
     model: "gpt-5.6-sol",
     reasoningEffort: "high",
-    modelContextWindow: 1_000_000,
-    autoCompactTokenLimit: 900_000,
+    modelContextWindow: 512_000,
+    autoCompactTokenLimit: 435_000,
     provider: "proxy",
     sandbox: "workspace-write",
   });
@@ -243,9 +243,9 @@ test("writeProviderConfig merges managed providers and preserves unmanaged secti
     { effort: "high", description: "Extra high reasoning depth for complex problems" },
   ]);
   assert.equal(catalog.models[0].shell_type, "shell_command");
-  assert.equal(catalog.models[0].context_window, 1_000_000, "database context setting overrides the template");
-  assert.equal(catalog.models[0].max_context_window, 1_000_000);
-  assert.equal(catalog.models[0].auto_compact_token_limit, 900_000);
+  assert.equal(catalog.models[0].context_window, 512_000, "database context setting overrides the template");
+  assert.equal(catalog.models[0].max_context_window, 512_000);
+  assert.equal(catalog.models[0].auto_compact_token_limit, 435_000);
   assert.ok(String(catalog.models[0].base_instructions).length > 1_000, "complete bundled instructions are preserved");
   db.close();
 });
@@ -329,8 +329,8 @@ test("aggregated catalog carries Codex-required fields even when templates omit 
   assert.deepEqual(catalog.models[0].truncation_policy, { mode: "bytes", limit: 10_000 });
   assert.equal(catalog.models[0].supports_parallel_tool_calls, false);
   assert.deepEqual(catalog.models[0].experimental_supported_tools, []);
-  assert.equal(catalog.models[0].context_window, 1_000_000);
-  assert.equal(catalog.models[0].max_context_window, 1_000_000);
+  assert.equal(catalog.models[0].context_window, 512_000);
+  assert.equal(catalog.models[0].max_context_window, 512_000);
   const reasoningLevels = catalog.models[0].supported_reasoning_levels as Array<Record<string, unknown>>;
   assert.deepEqual(reasoningLevels, [{ effort: "high", description: "Deeper reasoning for complex tasks" }]);
   db.close();
@@ -502,7 +502,7 @@ test("model context settings default and support per-model overrides", () => {
   });
   const models = listProviderModelsPublic(db, LEGACY_USER_ID, "proxy");
   assert.deepEqual(models.map((model) => [model.modelId, model.modelContextWindow, model.autoCompactTokenLimit]), [
-    ["default-model", 1_000_000, 900_000],
+    ["default-model", 512_000, 435_000],
     ["custom-model", 128_000, 115_200],
   ]);
   const options = loadAgentOptions({} as AppConfig, "", db, LEGACY_USER_ID);
@@ -540,7 +540,7 @@ test("database migration upgrades the old fixed model context pair", () => {
 
   const reopened = testDb(root);
   const model = reopened.getProviderModel(LEGACY_USER_ID, "legacy");
-  assert.equal(model?.model_context_window, 1_000_000);
-  assert.equal(model?.auto_compact_token_limit, 900_000);
+  assert.equal(model?.model_context_window, 512_000);
+  assert.equal(model?.auto_compact_token_limit, 435_000);
   reopened.close();
 });
