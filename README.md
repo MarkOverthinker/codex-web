@@ -29,7 +29,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Soft-deleted conversation audit records while workspace files are removed
 - Archive and restore completed conversations without deleting their history or files
 - Cancellation that retains a concise history of completed work so the next turn can resume from it
-- Explicit interrupted-task messages after an unexpected service restart, without unsafe automatic retries
+- Explicit interrupted-task messages after an unexpected service restart, without unsafe automatic retries; transient upstream disconnects and rate limits use bounded automatic retries
 - Graceful container shutdown that drains in-flight Codex work and leaves queued tasks persisted
 - Automatic short task titles, with manual titles taking precedence
 - A durable live work journal with retained stage feedback and grouped command steps
