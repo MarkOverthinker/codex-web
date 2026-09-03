@@ -145,14 +145,14 @@ function modelDisplayName(providerId: string, modelId: string, models: ProviderM
   return models.find((model) => model.provider_id === providerId && (model.model_id === modelId || model.slug === modelId))?.display_name ?? modelId;
 }
 
-export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 30): BillingState {
+export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 30, options: { useCurrentPricing?: boolean } = {}): BillingState {
   const days = Math.min(3650, Math.max(1, Math.trunc(rangeDays) || 30));
   const from = new Date(Date.now() - days * 86_400_000).toISOString();
   const rows = db.listApiUsage(userId, from);
   const providers = db.listProviders(userId);
   const models = db.listProviderModels(userId);
   const rules = db.listPricingRules(userId);
-  const ruleHistory = db.listPricingRuleHistory(userId);
+  const ruleHistory = options.useCurrentPricing ? [] : db.listPricingRuleHistory(userId);
   const ruleMap = new Map(rules.map((rule) => [`${rule.provider_id}:${rule.model_id}`, rule]));
   const ruleForUsage = (row: ApiUsageRow) => pricingRuleForUsage(row, ruleMap.get(`${row.provider_id}:${row.model_id}`), ruleHistory);
   const costs = rows.map((row) => calculateCost(row, ruleForUsage(row)));
