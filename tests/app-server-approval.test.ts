@@ -269,6 +269,74 @@ input.on("line", (line) => {
   assert.deepEqual(contextUsage, { usedTokens: 75, contextWindow: 115_200 });
 });
 
+test("app-server forwards reasoning summary and raw-content deltas", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-reasoning-deltas-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "fake-app-server.mjs");
+  const workspace = path.join(root, "workspace");
+  const library = path.join(root, "library");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(library);
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+import readline from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ id: message.id, result: {} });
+  if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: "thread-reasoning" } } });
+  if (message.method === "turn/start") {
+    send({ id: message.id, result: { turn: { id: "turn-reasoning" } } });
+    send({ method: "item/started", params: { item: { id: "reasoning-1", type: "reasoning", summary: [], content: [] } } });
+    send({ method: "item/reasoning/summaryTextDelta", params: { itemId: "reasoning-1", summaryIndex: 0, delta: "先核对数据口径" } });
+    send({ method: "item/reasoning/summaryPartAdded", params: { itemId: "reasoning-1", summaryIndex: 1 } });
+    send({ method: "item/reasoning/summaryTextDelta", params: { itemId: "reasoning-1", summaryIndex: 1, delta: "再验证汇总结果" } });
+    send({ method: "item/completed", params: { item: { id: "reasoning-1", type: "reasoning", summary: [], content: [] } } });
+    send({ method: "item/started", params: { item: { id: "reasoning-2", type: "reasoning", summary: [], content: [] } } });
+    send({ method: "item/reasoning/textDelta", params: { itemId: "reasoning-2", contentIndex: 0, delta: "原始推理片段" } });
+    send({ method: "item/completed", params: { item: { id: "reasoning-2", type: "reasoning", summary: [], content: [] } } });
+    send({ method: "turn/completed", params: { turn: { id: "turn-reasoning", status: "completed", error: null } } });
+  }
+});
+`, { mode: 0o755 });
+
+  const progress: JobEvent[] = [];
+  const controller = new AbortController();
+  const execution = startAppServerTurn({
+    executablePath: executable,
+    cwd: workspace,
+    env: process.env,
+    threadId: null,
+    prompt: "inspect the data",
+    imagePaths: [],
+    model: "gpt-reasoning-test",
+    reasoningEffort: "high",
+    sandboxMode: "workspace-write",
+    library,
+    shellEnvironment: {},
+    networkAccessEnabled: false,
+    webSearchMode: "cached",
+    optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
+  }, {
+    signal: controller.signal,
+    onThreadStarted: () => undefined,
+    onProgress: (payload) => progress.push(payload as JobEvent),
+  });
+
+  assert.equal(await withTimeout(execution.result), "");
+  const summary = progress.find((event) => event.detail === "先核对数据口径\n\n再验证汇总结果");
+  assert.deepEqual(summary, {
+    kind: "reasoning",
+    label: "思考过程",
+    detail: "先核对数据口径\n\n再验证汇总结果",
+    steps: [
+      { title: "先核对数据口径", detail: "先核对数据口径" },
+      { title: "再验证汇总结果", detail: "再验证汇总结果" },
+    ],
+  });
+  assert.ok(progress.some((event) => event.kind === "reasoning" && event.detail === "原始推理片段"));
+});
+
 test("app-server forks a thread before the edited turn and reports the new turn", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-thread-fork-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
