@@ -32,7 +32,7 @@ The interaction borrows the Windows app's split-workspace idea: keep the main ta
 - Primary conversation lists exclude sidecars; the side-chat history API exposes active sidecars with their originating task title.
 - Archiving, restoring, or deleting a primary conversation applies to all sidecars created from it.
 - `pending_prompts.source_reference` preserves structured references when a side message waits in the queue.
-- A Fork-created sidecar stores `fork_source_thread_id`, `fork_last_turn_id`, and `fork_source_message_id` while `codex_thread_id` remains empty until the first send.
+- A Fork-created sidecar stores `fork_source_thread_id`, `fork_last_turn_id`, and `fork_source_message_id` while `codex_thread_id` remains empty until the first send. If it is promoted before that send, copied-message references resolve against `fork_source_thread_id` until the new fork thread is created.
 
 ## JSONL resolution
 
@@ -40,7 +40,7 @@ The server resolves a selected excerpt against rollout files under the authentic
 
 Only a relative rollout path is returned to the browser. Absolute Codex-home paths and unrelated JSONL content are never exposed.
 
-Structured first-turn responses are matched through their decoded `answer` field because the rollout stores the response-schema JSON while the conversation displays only the answer. If the source message has not reached a persisted Codex rollout yet, creating a side reference briefly waits for the completed turn to flush, then fails explicitly instead of fabricating a location.
+Structured first-turn responses are matched through their decoded `answer` field because the rollout stores the response-schema JSON while the conversation displays only the answer. A promoted, not-yet-sent Fork conversation resolves copied-message references through its source thread. If the source message has not reached a persisted Codex rollout yet, creating a side reference briefly waits for the completed turn to flush, then fails explicitly instead of fabricating a location.
 
 ## Interface
 
