@@ -106,6 +106,10 @@ owner tenant. Keep `CONTAINERIZED` and `TENANT_WORKER_ISOLATION` unset (host
 mode forces direct execution). `HOST`, `PORT`, `BASE_PATH`, `DATA_ROOT` and
 `TENANT_ROOT` behave as in the container deployment; web data still lives
 under `DATA_ROOT`/`TENANT_ROOT`, while `~/.codex` stays in each user's home.
+For host deployments that generate large files, place `DATA_ROOT` and
+`TENANT_ROOT` on a dedicated data volume instead of the system volume; the
+application keeps the database's relative file paths stable across that
+relocation.
 Because each web username must match a system account, the account settings do
 not allow renaming the username in host mode; users can rotate their web login
 password there, while system account passwords remain managed with `passwd`.

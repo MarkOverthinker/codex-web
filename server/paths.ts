@@ -26,6 +26,7 @@ const HOST_WORKSPACE_AGENTS = `# Conversation workspace (host mode)
 ${MANAGED_INSTRUCTIONS_START}
 - You act as this machine user's local Codex agent with workspace-write access to the selected working directory, conversation workspace, and tenant library.
 - User uploads are in uploads/. Save finished deliverables in outputs/ unless the task asks otherwise.
+- For large intermediate files and generated assets, prefer /mnt/data or /mnt/data1 when the selected project allows it; avoid filling the root filesystem.
 - You may read host paths that this user can access. Writes outside the writable roots, blocked network access, and other escalations require automatic approval review; do not ask the web user to approve them manually.
 - Keep throwaway files, caches, and temporary environments in .runtime/; the service deletes it after every turn.
 - Never reveal credentials, authentication files, browser profiles, or unrelated users' data.

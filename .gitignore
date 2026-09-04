@@ -7,7 +7,7 @@ dist-server/
 !.env.example
 compose.override.yaml
 data/
-tenants/
+tenants
 workspaces/
 *.sqlite
 *.sqlite-*
