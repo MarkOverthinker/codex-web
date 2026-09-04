@@ -2448,6 +2448,28 @@ export class AppDatabase {
     return this.sqlite.prepare("SELECT seq,event_type,payload,created_at FROM job_events WHERE job_id=? AND seq>? ORDER BY seq").all(jobId, after) as JobEventRow[];
   }
 
+  getJobStartedAt(jobId: string): string | null {
+    const events = this.sqlite.prepare("SELECT payload,created_at FROM job_events WHERE job_id=? AND event_type='status' ORDER BY seq").all(jobId) as Array<Pick<JobEventRow, "payload" | "created_at">>;
+    for (const event of events) {
+      try {
+        const payload = JSON.parse(event.payload) as { status?: unknown };
+        if (payload.status === "running") return event.created_at;
+      } catch {
+        // Ignore malformed status metadata; the event stream remains available.
+      }
+    }
+    return null;
+  }
+
+  listRecentEvents(jobId: string, limit = 50, after = 0): JobEventRow[] {
+    const boundedLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
+    const boundedAfter = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+    const events = this.sqlite.prepare(
+      "SELECT seq,event_type,payload,created_at FROM job_events WHERE job_id=? AND seq>? ORDER BY seq DESC LIMIT ?",
+    ).all(jobId, boundedAfter, boundedLimit) as JobEventRow[];
+    return events.reverse();
+  }
+
   createSession(tokenHash: string, csrfToken: string, expiresAt: string, userId = LEGACY_USER_ID): void {
     const now = new Date().toISOString();
     this.sqlite.prepare("DELETE FROM sessions WHERE expires_at<=?").run(now);

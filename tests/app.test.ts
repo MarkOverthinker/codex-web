@@ -1163,6 +1163,8 @@ test("conversation workspaces stay concise while tenants receive the managed loc
   assert.match(initial, /`CWW_PYTHON_RUNNER`/);
   assert.match(initial, /Never expose absolute paths/);
   assert.match(initial, /Never read codex-home/);
+  const hostWorkspace = ensureWorkspace(root, crypto.randomUUID(), true);
+  assert.match(fs.readFileSync(path.join(hostWorkspace, "AGENTS.md"), "utf8"), /\/mnt\/data.*\/mnt\/data1/);
   fs.appendFileSync(agentsPath, "\n- Keep this custom instruction.\n", "utf8");
   ensureWorkspace(root, conversationId);
   const updated = fs.readFileSync(agentsPath, "utf8");
@@ -4517,6 +4519,44 @@ test("conversation detail restores running progress and terminal SSE replay", as
   assert.match(replay.text, /id: 3\n/);
   assert.match(replay.text, /"created_at":"2026-/);
   await agent.get(`/codex-web/api/conversations/${crypto.randomUUID()}`).expect(404);
+});
+
+test("conversation recovery bounds large job event histories", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-event-window-test-"));
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
+    username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const agent = request.agent(instance.app);
+  await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
+
+  const conversationId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  instance.db.createConversation(conversationId, "large event history");
+  instance.db.createJob(jobId, conversationId);
+  instance.db.updateJob(jobId, "running");
+  instance.db.updateConversation(conversationId, { status: "running" });
+  instance.db.appendEvent(jobId, "status", { status: "running", label: "started" });
+  for (let index = 0; index < 75; index += 1) {
+    instance.db.appendEvent(jobId, "progress", { kind: "command", label: `step-${index}` });
+  }
+  instance.db.finishJob(jobId, conversationId, "completed");
+  instance.db.appendEvent(jobId, "done", { status: "completed" });
+
+  const detail = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
+  assert.equal(detail.body.activeJob, null);
+  assert.equal(detail.body.jobEvents.length, 50);
+  assert.equal(detail.body.jobEvents[0].seq, 28);
+  assert.equal(detail.body.jobEvents.at(-1).type, "done");
+  assert.equal(typeof detail.body.latestJob.startedAt, "string");
+  assert.equal(instance.db.listEvents(jobId).length, 77);
+
+  const replay = await agent.get(`/codex-web/api/jobs/${jobId}/events`).expect(200);
+  assert.doesNotMatch(replay.text, /id: 1\n/);
+  assert.match(replay.text, /id: 28\n/);
+  assert.match(replay.text, /id: 77\n/);
 });
 
 test("file tree API scopes listings to the conversation and serves safe previews", async (context) => {
