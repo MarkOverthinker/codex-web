@@ -60,6 +60,12 @@ Expanded lists render in batches of 24 and use browser content visibility and
 intrinsic size containment for cards, so opening a large result set does not
 create or paint every file at once.
 
+Job events remain fully durable in SQLite, but conversation detail and SSE
+recovery endpoints read only the most recent bounded event window. Queries use
+the `(job_id, seq)` primary key so a long task cannot force the server or
+browser to materialize its entire progress history during login, navigation,
+or reconnect.
+
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
 restoring, editing, and clearing text use the separate `composerInputRevision`

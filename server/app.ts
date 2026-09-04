@@ -71,6 +71,7 @@ import {
 
 const COOKIE_NAME = "cww_session";
 const CONVERSATION_MESSAGE_PAGE_SIZE = 30;
+const JOB_EVENT_REPLAY_LIMIT = 50;
 const FILE_INSTRUCTION_GUIDANCE = "文件已上传，请输入具体操作，例如“把图片背景改为白色”或“汇总这些表格”。收到明确指令后才会开始处理。";
 const USERNAME_PATTERN = /^[a-z_][a-z0-9._-]{0,31}$/i;
 
@@ -2119,22 +2120,15 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     let conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
-    const jobStartedAt = (jobId: string): string | null => {
-      for (const event of db.listEvents(jobId)) {
-        const payload = JSON.parse(event.payload) as Record<string, unknown>;
-        if (payload.status === "running") return event.created_at;
-      }
-      return null;
-    };
     const rolloutBytes = runner.conversationRolloutBytes(conversation.id);
     if (rolloutBytes !== conversation.rollout_bytes) {
       db.setConversationRolloutBytes(conversation.id, rolloutBytes);
       conversation = db.getConversationForUser(conversation.id, session.user_id)!;
     }
     const latestJob = db.getLatestJobForConversation(conversation.id) ?? null;
-    const latestJobWithStartedAt = latestJob ? { ...latestJob, startedAt: jobStartedAt(latestJob.id) } : null;
+    const latestJobWithStartedAt = latestJob ? { ...latestJob, startedAt: db.getJobStartedAt(latestJob.id) } : null;
     const jobEvents = latestJob
-      ? db.listEvents(latestJob.id).map((event) => ({ seq: event.seq, type: event.event_type, created_at: event.created_at, ...JSON.parse(event.payload) }))
+      ? db.listRecentEvents(latestJob.id, JOB_EVENT_REPLAY_LIMIT).map((event) => ({ seq: event.seq, type: event.event_type, created_at: event.created_at, ...JSON.parse(event.payload) }))
       : [];
     const messagePage = db.listMessagesPage(conversation.id, undefined, CONVERSATION_MESSAGE_PAGE_SIZE)!;
     const safeMessages = safeConversationMessages(conversation, messagePage.messages);
@@ -2904,7 +2898,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const after = Number(req.get("last-event-id") ?? req.query.after ?? 0) || 0;
     let lastSent = after;
     res.write("retry: 2000\n\n");
-    for (const event of db.listEvents(job.id, after)) {
+    for (const event of db.listRecentEvents(job.id, JOB_EVENT_REPLAY_LIMIT, after)) {
       writeSse(res, event.seq, event.event_type, { created_at: event.created_at, ...JSON.parse(event.payload) });
       lastSent = event.seq;
     }
@@ -2915,7 +2909,7 @@ export function createApp(overrides: AppOverrides = {}) {
     subscribers.set(job.id, set);
     const checkedJob = db.getJob(job.id);
     if (!checkedJob || terminalStatuses.includes(checkedJob.status)) {
-      for (const event of db.listEvents(job.id, lastSent)) writeSse(res, event.seq, event.event_type, { created_at: event.created_at, ...JSON.parse(event.payload) });
+      for (const event of db.listRecentEvents(job.id, JOB_EVENT_REPLAY_LIMIT, lastSent)) writeSse(res, event.seq, event.event_type, { created_at: event.created_at, ...JSON.parse(event.payload) });
       set.delete(res);
       if (set.size === 0) subscribers.delete(job.id);
       return res.end();
