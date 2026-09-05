@@ -8,7 +8,7 @@ import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, BarChart3, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen, FolderTree,
   ChevronUp, GitFork, ListChecks,
-  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
+  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentModelOption, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type SandboxMode, type Session, type WorkFile, type WorkingDirSettings } from "./api";
@@ -50,6 +50,7 @@ const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
 const TASK_CATEGORY_FULLY_EXPANDED_KEY = "codex-web:task-categories-fully-expanded";
 const TASK_CATEGORY_VISIBLE_COUNTS_KEY = "codex-web:task-categories-visible-counts";
 const TASK_VIEW_MODE_KEY = "codex-web:task-view-mode";
+const SIDEBAR_COLLAPSED_KEY = "codex-web:sidebar-collapsed";
 const SIDEBAR_WIDTH_KEY = "codex-web:sidebar-width";
 const PREVIEW_WIDTH_KEY = "codex-web:preview-width";
 const SIDE_CHAT_WIDTH_KEY = "codex-web:side-chat-width";
@@ -413,6 +414,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [selectedId, setSelectedId] = useState<string | null>(() => readLocalStorageValue(SELECTED_CONVERSATION_KEY));
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readLocalStorageValue(SIDEBAR_COLLAPSED_KEY) === "true");
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
   const [sideChatReferenceRequest, setSideChatReferenceRequest] = useState<SideChatReferenceRequest | null>(null);
@@ -2435,6 +2437,12 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     writeLocalStorageValue(TASK_VIEW_MODE_KEY, mode);
   }
 
+  function toggleDesktopSidebar() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    writeLocalStorageValue(SIDEBAR_COLLAPSED_KEY, String(next));
+  }
+
   async function toggleCategoryPinned(view: TaskListCategoryView) {
     const settings = taskCategorySettings;
     if (!settings || categorySaving) return;
@@ -2680,9 +2688,9 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
   ]);
 
-  return <div className="shell">
+  return <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
     {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
-    <aside className={`sidebar ${sidebarOpen ? "open" : ""}`} style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
+    <aside id="primary-sidebar" className={`sidebar ${sidebarOpen ? "open" : ""}`} style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
       <div className="sidebar-top">
         <div className="wordmark"><span className="brand-mark small"><Zap size={15} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭"><X size={19} /></button>
@@ -3085,7 +3093,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     <PathBrowserDialog request={pathBrowser} onClose={() => setPathBrowser(null)} />
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
-      <header className="desktop-header"><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></header>
+      <header className="desktop-header"><div className="desktop-header-leading"><button type="button" className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} onClick={toggleDesktopSidebar}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></div></header>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
       {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onEditMessage={(message) => void beginMessageEdit(message)} onForkSideChat={forkMessageToSideChat} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />

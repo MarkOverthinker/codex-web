@@ -28,7 +28,8 @@ category names, which directories they contain, the pinned-category order, and
 hidden-category keys. Without an explicit task drag, conversations inside each
 category are ordered by `updated_at` with the most recently active task first.
 The browser derives the grouped sidebar view from conversations, favorites, and
-that settings record; only expanded/collapsed state is kept in `localStorage`.
+that settings record; category expanded/collapsed state and desktop sidebar
+visibility are kept in `localStorage`.
 The first startup after the task-order fix removes legacy persisted drag orders
 once, because older accidental gestures could otherwise continue to override
 the activity order after an upgrade. New explicit drags remain persistent.
