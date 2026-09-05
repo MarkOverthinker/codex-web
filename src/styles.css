@@ -143,6 +143,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
     radial-gradient(circle at 18% 0, rgba(240, 170, 60, .11), transparent 16rem),
     linear-gradient(180deg, var(--navy-soft) 0%, var(--navy) 100%);
   box-shadow: 18px 0 45px rgba(15, 17, 32, .08);
+  transition: width .2s ease, flex-basis .2s ease, padding .2s ease, gap .2s ease, opacity .15s ease, box-shadow .2s ease;
 }
 .sidebar-resizer, .file-preview-resizer, .side-chat-resizer {
   position: absolute;
@@ -469,9 +470,12 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .workspace { position: relative; min-width: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--canvas); }
 .mobile-header, .mobile-only { display: none; }
 .desktop-header { height: 56px; flex: 0 0 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 22px; border-bottom: 1px solid rgba(15, 17, 32, .08); background: rgba(250, 251, 255, .94); box-shadow: 0 7px 22px rgba(15, 17, 32, .035); backdrop-filter: blur(12px); }
+.desktop-header-leading { min-width: 0; display: flex; align-items: center; gap: 12px; }
 .desktop-header-copy { display: flex; align-items: baseline; gap: 9px; }
 .desktop-header-copy span { color: #737787; font-size: 9px; font-weight: 850; letter-spacing: .13em; }
 .desktop-header-copy strong { color: var(--ink); font-size: 14px; }
+.desktop-header .sidebar-toggle { color: #737787; }
+.desktop-header .sidebar-toggle:hover { color: var(--indigo); background: var(--indigo-pale); }
 .conversation-loading { min-height: 0; flex: 1; display: grid; place-content: center; justify-items: center; gap: 11px; padding-bottom: 8vh; color: var(--indigo); background: var(--canvas); }
 .conversation-loading span { color: var(--muted); font-size: 12px; font-weight: 650; }
 .archived-conversation-banner { min-height: 45px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border-top: 1px solid rgba(57, 70, 137, .12); color: #6c7080; background: rgba(246, 247, 251, .94); font-size: 11px; }
@@ -984,6 +988,21 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .toast.info { border-color: #bed8c5; color: #28563a; background: #f1faf3; box-shadow: 0 9px 25px rgba(24, 91, 48, .1); }
 .toast button { border: 0; background: transparent; cursor: pointer; }
 .sidebar-backdrop { display: none; }
+
+@media (min-width: 721px) {
+  .shell.sidebar-collapsed .sidebar {
+    width: 0 !important;
+    min-width: 0;
+    flex-basis: 0 !important;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: none;
+  }
+}
 
 @media (max-width: 920px) {
   .suggestions { grid-template-columns: repeat(2, 1fr); }

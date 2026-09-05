@@ -579,6 +579,21 @@ test("closed mobile sidebar is not painted as an offscreen shadow layer", () => 
   assert.match(styles, /:root\[data-theme="dark"\] \.sidebar:not\(\.open\) \{ box-shadow: none; \}/);
 });
 
+test("desktop sidebar can be collapsed and restored from the desktop header", () => {
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  const desktopHeader = appSource.match(/<header className="desktop-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
+  assert.match(appSource, /const SIDEBAR_COLLAPSED_KEY = "codex-web:sidebar-collapsed";/);
+  assert.match(appSource, /const \[sidebarCollapsed, setSidebarCollapsed\] = useState\(\(\) => readLocalStorageValue\(SIDEBAR_COLLAPSED_KEY\) === "true"\)/);
+  assert.match(appSource, /className=\{`shell \$\{sidebarCollapsed \? "sidebar-collapsed" : ""\}`\}/);
+  assert.match(appSource, /function toggleDesktopSidebar\(\)[\s\S]*?writeLocalStorageValue\(SIDEBAR_COLLAPSED_KEY, String\(next\)\)/);
+  assert.match(desktopHeader, /className="icon-button sidebar-toggle"/);
+  assert.match(desktopHeader, /aria-label=\{sidebarCollapsed \? "展开侧栏" : "隐藏侧栏"\}/);
+  assert.match(desktopHeader, /aria-controls="primary-sidebar"/);
+  assert.match(desktopHeader, /PanelLeftOpen[\s\S]*PanelLeftClose/);
+  assert.match(styles, /@media \(min-width: 721px\) \{[\s\S]*?\.shell\.sidebar-collapsed \.sidebar \{[\s\S]*?width: 0 !important;[\s\S]*?flex-basis: 0 !important;[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;/);
+});
+
 test("sidebar task actions collapse into a stable overflow menu", () => {
   const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
