@@ -16,6 +16,7 @@ import { loadConfig, type AppConfig } from "./config.js";
 import { CodexRunner } from "./codex-runner.js";
 import { isTextPreviewMime } from "../src/text-preview.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
+import { continuesReasoningStream, reasoningSnapshotDue, type ReasoningProgressState } from "./reasoning-progress.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
 import { CHAT_FONT_SIZE_DEFAULT, normalizeChatFontSize } from "../src/chat-font-size.js";
 import { CHAT_COLUMN_WIDTH_DEFAULT, normalizeChatColumnWidth } from "../src/chat-column-width.js";
@@ -582,14 +583,70 @@ export function createApp(overrides: AppOverrides = {}) {
     if (conversation.agent_model || conversation.reasoning_effort) conversationAgentSelection(conversation);
   }
 
-  function publish(jobId: string, eventType: string, payload: unknown): void {
-    const seq = db.appendEvent(jobId, eventType, payload);
+  type ReasoningPublishState = ReasoningProgressState & { payload: Record<string, unknown> };
+  const reasoningPublishStates = new Map<string, ReasoningPublishState>();
+
+  function reasoningProgress(payload: unknown): { detail: string; payload: Record<string, unknown> } | null {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const candidate = payload as Record<string, unknown>;
+    if (candidate.kind !== "reasoning" || typeof candidate.detail !== "string") return null;
+    return { payload: candidate, detail: candidate.detail };
+  }
+
+  function writeJobEvent(jobId: string, eventType: string, seq: number, payload: unknown): void {
     const livePayload = {
       ...(payload && typeof payload === "object" ? payload : { payload }),
       created_at: new Date().toISOString(),
     };
     for (const response of subscribers.get(jobId) ?? []) writeSse(response, seq, eventType, livePayload);
+  }
+
+  function flushReasoningSnapshot(jobId: string, state: ReasoningPublishState): void {
+    if (state.detail.length <= state.publishedDetail.length) return;
+    const seq = db.appendEvent(jobId, "progress", state.payload);
+    state.publishedDetail = state.detail;
+    state.lastPublishedAt = Date.now();
+    writeJobEvent(jobId, "progress", seq, state.payload);
+  }
+
+  function publishReasoningProgress(jobId: string, reasoning: { detail: string; payload: Record<string, unknown> }): void {
+    if (!reasoning.detail.trim()) return;
+    const state = reasoningPublishStates.get(jobId);
+    if (!continuesReasoningStream(reasoning.detail, state)) {
+      if (state) flushReasoningSnapshot(jobId, state);
+      const seq = db.appendEvent(jobId, "progress", reasoning.payload);
+      reasoningPublishStates.set(jobId, {
+        detail: reasoning.detail,
+        payload: reasoning.payload,
+        publishedDetail: reasoning.detail,
+        lastPublishedAt: Date.now(),
+      });
+      writeJobEvent(jobId, "progress", seq, reasoning.payload);
+      return;
+    }
+    const current = state!;
+    current.detail = reasoning.detail;
+    current.payload = reasoning.payload;
+    if (reasoningSnapshotDue(reasoning.detail, current, Date.now())) {
+      const seq = db.appendEvent(jobId, "progress", reasoning.payload);
+      current.publishedDetail = reasoning.detail;
+      current.lastPublishedAt = Date.now();
+      writeJobEvent(jobId, "progress", seq, reasoning.payload);
+    }
+  }
+
+  function publish(jobId: string, eventType: string, payload: unknown): void {
+    const reasoning = reasoningProgress(payload);
+    if (reasoning) {
+      publishReasoningProgress(jobId, reasoning);
+      return;
+    }
+    const pendingReasoning = reasoningPublishStates.get(jobId);
+    if (pendingReasoning) flushReasoningSnapshot(jobId, pendingReasoning);
+    const seq = db.appendEvent(jobId, eventType, payload);
+    writeJobEvent(jobId, eventType, seq, payload);
     if (["done", "failed"].includes(eventType)) {
+      reasoningPublishStates.delete(jobId);
       setTimeout(() => {
         for (const response of subscribers.get(jobId) ?? []) response.end();
         subscribers.delete(jobId);

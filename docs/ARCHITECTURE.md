@@ -67,6 +67,13 @@ the `(job_id, seq)` primary key so a long task cannot force the server or
 browser to materialize its entire progress history during login, navigation,
 or reconnect.
 
+Reasoning text streams as growing snapshots; publishing every token-sized
+delta would produce tens of thousands of events for one thought. The server
+therefore emits reasoning progress only when a snapshot grows enough or too
+much time passes, flushes the latest text before the stream moves on, and the
+browser folds those snapshots back into the single live journal entry for the
+same reasoning stream.
+
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
 restoring, editing, and clearing text use the separate `composerInputRevision`
