@@ -10,9 +10,26 @@ export type ProcessJournalEvent = JobEvent & {
 
 export function buildProcessJournal(activities: JobEvent[]): ProcessJournalEvent[] {
   const normalized: JobEvent[] = [];
+  let lastReasoning: JobEvent | undefined;
   for (const activity of activities) {
     const kind = activity.kind ?? "";
-    if (NARRATIVE_KINDS.has(kind)) {
+    if (kind === "reasoning") {
+      if (!activity.detail?.trim()) continue;
+      const detail = activity.detail;
+      if (lastReasoning) {
+        const currentDetail = lastReasoning.detail ?? "";
+        if (detail === currentDetail) continue;
+        if (detail.startsWith(currentDetail) || currentDetail.startsWith(detail)) {
+          lastReasoning.detail = detail;
+          if (activity.steps) lastReasoning.steps = activity.steps;
+          continue;
+        }
+      }
+      normalized.push(activity);
+      lastReasoning = normalized[normalized.length - 1];
+      continue;
+    }
+    if (kind === "update") {
       if (!activity.detail?.trim()) continue;
       const previous = normalized.at(-1);
       if (previous?.kind === activity.kind && previous?.detail === activity.detail) continue;

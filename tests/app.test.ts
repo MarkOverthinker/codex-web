@@ -26,6 +26,7 @@ import type { TenantWorkerRunRequest } from "../server/tenant-worker-protocol.js
 import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetries } from "../server/retry-policy.js";
 import { deriveImportedTitle, discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "../server/session-importer.js";
 import { buildReasoningSteps } from "../server/reasoning-parts.js";
+import { continuesReasoningStream, reasoningSnapshotDue, REASONING_SNAPSHOT_MAX_INTERVAL_MS, REASONING_SNAPSHOT_MIN_CHARS } from "../server/reasoning-progress.js";
 import { canPreviewInline, FILE_PREVIEW_TEXT_LIMIT_BYTES, filePreviewKind, isBrowserPreviewable, isLocalMarkdownUrl, localPathText, orderMarkdownFilesFirst, orderPreviewedFiles, resolveMessageFileLink } from "../src/file-links.js";
 import { parseCodexSnippetUrl, parseFileLine, parseFileRef, parseSnippetHref } from "../src/code-snippet.js";
 import { findUserMessageJump, findViewportAnchorMessageId } from "../src/message-jump.js";
@@ -820,6 +821,37 @@ test("running work journal retains every important direction and compacts repeat
   assert.doesNotMatch(styles, /\.process-journal[^{]*\{[^}]*position:\s*sticky/);
   assert.match(appSource, /\{sending && <article className="message assistant running"/);
   assert.match(appSource, /完成前持续保留，可随时引导/);
+});
+
+test("running work journal folds growing reasoning snapshots into one entry", () => {
+  const journal = buildProcessJournal([
+    { seq: 1, kind: "reasoning", label: "思考过程", detail: "先确认数据口径" },
+    { seq: 2, kind: "reasoning", label: "思考过程", detail: "先确认数据口径，再" },
+    { seq: 3, kind: "reasoning", label: "思考过程", detail: "先确认数据口径，再核对排名" },
+    { seq: 4, kind: "reasoning", label: "思考过程", detail: "先确认数据口径，再核对排名" },
+    { seq: 5, kind: "reasoning", label: "思考过程", detail: "再验证汇总结果" },
+  ]);
+  assert.deepEqual(journal.map((event) => event.seq), [1, 5]);
+  assert.deepEqual(journal.filter((event) => event.kind === "reasoning").map((event) => event.detail), [
+    "先确认数据口径，再核对排名", "再验证汇总结果",
+  ]);
+
+  const resumed = buildProcessJournal([
+    { seq: 1, kind: "reasoning", label: "思考过程", detail: "先确认数据口径" },
+    { seq: 2, kind: "command", label: "正在读取并核对资料", detail: "rg sales" },
+    { seq: 3, kind: "reasoning", label: "思考过程", detail: "先确认数据口径，再核对排名" },
+  ]);
+  assert.deepEqual(resumed.map((event) => event.seq), [1, 2]);
+  assert.equal(resumed[0].detail, "先确认数据口径，再核对排名");
+});
+
+test("reasoning progress snapshots are throttled within one stream and flushed later", () => {
+  const state = { detail: "先确认数据口径", publishedDetail: "先确认数据口径", lastPublishedAt: 0 };
+  assert.equal(continuesReasoningStream("先确认数据口径，再核对排名", state), true);
+  assert.equal(continuesReasoningStream("再验证汇总结果", state), false);
+  assert.equal(reasoningSnapshotDue("先确认数据口径，再", state, 0), false);
+  assert.equal(reasoningSnapshotDue(`${state.detail}${"字".repeat(REASONING_SNAPSHOT_MIN_CHARS)}`, state, 0), true);
+  assert.equal(reasoningSnapshotDue(state.detail, state, REASONING_SNAPSHOT_MAX_INTERVAL_MS), true);
 });
 
 test("completed reasoning panel collects incremental steps and legacy details", () => {
