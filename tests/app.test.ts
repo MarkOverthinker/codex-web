@@ -766,11 +766,11 @@ test("progress labels do not report intermediate agent messages as complete", ()
   assert.deepEqual(summarizeEvent({ type: "item.completed", item: { type: "agent_message", text: "正在核对表格结构" } } as never), {
     kind: "update", label: "阶段反馈", detail: "正在核对表格结构",
   });
-  assert.deepEqual(summarizeEvent({ type: "item.completed", item: { type: "reasoning", text: "先核对排名口径，再制作图表。" } } as never), {
+  assert.deepEqual(summarizeEvent({ type: "item.completed", item: { id: "reasoning-sdk-1", type: "reasoning", text: "先核对排名口径，再制作图表。" } } as never), {
     kind: "reasoning",
     label: "思考过程",
     detail: "先核对排名口径，再制作图表。",
-    steps: [{ title: "先核对排名口径，再制作图表。", detail: "先核对排名口径，再制作图表。" }],
+    steps: [{ id: "reasoning:reasoning-sdk-1:summary:0", title: "先核对排名口径，再制作图表。", detail: "先核对排名口径，再制作图表。" }],
   });
   assert.deepEqual(summarizeEvent({ type: "turn.completed" } as never), {
     kind: "status", label: "工作已完成，正在整理结果",
@@ -893,6 +893,36 @@ test("completed reasoning panel collects incremental steps and legacy details", 
   assert.match(styles, /\.reasoning-step \{ min-width: 0/);
   assert.match(styles, /\.reasoning-step-title \{[^}]*overflow-wrap: anywhere/);
   assert.doesNotMatch(styles, /\.reasoning-step-title \{[^}]*white-space: nowrap/);
+});
+
+test("reasoning steps carry stable ids and merge while their titles grow", () => {
+  assert.deepEqual(buildReasoningSteps(["先确认数据口径"], [], "reasoning-item-1"), [
+    { id: "reasoning:reasoning-item-1:summary:0", title: "先确认数据口径", detail: "先确认数据口径" },
+  ]);
+  const steps = collectReasoningSteps([
+    {
+      kind: "reasoning",
+      detail: "用户需要计算恩施麻将的得分",
+      steps: [{ id: "reasoning:reasoning-item-1:summary:0", title: "用户需要计算恩施麻将的得分", detail: "用户需要计算恩施麻将的得分" }],
+    },
+    {
+      kind: "reasoning",
+      detail: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子",
+      steps: [{ id: "reasoning:reasoning-item-1:summary:0", title: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子", detail: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子" }],
+    },
+    {
+      kind: "reasoning",
+      detail: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子。硬大 10 分。",
+      steps: [{ id: "reasoning:reasoning-item-1:summary:0", title: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子。硬大 10 分。", detail: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子。硬大 10 分。" }],
+    },
+  ]);
+  assert.deepEqual(steps, [
+    {
+      id: "reasoning:reasoning-item-1:summary:0",
+      title: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子。硬大 10 分。",
+      detail: "用户需要计算恩施麻将的得分，规则如下：一痞二赖是癞子。硬大 10 分。",
+    },
+  ]);
 });
 
 test("task timing shows live elapsed time and completed total duration", () => {

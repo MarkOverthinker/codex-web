@@ -72,7 +72,9 @@ delta would produce tens of thousands of events for one thought. The server
 therefore emits reasoning progress only when a snapshot grows enough or too
 much time passes, flushes the latest text before the stream moves on, and the
 browser folds those snapshots back into the single live journal entry for the
-same reasoning stream.
+same reasoning stream. Persisted steps also carry item-scoped ids so the
+completed reasoning panel merges by item part instead of relying on the first
+line of a still-growing step.
 
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
