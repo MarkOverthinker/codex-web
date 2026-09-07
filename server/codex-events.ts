@@ -21,7 +21,7 @@ export function summarizeEvent(event: ThreadEvent): unknown | null {
       kind: "reasoning",
       label: "思考过程",
       detail: summary,
-      steps: buildReasoningSteps([summary], []),
+      steps: buildReasoningSteps([summary], [], item.id),
     };
   }
   if (item.type === "command_execution") {
