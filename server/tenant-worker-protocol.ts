@@ -22,6 +22,7 @@ export type TenantWorkerRunRequest = {
   workspace: string;
   workingDir?: string;
   runtimeRoot: string;
+  relayHistoryDir?: string;
   codexHome: string;
   library: string;
   codexThreadId: string | null;
@@ -29,7 +30,6 @@ export type TenantWorkerRunRequest = {
   forkLastTurnId?: string | null;
   effectivePrompt: string;
   imagePaths: string[];
-  outputSchema?: Record<string, unknown>;
   selection: AgentSelection;
   modelProvider?: string | null;
   modelAdapter?: CodexRelayRequest;

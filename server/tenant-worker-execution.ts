@@ -45,7 +45,6 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     forkLastTurnId: request.forkLastTurnId,
     prompt: request.effectivePrompt,
     imagePaths: request.imagePaths,
-    outputSchema: request.outputSchema,
     model: request.selection.model,
     reasoningEffort: request.selection.reasoningEffort,
     modelProvider: request.modelProvider,
@@ -66,7 +65,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
   let stopRelay: (() => Promise<void>) | undefined;
   const ready = (async () => {
     callbacks.onProgress({ kind: "status", label: "正在启动 Chat Completions 兼容代理" });
-    const historyDir = path.join(request.workspace, ".runtime", "codex-relay", modelAdapter.providerId);
+    const historyDir = request.relayHistoryDir ?? path.join(request.workspace, ".runtime", "codex-relay", modelAdapter.providerId);
     const relay = await startCodexRelay({
       executablePath: modelAdapter.executablePath,
       upstreamBaseUrl: modelAdapter.upstreamBaseUrl,
@@ -177,6 +176,12 @@ export function validateTenantWorkerRequest(request: TenantWorkerRunRequest, exp
     const workingDir = path.resolve(request.workingDir);
     if (workingDir === tenantRoot || workingDir.startsWith(`${tenantRoot}${path.sep}`)) {
       throw new Error("Worker working dir escapes tenant boundary");
+    }
+  }
+  if (request.relayHistoryDir !== undefined) {
+    const relayHistoryDir = path.resolve(request.relayHistoryDir);
+    if (!relayHistoryDir.startsWith(`${path.resolve(expectedRuntime)}${path.sep}`)) {
+      throw new Error("Worker relay history path escapes runtime directory");
     }
   }
   for (const imagePath of request.imagePaths) {

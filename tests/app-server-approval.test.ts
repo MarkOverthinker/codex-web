@@ -130,6 +130,7 @@ input.on("line", (line) => {
   const turnStart = capture.messages.find((message) => message.method === "turn/start")?.params;
   assert.equal(turnStart?.approvalPolicy, "on-request");
   assert.equal(turnStart?.approvalsReviewer, "auto_review");
+  assert.equal(Boolean(turnStart && "outputSchema" in turnStart), false);
   assert.deepEqual(capture.approvalResponse, { decision: "decline" });
 
   const completedReview = progress.find((event) => event.reviewId === "review-1" && event.reviewStatus === "approved");

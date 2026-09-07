@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { loadConfig, type AppConfig } from "./config.js";
-import { CodexRunner, extractLeakedAutoTitleAnswer } from "./codex-runner.js";
+import { CodexRunner } from "./codex-runner.js";
 import { isTextPreviewMime } from "../src/text-preview.js";
 import { sanitizeAgentMarkdown } from "../src/agent-content.js";
 import { ASK_AGENT_SELECTION_MAX_CHARS, buildAskAgentDraft, normalizeAskAgentSelection } from "../src/ask-agent-selection.js";
@@ -235,10 +235,7 @@ export function createApp(overrides: AppOverrides = {}) {
         can_fork: message.role === "user" && Boolean(message.codex_turn_id) && Boolean(conversation.codex_thread_id),
       };
       if (message.role !== "assistant") return { ...publicMessage, files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
-      const visibleContent = conversation.title_source === "ai"
-        ? extractLeakedAutoTitleAnswer(message.content, true) ?? message.content
-        : message.content;
-      return { ...publicMessage, content: sanitizeAgentMarkdown(visibleContent, citationFiles), files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
+      return { ...publicMessage, content: sanitizeAgentMarkdown(message.content, citationFiles), files: message.files.map((file) => fileForClient(file, conversation.user_id)) };
     });
   }
 
@@ -805,6 +802,7 @@ export function createApp(overrides: AppOverrides = {}) {
       const options = optionsForUser(conversation.user_id);
       const selection = repairAgentSelection(options, job.agent_model, job.reasoning_effort, job.sandbox_mode);
       const executionSelection = resolveAgentExecutionSelection(options, selection);
+      void runner.generateTitle(job.id, conversation.id, message.content, db.listFilesForMessage(message.id), executionSelection).catch(() => undefined);
       await runner.run(job.id, conversation.id, agentPrompt(message.content, message.quote_excerpt, message.source_reference), db.listFilesForMessage(message.id), executionSelection);
     } finally {
       publishQueuePositions();

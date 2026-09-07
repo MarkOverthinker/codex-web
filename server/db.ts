@@ -1247,12 +1247,6 @@ export class AppDatabase {
     `).run(title, new Date().toISOString(), id).changes > 0;
   }
 
-  isFirstUserMessage(conversationId: string, messageId: string): boolean {
-    const first = this.sqlite.prepare("SELECT id FROM messages WHERE conversation_id=? AND role='user' AND superseded_at IS NULL ORDER BY created_at,id LIMIT 1")
-      .get(conversationId) as { id: string } | undefined;
-    return first?.id === messageId;
-  }
-
   softDeleteConversation(id: string): void {
     const now = new Date().toISOString();
     this.sqlite.prepare("UPDATE conversations SET status='idle',deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(now, now, id);
