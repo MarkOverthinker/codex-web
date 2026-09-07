@@ -12,10 +12,11 @@ export function reasoningStepTitle(text: string): string {
 
 /**
  * Turns reasoning summaries and (when available) raw reasoning content into
- * collapsible steps. Parts are aligned by their original array index so each
- * reasoning step keeps one stable slot while text is still streaming. When
- * itemId is available, steps carry item-scoped ids so the client can merge
- * growing snapshots without depending on the first line staying stable.
+ * collapsible steps. Summaries and raw content are paired 1:1 when counts
+ * match; otherwise each part becomes its own step so nothing is lost. When
+ * itemId is available, each streamed update keeps the same item-scoped id, so
+ * the client can merge growing snapshots without depending on the first line
+ * staying stable.
  */
 export function buildReasoningSteps(summaries: string[], contents: string[], itemId?: string): PublicReasoningStep[] | undefined {
   const cleanParts = (parts: string[]) => parts.map((part) => part.trim()).filter(Boolean);
