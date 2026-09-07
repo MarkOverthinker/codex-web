@@ -72,7 +72,6 @@ export type AppServerTurnOptions = {
   forkLastTurnId?: string | null;
   prompt: string;
   imagePaths: string[];
-  outputSchema?: Record<string, unknown>;
   model: string;
   reasoningEffort: string;
   modelContextWindow?: number;
@@ -321,7 +320,6 @@ class AppServerTurnClient {
         effort: this.options.reasoningEffort,
         approvalPolicy: APPROVAL_POLICY,
         approvalsReviewer: APPROVALS_REVIEWER,
-        ...(this.options.outputSchema ? { outputSchema: this.options.outputSchema } : {}),
       }) as { turn?: { id?: string } };
       if (!turnResult?.turn?.id) throw new Error("Codex app server did not return a turn id");
       this.activeTurnId = turnResult.turn.id;
@@ -478,7 +476,6 @@ class AppServerTurnClient {
       if (!item) return;
       if (item.type === "agentMessage" && message.method === "item/completed") {
         this.finalResponse = typeof item.text === "string" ? item.text : this.finalResponse;
-        if (this.options.outputSchema) return;
       }
       const progress = item.type === "reasoning"
         ? this.summarizeReasoningItem(item, message.method === "item/completed")

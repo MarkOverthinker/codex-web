@@ -31,7 +31,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Cancellation that retains a concise history of completed work so the next turn can resume from it
 - Explicit interrupted-task messages after an unexpected service restart, without unsafe automatic retries; transient upstream disconnects and rate limits use bounded automatic retries
 - Graceful container shutdown that drains in-flight Codex work and leaves queued tasks persisted
-- Automatic short task titles, with manual titles taking precedence
+- Automatic short task titles from an asynchronous plain-text Codex request, with manual titles taking precedence
 - A durable live work journal with retained stage feedback and grouped command steps
 - Running work journals expand inline with the page instead of creating a nested vertical scroller
 - Unread-result markers for completed conversations until their detail is viewed

@@ -11,7 +11,7 @@ import request from "supertest";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { createApp, migrateExistingOutputFiles } from "../server/app.js";
 import { assertProductionConfig, loadConfig } from "../server/config.js";
-import { AUTO_TITLE_OUTPUT_SCHEMA, extractLeakedAutoTitleAnswer, parseAutoTitleResponse, redactBrandForDisplay, summarizeEvent } from "../server/codex-runner.js";
+import { redactBrandForDisplay, summarizeEvent } from "../server/codex-runner.js";
 import { AppDatabase, LEGACY_USER_ID } from "../server/db.js";
 import { resolveSystemUser } from "../server/host-mode.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "../server/share-link.js";
@@ -41,6 +41,7 @@ import { chooseSelectedConversation, isTerminalJob, mergeJobEvents } from "../sr
 import { normalizeThemePreference, readStoredThemePreference, resolveTheme, THEME_PREFERENCE_KEY } from "../src/theme.js";
 import type { Conversation, WorkFile } from "../src/api.js";
 import { buildAgentSteerPrompt, buildAgentTurnPrompt } from "../server/agent-context.js";
+import { buildTaskTitlePrompt, normalizeTaskTitle } from "../server/task-title.js";
 import { buildProcessJournal } from "../src/process-journal.js";
 import { collectReasoningSteps } from "../src/reasoning-steps.js";
 import { formatElapsed, taskElapsedSeconds } from "../src/task-timing.js";
@@ -928,25 +929,15 @@ test("a stream that never completes still fails with its last upstream error", a
   }), /stream disconnected before completion/);
 });
 
-test("structured first-turn responses separate the visible answer from a short task title", () => {
-  assert.equal(AUTO_TITLE_OUTPUT_SCHEMA.properties.title.maxLength, 10);
-  assert.deepEqual(parseAutoTitleResponse(JSON.stringify({
-    answer: "文件已经生成。",
-    title: "高三家长会成绩分析报告",
-  }), "请帮我制作一份家长会成绩分析报告"), {
-    answer: "文件已经生成。",
-    title: "高三家长会成绩分析报",
-  });
-  assert.deepEqual(parseAutoTitleResponse("普通完成回复", "请帮我检查这份成绩表"), {
-    answer: "普通完成回复",
-    title: "检查这份成绩表",
-  });
-  assert.equal(parseAutoTitleResponse('{"answer":"完成","title":"新任务"}', "整理生物复习资料").title, "整理生物复习资料");
-  assert.equal(extractLeakedAutoTitleAnswer('{"answer":"已收到：asdf。未生成任何文件。","title":"输入测试"}'), "已收到：asdf。未生成任何文件。");
-  assert.equal(extractLeakedAutoTitleAnswer('```json\n{"answer":"正常回复","title":"后续测试"}\n```'), "正常回复");
-  assert.equal(extractLeakedAutoTitleAnswer('{"answer":"用户要求的 JSON","title":"标题","extra":true}'), null);
-  assert.equal(extractLeakedAutoTitleAnswer('{"answer":"用户要求的 JSON","title":"这是一个明显超过十个字符的普通字段值"}'), null);
-  assert.equal(extractLeakedAutoTitleAnswer('{"answer":"正常回复","title":"NAS 双出口抖动已停止"}', true), "正常回复");
+test("task title generation uses a separate plain-text prompt", () => {
+  const prompt = buildTaskTitlePrompt("请整理这份成绩表", ["成绩表.xlsx"]);
+  assert.match(prompt, /请整理这份成绩表/);
+  assert.match(prompt, /成绩表\.xlsx/);
+  assert.doesNotMatch(prompt, /outputSchema|answer.*title|title.*answer/);
+  assert.equal(normalizeTaskTitle("标题：整理成绩表。", "原始任务"), "整理成绩表");
+  assert.equal(normalizeTaskTitle("普通完成回复", "请检查这份成绩表"), "普通完成回复");
+  assert.equal(normalizeTaskTitle("", "请帮我整理生物复习资料"), "整理生物复习资料");
+  assert.equal(normalizeTaskTitle("一二三四五六七八九十十一", "原始任务"), "一二三四五六七八九十");
 });
 
 test("transient upstream failures use bounded 15/45/120 retry policy", async () => {
@@ -4356,8 +4347,8 @@ test("conversation API sanitizes historical file citations without rewriting the
   assert.equal(instance.db.listMessages(conversationId).at(-1)?.content, raw);
 });
 
-test("AI-titled conversations hide repeated title envelopes without rewriting audit rows", async (context) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-title-envelope-test-"));
+test("AI-titled conversations preserve ordinary assistant text without rewriting audit rows", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-title-text-test-"));
   const instance = createApp({
     projectRoot: process.cwd(), dataRoot: path.join(root, "data"), tenantRoot: path.join(root, "tenants"), queueAutoStart: false,
     username: "owner", passwordHash: bcrypt.hashSync("Correct-Horse-2026!", 8),
@@ -4368,13 +4359,13 @@ test("AI-titled conversations hide repeated title envelopes without rewriting au
   await agent.post("/codex-web/api/auth/login").send({ username: "owner", password: "Correct-Horse-2026!" }).expect(200);
 
   const conversationId = crypto.randomUUID();
-  const raw = '{"answer":"已确认：双出口抖动已经停止。\\n\\n连续检查均正常。","title":"NAS 双出口抖动已停止"}';
+  const raw = "已确认：双出口抖动已经停止。\n\n连续检查均正常。";
   instance.db.createConversation(conversationId, "新任务");
   assert.equal(instance.db.setAiConversationTitleIfDefault(conversationId, "会话测试"), true);
   instance.db.addMessage({ id: crypto.randomUUID(), conversation_id: conversationId, role: "assistant", content: raw, created_at: new Date().toISOString() });
 
   const response = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
-  assert.equal(response.body.messages[0].content, "已确认：双出口抖动已经停止。\n\n连续检查均正常。");
+  assert.equal(response.body.messages[0].content, raw);
   assert.equal(instance.db.listMessages(conversationId)[0].content, raw);
 });
 

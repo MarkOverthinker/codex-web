@@ -21,71 +21,21 @@ import { buildReasoningSteps } from "./reasoning-parts.js";
 import { mimeTypeForPath } from "./mime.js";
 import { resolveModelAdapter } from "./provider-manager.js";
 import { recordTokenUsage, type TokenUsage } from "./billing.js";
+import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES } from "./optional-capabilities.js";
+import { buildTaskTitlePrompt, normalizeTaskTitle } from "./task-title.js";
 
 type Publish = (jobId: string, eventType: string, payload: unknown) => void;
 
-export const AUTO_TITLE_OUTPUT_SCHEMA = {
-  type: "object",
-  properties: {
-    answer: { type: "string", description: "给用户显示的完整最终回复" },
-    title: { type: "string", minLength: 1, maxLength: 10, description: "准确概括首条请求的简短中文任务名，不超过十个字符" },
-  },
-  required: ["answer", "title"],
-  additionalProperties: false,
-} as const;
-
-type AutoTitleEnvelope = { answer: string; title: string };
-
-function parseAutoTitleEnvelope(raw: string): AutoTitleEnvelope | null {
-  const trimmed = raw.trim();
-  const json = trimmed.startsWith("```")
-    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
-    : trimmed;
-  try {
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return null;
-    const record = parsed as Record<string, unknown>;
-    const keys = Object.keys(record);
-    if (keys.length !== 2 || !keys.includes("answer") || !keys.includes("title")) return null;
-    if (typeof record.answer !== "string" || typeof record.title !== "string") return null;
-    return { answer: record.answer, title: record.title };
-  } catch {
-    return null;
-  }
-}
-
-export function extractLeakedAutoTitleAnswer(raw: string, tolerateSchemaTitleOverflow = false): string | null {
-  const envelope = parseAutoTitleEnvelope(raw);
-  if (!envelope) return null;
-  const title = envelope.title.trim();
-  const maxTitleLength = tolerateSchemaTitleOverflow ? 80 : AUTO_TITLE_OUTPUT_SCHEMA.properties.title.maxLength;
-  if (!title || Array.from(title).length > maxTitleLength || /[\r\n]/.test(title)) return null;
-  return envelope.answer;
-}
-
-export function parseAutoTitleResponse(raw: string, prompt: string): { answer: string; title: string } {
-  const parsed = parseAutoTitleEnvelope(raw);
-  if (parsed) return { answer: parsed.answer, title: normalizeTaskTitle(parsed.title, prompt) };
-  return { answer: raw, title: normalizeTaskTitle("", prompt) };
-}
-
-function normalizeTaskTitle(value: string, prompt: string): string {
-  const clean = value
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/^[`'"“”‘’《》【】\[\]()（）]+|[`'"“”‘’《》【】\[\]()（）。！？!?，,；;：:]+$/g, "")
-    .trim();
-  const fallback = prompt
-    .replace(/\s+/g, " ")
-    .replace(/^(?:请|麻烦|能否|可以)?(?:帮我|给我)?(?:一下)?/u, "")
-    .trim() || "任务处理";
-  const candidate = clean && clean !== "新任务" ? clean : fallback;
-  return Array.from(candidate).slice(0, 10).join("");
-}
+type TitleExecutionState = {
+  controller: AbortController;
+  workerJobId: string;
+  execution?: AppServerTurnExecution;
+};
 
 export class CodexRunner {
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly directExecutions = new Map<string, AppServerTurnExecution>();
+  private readonly titleExecutions = new Map<string, TitleExecutionState>();
   private readonly workerClient: TenantWorkerClient | undefined;
 
   constructor(private readonly config: AppConfig, private readonly db: AppDatabase, private readonly publish: Publish) {
@@ -98,11 +48,17 @@ export class CodexRunner {
     controller.abort();
     this.directExecutions.get(jobId)?.interrupt();
     this.workerClient?.cancel(jobId);
+    const titleExecution = this.titleExecutions.get(jobId);
+    if (titleExecution) {
+      titleExecution.controller.abort();
+      titleExecution.execution?.interrupt();
+      this.workerClient?.cancel(titleExecution.workerJobId);
+    }
     return true;
   }
 
   get activeJobCount(): number {
-    return this.abortControllers.size;
+    return this.abortControllers.size + this.titleExecutions.size;
   }
 
   conversationRolloutBytes(conversationId: string): number | null {
@@ -138,6 +94,99 @@ export class CodexRunner {
     return turnId;
   }
 
+  async generateTitle(jobId: string, conversationId: string, content: string, uploads: FileRow[], selection: AgentSelection): Promise<void> {
+    const conversation = this.db.getConversation(conversationId);
+    if (!conversation || conversation.title_source !== "default") return;
+    const hostTenant = this.config.hostMode ? hostTenantFor(this.config, this.db, conversation.user_id) : null;
+    if (this.config.hostMode && !hostTenant) return;
+
+    const tenant = hostTenant ?? ensureTenant(this.config.tenantRoot, conversation.user_id, { skipCodexHome: this.config.hostMode });
+    const workspace = ensureTenantWorkspace(this.config.tenantRoot, conversation.user_id, conversationId, this.config.hostMode);
+    if (hostTenant) {
+      chownTenantStorageIfNeeded(tenant.root, hostTenant.uid, hostTenant.gid);
+      chownTenantStorageIfNeeded(workspace, hostTenant.uid, hostTenant.gid);
+    }
+
+    const titleJobId = newId();
+    const runtimeRoot = prepareJobRuntime(workspace, titleJobId, hostTenant ? { uid: hostTenant.uid, gid: hostTenant.gid } : undefined);
+    const controller = new AbortController();
+    const state: TitleExecutionState = { controller, workerJobId: titleJobId };
+    this.titleExecutions.set(jobId, state);
+    try {
+      const pythonRuntime = resolvePythonRuntime(this.config);
+      const modelAdapter = resolveModelAdapter(this.db, conversation.user_id, selection.provider, this.config.codexRelayPath);
+      const titleRequest: TenantWorkerRunRequest = {
+        jobId: titleJobId,
+        userId: conversation.user_id,
+        conversationId,
+        projectRoot: this.config.projectRoot,
+        pythonRuntimeRoot: this.config.pythonRuntimeRoot,
+        tenantRoot: tenant.root,
+        workspace,
+        runtimeRoot,
+        relayHistoryDir: modelAdapter ? path.join(runtimeRoot, "codex-relay", modelAdapter.providerId) : undefined,
+        codexHome: hostTenant?.codexHome ?? tenant.codexHome,
+        library: tenant.library,
+        codexThreadId: null,
+        forkBeforeTurnId: null,
+        forkLastTurnId: null,
+        effectivePrompt: buildTaskTitlePrompt(content, uploads.map((file) => file.original_name)),
+        imagePaths: [],
+        selection,
+        modelProvider: selection.provider ?? null,
+        modelAdapter,
+        sandboxMode: "workspace-write",
+        networkAccessEnabled: false,
+        webSearchMode: "cached",
+        codexWindowsSandbox: this.config.codexWindowsSandbox,
+        optionalCapabilities: DEFAULT_OPTIONAL_AGENT_CAPABILITIES,
+        hostMode: Boolean(hostTenant),
+        home: hostTenant?.home,
+        uid: hostTenant?.uid,
+        gid: hostTenant?.gid,
+      };
+      const usageModelId = selection.provider
+        ? this.db.getProviderModelBySlug(conversation.user_id, selection.provider, selection.model)?.model_id ?? selection.model
+        : selection.model;
+      const callbacks = {
+        signal: controller.signal,
+        onThreadStarted: () => undefined,
+        onTurnStarted: () => undefined,
+        onProgress: () => undefined,
+        onContextUsage: () => undefined,
+        onUsage: (usage: TokenUsage) => {
+          try {
+            recordTokenUsage(this.db, {
+              userId: conversation.user_id,
+              jobId,
+              conversationId,
+              providerId: selection.provider,
+              modelId: usageModelId,
+              usage,
+            });
+          } catch {
+            // A deleted or closed main job must not turn title cleanup into a process error.
+          }
+        },
+      };
+      const rawTitle = this.workerClient
+        ? await this.workerClient.run(titleRequest, callbacks)
+        : await (async () => {
+          const execution = startTenantTurn(titleRequest, callbacks);
+          state.execution = execution;
+          return execution.result;
+        })();
+      const fallback = content.trim() || (uploads.length > 0 ? "处理附件" : "任务处理");
+      const title = normalizeTaskTitle(rawTitle, fallback);
+      if (title) this.db.setAiConversationTitleIfDefault(conversationId, title);
+    } catch {
+      // Title generation is best effort and must never affect the main task.
+    } finally {
+      if (this.titleExecutions.get(jobId) === state) this.titleExecutions.delete(jobId);
+      cleanupJobRuntime(runtimeRoot);
+    }
+  }
+
   async run(jobId: string, conversationId: string, prompt: string, uploads: FileRow[], selection: AgentSelection): Promise<void> {
     const controller = new AbortController();
     let runtimeRoot: string | undefined;
@@ -146,8 +195,6 @@ export class CodexRunner {
       const conversation = this.db.getConversation(conversationId);
       if (!conversation) throw new Error("会话不存在");
       const job = this.db.getJob(jobId);
-      const shouldGenerateTitle = conversation.title_source === "default"
-        && Boolean(job?.message_id && this.db.isFirstUserMessage(conversationId, job.message_id));
       const hostTenant = this.config.hostMode ? hostTenantFor(this.config, this.db, conversation.user_id) : null;
       if (this.config.hostMode && !hostTenant) {
         throw new Error("该用户没有对应的系统账户，无法运行 Codex 任务。请先由管理员添加系统用户并完成 Codex 配置。");
@@ -218,7 +265,6 @@ export class CodexRunner {
         imagePaths: uploads
           .filter((file) => /^image\/(png|jpeg|webp)$/i.test(file.mime_type))
           .map((file) => resolveInside(workspace, file.relative_path)),
-        outputSchema: shouldGenerateTitle ? AUTO_TITLE_OUTPUT_SCHEMA : undefined,
         selection,
         modelProvider: selection.provider ?? null,
         modelAdapter,
@@ -288,11 +334,7 @@ export class CodexRunner {
       this.publish(jobId, "status", { status: "running", label: "正在登记结果文件" });
       const messageId = newId();
       const createdAt = new Date().toISOString();
-      const titledResponse = shouldGenerateTitle ? parseAutoTitleResponse(rawFinalResponse, prompt) : null;
-      const finalResponse = titledResponse?.answer
-        ?? (conversation.title_source === "ai" ? extractLeakedAutoTitleAnswer(rawFinalResponse, true) : null)
-        ?? rawFinalResponse;
-      const safeFinalResponse = sanitizeAgentMarkdown(finalResponse, this.db.listFiles(conversationId));
+      const safeFinalResponse = sanitizeAgentMarkdown(rawFinalResponse, this.db.listFiles(conversationId));
       this.db.addMessage({
         id: messageId,
         conversation_id: conversationId,
@@ -315,7 +357,6 @@ export class CodexRunner {
         };
         this.db.addFile(file);
       }
-      if (titledResponse) this.db.setAiConversationTitleIfDefault(conversationId, titledResponse.title);
       this.db.finishJob(jobId, conversationId, "completed");
       this.publish(jobId, "done", { status: "completed" });
     } catch (error) {
