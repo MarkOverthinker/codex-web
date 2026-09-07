@@ -331,11 +331,13 @@ input.on("line", (line) => {
     label: "思考过程",
     detail: "先核对数据口径\n\n再验证汇总结果",
     steps: [
-      { title: "先核对数据口径", detail: "先核对数据口径" },
-      { title: "再验证汇总结果", detail: "再验证汇总结果" },
+      { id: "reasoning:reasoning-1:summary:0", title: "先核对数据口径", detail: "先核对数据口径" },
+      { id: "reasoning:reasoning-1:summary:1", title: "再验证汇总结果", detail: "再验证汇总结果" },
     ],
   });
   assert.ok(progress.some((event) => event.kind === "reasoning" && event.detail === "原始推理片段"));
+  const rawContent = progress.find((event) => event.kind === "reasoning" && event.detail === "原始推理片段");
+  assert.equal(rawContent?.steps?.[0]?.id, "reasoning:reasoning-2:content:0");
 });
 
 test("app-server forks a thread before the edited turn and reports the new turn", async (context) => {

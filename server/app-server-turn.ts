@@ -523,7 +523,7 @@ class AppServerTurnClient {
     const current = this.reasoningParts.get(itemId) ?? { summaries: [], contents: [] };
     const target = part === "summary" ? current.summaries : current.contents;
     target[index] = `${target[index] ?? ""}${delta}`;
-    const progress = summarizeReasoningParts(current.summaries, current.contents);
+    const progress = summarizeReasoningParts(current.summaries, current.contents, itemId);
     this.reasoningParts.set(itemId, current);
     if (progress) this.callbacks.onProgress(progress);
   }
@@ -548,7 +548,7 @@ class AppServerTurnClient {
       if (completed) this.reasoningParts.delete(itemId);
       else this.reasoningParts.set(itemId, { summaries, contents });
     }
-    return summarizeReasoningParts(summaries, contents);
+    return summarizeReasoningParts(summaries, contents, itemId || undefined);
   }
 
   private dispose(): void {
@@ -574,7 +574,8 @@ function makeUserInput(prompt: string, imagePaths: string[]): JsonObject[] {
 
 export function summarizeAppServerItem(item: JsonObject, completed: boolean): unknown | null {
   if (item.type === "reasoning") {
-    return summarizeReasoningParts(asStringArray(item.summary), asStringArray(item.content));
+    const itemId = typeof item.id === "string" && item.id.trim() ? item.id : undefined;
+    return summarizeReasoningParts(asStringArray(item.summary), asStringArray(item.content), itemId);
   }
   if (item.type === "commandExecution") {
     const command = typeof item.command === "string" ? item.command : "";
@@ -597,19 +598,19 @@ export function summarizeAppServerItem(item: JsonObject, completed: boolean): un
   return null;
 }
 
-function summarizeReasoningParts(summaryParts: string[], contentParts: string[]): unknown | null {
+function summarizeReasoningParts(summaryParts: string[], contentParts: string[], itemId?: string): unknown | null {
   const summaries = summaryParts
-    .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
-    .filter(Boolean);
+    .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim());
   const contents = contentParts
-    .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim())
-    .filter(Boolean);
-  if (summaries.length === 0 && contents.length === 0) return null;
+    .map((part) => redactBrand(sanitizeAgentMarkdown(part)).trim());
+  const visibleSummaries = summaries.filter(Boolean);
+  const visibleContents = contents.filter(Boolean);
+  if (visibleSummaries.length === 0 && visibleContents.length === 0) return null;
   return {
     kind: "reasoning",
     label: "思考过程",
-    detail: summaries.join("\n\n") || contents.join("\n\n"),
-    steps: buildReasoningSteps(summaries, contents),
+    detail: visibleSummaries.join("\n\n") || visibleContents.join("\n\n"),
+    steps: buildReasoningSteps(summaries, contents, itemId),
   };
 }
 

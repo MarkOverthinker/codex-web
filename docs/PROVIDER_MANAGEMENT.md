@@ -40,6 +40,8 @@ Codex 的 `thread/tokenUsage/updated` 状态会保存到会话，并在任务 SS
 
 Codex app-server 的 reasoning 摘要通过 `item/reasoning/summaryTextDelta` 等增量通知传递，codex-web 会按 `itemId` 累积后显示。OpenAI GPT 只提供可展示的 reasoning summary，不提供原始 chain-of-thought；只有实际返回 reasoning 摘要或内容的模型才会显示“思考过程”。Chat Completions 源是否能显示，取决于上游是否返回 `reasoning_content` 以及 relay 是否完成映射。
 
+流式增量在持久化前会节流，并且每个推理步骤会带上 `itemId` 作用域内的稳定步骤 id；任务完成后前端按该 id 合并同一步骤的多次更新，不依赖仍在增长中的首行标题。
+
 ## 模型文件
 
 每个源可以指定一个 codex-home 内的 JSON 文件作为模型目录（如 `models.json`、`sssaicodeapi-models.json`）。该文件必须是 `{ "models": [...] }` 结构，条目字段与 Codex 目录一致。导入时：
