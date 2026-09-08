@@ -93,6 +93,7 @@ tar -C "$REPO_ROOT" \
   --exclude='tmp' \
   --exclude='*.sqlite*' \
   --exclude='*.log' \
+  --exclude='*.orig' \
   --exclude='coverage' \
   -cf - . | tar -C "$STAGING/app" -xf -
 
