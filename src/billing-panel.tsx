@@ -95,6 +95,15 @@ export function BillingPanel({ open, onClose, builtinModels }: Props) {
     void refresh();
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open, onClose]);
+
   function ruleFor(model: BillingModel): BillingPricingRule | undefined {
     return state?.rules.find((rule) => rule.provider_id === model.providerId && rule.model_id === model.modelId);
   }
