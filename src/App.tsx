@@ -29,7 +29,7 @@ import { CHAT_FONT_SIZE_DEFAULT, CHAT_FONT_SIZE_MAX, CHAT_FONT_SIZE_MIN, normali
 import { CHAT_COLUMN_WIDTH_DEFAULT, CHAT_COLUMN_WIDTH_MAX, CHAT_COLUMN_WIDTH_MIN, CHAT_COLUMN_WIDTH_STEP, normalizeChatColumnWidth } from "./chat-column-width";
 import { applyThemePreference, readStoredThemePreference, THEME_PREFERENCE_KEY, type ThemePreference } from "./theme";
 import { ASK_AGENT_SELECTION_MAX_CHARS, normalizeAskAgentSelection } from "./ask-agent-selection";
-import { mergeMessagePages, preservePrependedScrollTop } from "./message-history";
+import { mergeMessagePages, preservePrependedScrollTop, reuseUnchangedMessages } from "./message-history";
 import { findUserMessageJump, findViewportAnchorMessageId, type JumpDirection } from "./message-jump";
 import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
@@ -766,13 +766,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
         // Viewing the task must still work if the acknowledgement request is temporarily unavailable.
       }
     }
-    setDetail((current) => current?.conversation.id === id
-      ? {
-          ...result,
-          messages: resetMessages ? result.messages : mergeMessagePages(current.messages, result.messages),
-          messagePage: resetMessages ? result.messagePage : current.messagePage,
-        }
-      : result);
+    setDetail((current) => {
+      if (current?.conversation.id !== id) return result;
+      const merged = resetMessages ? result.messages : mergeMessagePages(current.messages, result.messages);
+      return {
+        ...result,
+        messages: reuseUnchangedMessages(current.messages, merged),
+        outputFiles: JSON.stringify(current.outputFiles) === JSON.stringify(result.outputFiles) ? current.outputFiles : result.outputFiles,
+        messagePage: resetMessages ? result.messagePage : current.messagePage,
+      };
+    });
     setSelectedModel(result.agentSelection.model);
     setReasoningEffort(result.agentSelection.reasoningEffort);
     setSandboxMode(result.agentSelection.sandbox ?? "workspace-write");
@@ -1799,6 +1802,22 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       window.removeEventListener("resize", closeOnResize);
     };
   }, [categoryMenu]);
+  useEffect(() => {
+    if (!accountSecurityOpen) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setAccountSecurityOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [accountSecurityOpen]);
+  useEffect(() => {
+    if (!accountSettingsOpen || accountSecurityOpen) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setAccountSettingsOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [accountSettingsOpen, accountSecurityOpen]);
   useEffect(() => {
     if (!categoryNewTaskMenu) return;
     const closeOutside = (event: PointerEvent) => {
@@ -3286,36 +3305,51 @@ type MessageCardProps = {
   forkEnabled: boolean;
 };
 
+/**
+ * Markdown rendering dominates the cost of a message card, so keep it in a
+ * memoized component with identity-stable inputs. Card shells re-render on
+ * every activity flush; this skips the markdown re-parse unless the message
+ * content, its files, the citation list, or the snippet opener really changed.
+ */
+const MessageMarkdown = memo(function MessageMarkdown({ content, files, citationFiles, onOpenSnippet }: {
+  content: string;
+  files: WorkFile[];
+  citationFiles: WorkFile[];
+  onOpenSnippet: (target: FileLineRef) => void;
+}) {
+  return <div className="markdown" data-agent-selectable="true"><ReactMarkdown
+    remarkPlugins={[remarkGfm, remarkMath]}
+    rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
+    urlTransform={(url) => isLocalMarkdownUrl(url) || url.toLowerCase().startsWith("codex-snippet:") ? url : defaultUrlTransform(url)}
+    components={{ a: ({ href, children }) => {
+      const snippet = parseCodexSnippetUrl(href) ?? parseSnippetHref(href, files);
+      if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
+      const resolved = resolveMessageFileLink(href, files);
+      if (resolved.kind === "download") return <a href={resolved.href} download>{children}</a>;
+      if (resolved.kind === "unavailable") {
+        const ref = parseFileRef(href, files);
+        if (ref) return <button type="button" className="code-snippet-trigger" title={ref.path} onClick={() => onOpenSnippet(ref)}><Code size={12} />{children}</button>;
+        const path = localPathText(href);
+        return <span className="unavailable-file-link" title={path ? `本机文件路径：${path}` : "该本机文件未登记为此消息的附件"}>
+          {children}{path && <><code className="unavailable-file-path">{path}</code><CopyPathButton value={path} className="unavailable-file-copy" /></>}<span className="unavailable-file-note">（不可下载）</span>
+        </span>;
+      }
+      return <a href={resolved.href} target="_blank" rel="noreferrer">{children}</a>;
+    }, code: ({ className, children }) => {
+      const text = typeof children === "string" ? children : Array.isArray(children) ? children.join("") : "";
+      const snippet = !className && !text.includes("\n") ? parseFileRef(text, files) : null;
+      if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
+      return <code className={className}>{children}</code>;
+    } }}
+  >{normalizeMathDelimiters(sanitizeAgentMarkdown(content, citationFiles))}</ReactMarkdown></div>;
+});
+
 const MessageCard = memo(function MessageCard({ message, userInitials, chatFontSize, citationFiles, onPreview, onOpenSnippet, onOpenSourceReference, onEditMessage, onForkSideChat, forkSourceMessageId, forkEnabled }: MessageCardProps) {
   return <article className={`message ${message.role}`} data-message-id={message.id}>
     <div className="message-avatar">{message.role === "assistant" ? <Zap size={15} /> : userInitials}</div>
     <div className="message-body">
       <div className="message-meta"><span className="message-name">{message.role === "assistant" ? "Codex Web" : "你"}</span><span className="message-meta-actions">{message.role === "user" && message.can_edit && <button type="button" className="message-edit-button" onClick={() => onEditMessage(message)} title="编辑并重发"><Pencil size={12} /><span>编辑并重发</span></button>}{message.role === "assistant" && forkSourceMessageId && <button type="button" className="message-fork-button" onClick={() => onForkSideChat(forkSourceMessageId)} disabled={!forkEnabled} title={forkEnabled ? "保留到此回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={12} /><span>Fork 到这里</span></button>}<time dateTime={message.created_at} title={formatFullDateTime(message.created_at)}>{formatMessageDateTime(message.created_at)}</time></span></div>
-      {message.role === "assistant" ? <div className="markdown" data-agent-selectable="true"><ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}
-        urlTransform={(url) => isLocalMarkdownUrl(url) || url.toLowerCase().startsWith("codex-snippet:") ? url : defaultUrlTransform(url)}
-        components={{ a: ({ href, children }) => {
-          const snippet = parseCodexSnippetUrl(href) ?? parseSnippetHref(href, message.files);
-          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
-          const resolved = resolveMessageFileLink(href, message.files);
-          if (resolved.kind === "download") return <a href={resolved.href} download>{children}</a>;
-          if (resolved.kind === "unavailable") {
-            const ref = parseFileRef(href, message.files);
-            if (ref) return <button type="button" className="code-snippet-trigger" title={ref.path} onClick={() => onOpenSnippet(ref)}><Code size={12} />{children}</button>;
-            const path = localPathText(href);
-            return <span className="unavailable-file-link" title={path ? `本机文件路径：${path}` : "该本机文件未登记为此消息的附件"}>
-              {children}{path && <><code className="unavailable-file-path">{path}</code><CopyPathButton value={path} className="unavailable-file-copy" /></>}<span className="unavailable-file-note">（不可下载）</span>
-            </span>;
-          }
-          return <a href={resolved.href} target="_blank" rel="noreferrer">{children}</a>;
-        }, code: ({ className, children }) => {
-          const text = typeof children === "string" ? children : Array.isArray(children) ? children.join("") : "";
-          const snippet = !className && !text.includes("\n") ? parseFileRef(text, message.files) : null;
-          if (snippet) return <button type="button" className="code-snippet-trigger" title={`${snippet.path}${snippet.line ? `:${snippet.line}` : ""}`} onClick={() => onOpenSnippet(snippet)}><Code size={12} />{children}</button>;
-          return <code className={className}>{children}</code>;
-        } }}
-      >{normalizeMathDelimiters(sanitizeAgentMarkdown(message.content, citationFiles))}</ReactMarkdown></div> : <>
+      {message.role === "assistant" ? <MessageMarkdown content={message.content} files={message.files} citationFiles={citationFiles} onOpenSnippet={onOpenSnippet} /> : <>
         {message.source_reference
           ? <div className="message-source-reference">
               <div className="message-source-reference-copy">
