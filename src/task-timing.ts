@@ -2,10 +2,11 @@ import type { JobEvent } from "./api";
 
 /**
  * Total execution time of the latest task in seconds, measured from the first
- * `running` status event to the terminal `done`/`failed` event.
+ * `running` status event to the terminal `done`/`failed` event. The persisted
+ * start takes precedence because recovery may omit the initial status event.
  */
-export function taskElapsedSeconds(activities: JobEvent[]): number | null {
-  const startedAt = activities.find((activity) => (activity.kind === "status" || activity.type === "status") && activity.status === "running")?.created_at;
+export function taskElapsedSeconds(activities: JobEvent[], persistedStartedAt?: string | null): number | null {
+  const startedAt = persistedStartedAt ?? activities.find((activity) => (activity.kind === "status" || activity.type === "status") && activity.status === "running")?.created_at;
   const endedAt = activities.findLast((activity) => activity.type === "done" || activity.type === "failed")?.created_at;
   if (!startedAt || !endedAt) return null;
   const start = new Date(startedAt).getTime();
