@@ -4495,6 +4495,23 @@ test("activity recovery keeps five expired stage updates above the rolling event
   assert.equal(retained.at(-1)?.seq, 62);
 });
 
+test("task timing prefers persisted start after recovery drops the initial running event", () => {
+  const startedAt = "2026-08-12T00:00:00.000Z";
+  const recovered = [
+    { seq: 119, type: "status", status: "running", created_at: "2026-08-12T00:10:00.000Z" },
+    { seq: 120, type: "done", created_at: "2026-08-12T00:10:00.000Z" },
+  ];
+  assert.equal(taskElapsedSeconds(recovered, startedAt), 600);
+  assert.equal(taskElapsedSeconds(recovered.slice(1), startedAt), 600);
+  assert.equal(taskElapsedSeconds([{ ...recovered[1], type: "failed" }], startedAt), 600);
+  assert.equal(taskElapsedSeconds(recovered.slice(0, 1), startedAt), null);
+  assert.equal(taskElapsedSeconds(recovered, "invalid"), null);
+  assert.equal(taskElapsedSeconds(recovered, "2026-08-12T00:11:00.000Z"), null);
+  const appSource = fs.readFileSync(path.join(process.cwd(), "src", "App.tsx"), "utf8");
+  assert.match(appSource, /taskElapsedSeconds\(activities, persistedJobStartedAt\)/);
+  assert.match(appSource, /detail\?\.conversation\.id === selectedId \? detail\.latestJob\?\.startedAt : null/);
+});
+
 test("activity recovery keeps the task start and terminal events for long-running jobs", () => {
   const events = Array.from({ length: 120 }, (_, index) => {
     const seq = index + 1;
@@ -4645,15 +4662,23 @@ test("conversation recovery bounds large job event histories", async (context) =
   instance.db.updateConversation(conversationId, { status: "running" });
   instance.db.appendEvent(jobId, "status", { status: "running", label: "started" });
   for (let index = 0; index < 75; index += 1) {
-    instance.db.appendEvent(jobId, "progress", { kind: "command", label: `step-${index}` });
+    if (index === 74) instance.db.appendEvent(jobId, "status", { status: "running", label: "registering outputs" });
+    else instance.db.appendEvent(jobId, "progress", { kind: "command", label: `step-${index}` });
   }
   instance.db.finishJob(jobId, conversationId, "completed");
   instance.db.appendEvent(jobId, "done", { status: "completed" });
+
+  instance.db.sqlite.prepare("UPDATE job_events SET created_at=? WHERE job_id=? AND seq=1")
+    .run("2026-08-12T00:00:00.000Z", jobId);
+  instance.db.sqlite.prepare("UPDATE job_events SET created_at=? WHERE job_id=? AND seq>=76")
+    .run("2026-08-12T00:10:00.000Z", jobId);
 
   const detail = await agent.get(`/codex-web/api/conversations/${conversationId}`).expect(200);
   assert.equal(detail.body.activeJob, null);
   assert.equal(detail.body.jobEvents.length, 50);
   assert.equal(detail.body.jobEvents[0].seq, 28);
+  assert.equal(detail.body.latestJob.startedAt, "2026-08-12T00:00:00.000Z");
+  assert.equal(taskElapsedSeconds(mergeJobEvents([], detail.body.jobEvents), detail.body.latestJob.startedAt), 600);
   assert.equal(detail.body.jobEvents.at(-1).type, "done");
   assert.equal(typeof detail.body.latestJob.startedAt, "string");
   assert.equal(instance.db.listEvents(jobId).length, 77);
