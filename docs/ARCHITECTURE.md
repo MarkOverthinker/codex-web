@@ -74,7 +74,13 @@ much time passes, flushes the latest text before the stream moves on, and the
 browser folds those snapshots back into the single live journal entry for the
 same reasoning stream. Persisted steps also carry item-scoped ids so the
 completed reasoning panel merges by item part instead of relying on the first
-line of a still-growing step.
+line of a still-growing step. Live journal normalization never mutates source
+events or earlier render results: memoized notes receive a new event object
+when text grows. The running view includes available step bodies as well as
+summary text, removes duplicate text, and does not replace a longer snapshot
+with a shorter prefix. Identified reasoning items are not merged solely
+because their text matches. Only content supplied by the upstream event stream
+can be displayed.
 
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
