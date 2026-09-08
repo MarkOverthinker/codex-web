@@ -14,18 +14,23 @@ export function buildProcessJournal(activities: JobEvent[]): ProcessJournalEvent
   for (const activity of activities) {
     const kind = activity.kind ?? "";
     if (kind === "reasoning") {
-      if (!activity.detail?.trim()) continue;
-      const detail = activity.detail;
+      const detail = reasoningDetail(activity);
+      if (!detail) continue;
       if (lastReasoning) {
         const currentDetail = lastReasoning.detail ?? "";
-        if (detail === currentDetail) continue;
-        if (detail.startsWith(currentDetail) || currentDetail.startsWith(detail)) {
-          lastReasoning.detail = detail;
-          if (activity.steps) lastReasoning.steps = activity.steps;
+        const currentIds = new Set(lastReasoning.steps?.map((step) => step.id).filter(Boolean));
+        const nextIds = activity.steps?.map((step) => step.id).filter(Boolean) ?? [];
+        const sameItem = nextIds.some((id) => currentIds.has(id));
+        const legacy = currentIds.size === 0 && nextIds.length === 0;
+        if ((sameItem || legacy) && (detail.startsWith(currentDetail) || currentDetail.startsWith(detail))) {
+          if (detail.length >= currentDetail.length) {
+            lastReasoning.detail = detail;
+            if (activity.steps) lastReasoning.steps = activity.steps;
+          }
           continue;
         }
       }
-      normalized.push(activity);
+      normalized.push({ ...activity, detail });
       lastReasoning = normalized[normalized.length - 1];
       continue;
     }
@@ -79,6 +84,14 @@ export function buildProcessJournal(activities: JobEvent[]): ProcessJournalEvent
 
 export function isNarrativeActivity(activity: JobEvent): boolean {
   return NARRATIVE_KINDS.has(activity.kind ?? "") && Boolean(activity.detail?.trim());
+}
+
+function reasoningDetail(activity: JobEvent): string {
+  const parts = [activity.detail, ...(activity.steps ?? []).map((step) => step.detail ?? step.summary ?? step.title)]
+    .map((part) => part?.trim() ?? "").filter(Boolean);
+  return parts.filter((part, index) => !parts.some((other, otherIndex) =>
+    otherIndex !== index && other.includes(part) && (other !== part || otherIndex < index),
+  )).join("\n\n");
 }
 
 function activitySignature(activity: JobEvent | undefined): string {

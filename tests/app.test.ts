@@ -845,6 +845,43 @@ test("running work journal folds growing reasoning snapshots into one entry", ()
   assert.equal(resumed[0].detail, "先确认数据口径，再核对排名");
 });
 
+test("running reasoning snapshots are immutable and keep earlier renders unchanged", () => {
+  const first = Object.freeze({ seq: 1, kind: "reasoning", detail: "先确认" });
+  const second = Object.freeze({ seq: 2, kind: "reasoning", detail: "先确认完整的数据口径" });
+  const initial = buildProcessJournal([first]);
+  const updated = buildProcessJournal([first, second]);
+  assert.equal(first.detail, "先确认");
+  assert.equal(initial[0].detail, "先确认");
+  assert.equal(updated[0].detail, second.detail);
+  assert.notEqual(initial[0], updated[0]);
+  assert.equal(buildProcessJournal([first, second, first])[0].detail, second.detail);
+  assert.deepEqual(buildProcessJournal([first, second]), updated);
+});
+
+test("running reasoning includes step bodies and keeps distinct item identities", () => {
+  const body = "完整步骤正文".repeat(1000);
+  const activity = {
+    kind: "reasoning", detail: "摘要",
+    steps: [{ id: "reasoning:first:0", title: "摘要", detail: body }],
+  };
+  const journal = buildProcessJournal([activity]);
+  assert.equal(journal[0].detail, `摘要\n\n${body}`);
+  assert.equal(buildProcessJournal([{ ...activity, detail: "" }])[0].detail, body);
+  assert.equal(buildProcessJournal([{ ...activity, detail: body }])[0].detail, body);
+  const distinct = buildProcessJournal([
+    activity,
+    { ...activity, steps: [{ ...activity.steps[0], id: "reasoning:second:0" }] },
+  ]);
+  assert.equal(distinct.length, 2);
+  const grown = buildProcessJournal([
+    activity,
+    { ...activity, steps: [{ ...activity.steps[0], detail: `${body}新增内容` }] },
+  ]);
+  assert.equal(grown.length, 1);
+  assert.equal(grown[0].detail, `摘要\n\n${body}新增内容`);
+  assert.equal(activity.steps[0].detail, body);
+});
+
 test("reasoning progress snapshots are throttled within one stream and flushed later", () => {
   const state = { detail: "先确认数据口径", publishedDetail: "先确认数据口径", lastPublishedAt: 0 };
   assert.equal(continuesReasoningStream("先确认数据口径，再核对排名", state), true);
