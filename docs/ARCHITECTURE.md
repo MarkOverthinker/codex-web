@@ -86,6 +86,13 @@ with a shorter prefix. Identified reasoning items are not merged solely
 because their text matches. Only content supplied by the upstream event stream
 can be displayed.
 
+Live entries are indexed by reasoning step id, including updates interleaved
+with other items. Matching ids update the original entry even when display
+sanitization rewrites earlier characters (for example, a partial brand name
+becoming a complete name), so prefix matching is only a fallback for legacy
+events without ids. A shorter prefix does not overwrite a fuller snapshot;
+other same-id corrections use the latest supplied text.
+
 The composer textarea is intentionally non-controlled so typing does not
 rerender the workspace on every keystroke. `inputRef` owns the live DOM value;
 restoring, editing, and clearing text use the separate `composerInputRevision`

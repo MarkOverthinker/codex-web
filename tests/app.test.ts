@@ -882,6 +882,38 @@ test("running reasoning includes step bodies and keeps distinct item identities"
   assert.equal(activity.steps[0].detail, body);
 });
 
+test("running reasoning uses item identity when display sanitization rewrites snapshots", () => {
+  const snapshot = (seq: number, text: string, id = "thought") => ({
+    seq, ...summarizeEvent({ type: "item.updated", item: { type: "reasoning", id, text } } as never),
+  });
+  const first = snapshot(1, "检查 code");
+  const second = snapshot(2, "检查 codex 配置，再检查 chatg");
+  const third = snapshot(4, "检查 codex 配置，再检查 chatgpt 登录状态");
+  const activities = [first, second, snapshot(3, "另一个独立思考", "other"), third];
+  const original = structuredClone(activities);
+  const initial = buildProcessJournal([first]);
+  const journal = buildProcessJournal(activities);
+  assert.equal(journal.length, 2);
+  assert.equal(journal[0].seq, 1);
+  assert.equal(journal[0].detail, "检查 codex 配置，再检查 Codex Web 登录状态");
+  assert.equal(journal[1].detail, "另一个独立思考");
+  assert.equal(initial[0].detail, "检查 code");
+  assert.deepEqual(activities, original);
+});
+
+test("running reasoning accepts shorter corrections but ignores stale prefixes for the same item", () => {
+  const snapshot = (detail: string) => ({
+    kind: "reasoning", detail, steps: [{ id: "reasoning:thought:content:0", title: "思考", detail }],
+  });
+  const journal = buildProcessJournal([
+    snapshot("检查 **尚未闭合的 Markdown"),
+    snapshot("检查格式"),
+    snapshot("检查"),
+  ]);
+  assert.equal(journal.length, 1);
+  assert.equal(journal[0].detail, "检查格式");
+});
+
 test("reasoning progress snapshots are throttled within one stream and flushed later", () => {
   const state = { detail: "先确认数据口径", publishedDetail: "先确认数据口径", lastPublishedAt: 0 };
   assert.equal(continuesReasoningStream("先确认数据口径，再核对排名", state), true);

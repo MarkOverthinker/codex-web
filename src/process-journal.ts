@@ -10,28 +10,33 @@ export type ProcessJournalEvent = JobEvent & {
 
 export function buildProcessJournal(activities: JobEvent[]): ProcessJournalEvent[] {
   const normalized: JobEvent[] = [];
+  const reasoningById = new Map<string, JobEvent>();
   let lastReasoning: JobEvent | undefined;
   for (const activity of activities) {
     const kind = activity.kind ?? "";
     if (kind === "reasoning") {
       const detail = reasoningDetail(activity);
       if (!detail) continue;
-      if (lastReasoning) {
-        const currentDetail = lastReasoning.detail ?? "";
-        const currentIds = new Set(lastReasoning.steps?.map((step) => step.id).filter(Boolean));
-        const nextIds = activity.steps?.map((step) => step.id).filter(Boolean) ?? [];
-        const sameItem = nextIds.some((id) => currentIds.has(id));
+      const nextIds = (activity.steps ?? []).flatMap((step) => step.id ? [step.id] : []);
+      const identified = nextIds.map((id) => reasoningById.get(id)).find(Boolean);
+      const previousReasoning = identified ?? lastReasoning;
+      if (previousReasoning) {
+        const currentDetail = previousReasoning.detail ?? "";
+        const currentIds = new Set(previousReasoning.steps?.map((step) => step.id).filter(Boolean));
         const legacy = currentIds.size === 0 && nextIds.length === 0;
-        if ((sameItem || legacy) && (detail.startsWith(currentDetail) || currentDetail.startsWith(detail))) {
-          if (detail.length >= currentDetail.length) {
-            lastReasoning.detail = detail;
-            if (activity.steps) lastReasoning.steps = activity.steps;
+        if (identified || (legacy && (detail.startsWith(currentDetail) || currentDetail.startsWith(detail)))) {
+          if (!currentDetail.startsWith(detail) || detail.length >= currentDetail.length) {
+            previousReasoning.detail = detail;
+            if (activity.steps) previousReasoning.steps = activity.steps;
           }
+          for (const id of nextIds) reasoningById.set(id, previousReasoning);
+          lastReasoning = previousReasoning;
           continue;
         }
       }
       normalized.push({ ...activity, detail });
       lastReasoning = normalized[normalized.length - 1];
+      for (const id of nextIds) reasoningById.set(id, lastReasoning);
       continue;
     }
     if (kind === "update") {
