@@ -2628,9 +2628,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     () => sending ? EMPTY_REASONING_STEPS : collectReasoningSteps(activities),
     [activities, sending],
   );
+  const persistedJobStartedAt = detail?.conversation.id === selectedId ? detail.latestJob?.startedAt : null;
   const taskDurationSeconds = useMemo(
-    () => sending ? null : taskElapsedSeconds(activities),
-    [activities, sending],
+    () => sending ? null : taskElapsedSeconds(activities, persistedJobStartedAt),
+    [activities, sending, persistedJobStartedAt],
   );
   const visibleTaskCount = workingDirSettings?.enabled && taskCategorySettings
     ? categoryViews.reduce((sum, category) => sum + category.conversations.length, 0)

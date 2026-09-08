@@ -65,7 +65,11 @@ Job events remain fully durable in SQLite, but conversation detail and SSE
 recovery endpoints read only the most recent bounded event window. Queries use
 the `(job_id, seq)` primary key so a long task cannot force the server or
 browser to materialize its entire progress history during login, navigation,
-or reconnect.
+or reconnect. Both the live timer and completed total duration use the
+job's persisted `startedAt` (the first running status in durable history),
+not a later running status from that window. Completed duration ends at the
+terminal event timestamp, excludes queue time, and only falls back to the
+visible start event when persisted start metadata is unavailable.
 
 Reasoning text streams as growing snapshots; publishing every token-sized
 delta would produce tens of thousands of events for one thought. The server
