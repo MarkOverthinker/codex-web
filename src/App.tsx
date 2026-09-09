@@ -8,7 +8,7 @@ import rehypeHighlight from "rehype-highlight";
 import {
   Archive, ArrowDown, ArrowUp, BarChart3, Bot, Brain, Check, ChevronDown, ChevronRight, CircleDashed, Code, Download, File as FileIcon, FileImage, FileText, FolderCog, FolderInput, FolderOpen, FolderTree,
   ChevronUp, GitFork, ListChecks,
-  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Mic, Minus, Monitor, Moon, MoreHorizontal, Paperclip, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
+  Eye, EyeOff, CornerUpLeft, GripVertical, KeyRound, LayoutGrid, LayoutList, List, LoaderCircle, LogOut, Menu, Minus, Monitor, Moon, MoreHorizontal, Paperclip, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings2, Share2, Square, Sun, Timer,
   RotateCcw, ShieldAlert, ShieldCheck, Trash2, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { api, ApiError, BASE_PATH, fileUrl, setCsrf, type AgentModelOption, type AgentOptions, type AgentSelection, type ComposerDraft, type Conversation, type ConversationDetail, type ImportableSession, type Job, type JobEvent, type Message, type MessageSourceReference, type PendingPrompt, type PresetPrompt, type ReasoningEffort, type ReasoningStep, type ReloadStatus, type SandboxMode, type Session, type WorkFile, type WorkingDirSettings } from "./api";
@@ -23,6 +23,8 @@ import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { normalizeMathDelimiters } from "./markdown-math";
 import { chooseComposerPrimaryAction } from "./composer-action";
+import { VoiceInput } from "./voice-input";
+import { appendVoiceTranscript } from "./voice-input-state";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
 import { resolveAccountIdentity } from "./account-identity";
 import { CHAT_FONT_SIZE_DEFAULT, CHAT_FONT_SIZE_MAX, CHAT_FONT_SIZE_MIN, normalizeChatFontSize } from "./chat-font-size";
@@ -2687,6 +2689,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     draftFiles={composerDraftFiles} draftUploads={draftUploads} draftSaveState={draftSaveState}
     sending={sending} submitting={submitting} selectionSaving={selectionSaving}
     voiceEnabled={Boolean(session.voiceEnabled)}
+    voiceModels={session.voiceModels ?? []}
+    voicePreferenceKey={session.username ?? ""}
     conversationId={selectedId}
     pendingPrompts={composerPendingPrompts} editingPending={editingPending} editingMessage={editingMessage} removedEditingFileIds={removedEditingFileIds}
     presetPrompts={presetPrompts} enabledPresetPromptIds={currentDetail?.enabledPresetPromptIds ?? EMPTY_PRESET_PROMPT_IDS}
@@ -2706,7 +2710,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   />, [
     agentOptions, askAgentQuote, composerCanSteer, composerDraft, composerFocusRequest, composerPendingPrompts,
     currentDetail, draftSaveState, draftUploads, editingMessage, editingPending, files, handleComposerTextChange, input, composerInputRevision, job, reasoningEffort, sandboxMode,
-    hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, sourceReference, submitting,
+    hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, session.voiceModels, session.username, sourceReference, submitting,
   ]);
 
   return <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -3131,6 +3135,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
     {sideChatOpen && sideChatCurrentConversation && <SideChatPane
+      voiceModels={session.voiceModels ?? []}
+      voicePreferenceKey={session.username ?? ""}
       currentConversation={sideChatCurrentConversation}
       agentOptions={agentOptions}
       referenceRequest={sideChatReferenceRequest}
@@ -3930,7 +3936,7 @@ function PendingQueue({ prompts, busy, canSteer, onReorder, onEdit, onDelete, on
   </section>;
 }
 
-function Composer({ conversationId, input, inputRevision, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, pendingPrompts, editingPending, editingMessage, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onCancelMessageEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
+function Composer({ conversationId, input, inputRevision, onTextChange, askAgentQuote, onClearAskAgentQuote, sourceReference, onClearSourceReference, onOpenSourceReference, focusRequest, files, setFiles, draftFiles, draftUploads, draftSaveState, sending, submitting, selectionSaving, voiceEnabled, voiceModels, voicePreferenceKey, pendingPrompts, editingPending, editingMessage, removedEditingFileIds, presetPrompts, enabledPresetPromptIds, onTogglePresetPrompt, presetSaving, onOpenPresetManager, agentOptions, selectedModel, reasoningEffort, sandboxMode, onModelChange, onReasoningChange, onSandboxChange, onReorderPending, onEditPending, onDeletePending, onSteerPending, canSteer, onCancelPendingEdit, onCancelMessageEdit, onAddFiles, onRemoveDraftFile, onClearDraft, onRemoveEditingFile, onRestoreEditingFile, hostFilesAvailable, onBrowseHostFiles, onSend, onCancel }: {
   conversationId: string | null;
   input: string;
   inputRevision: number;
@@ -3950,6 +3956,8 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   submitting: boolean;
   selectionSaving: boolean;
   voiceEnabled: boolean;
+  voiceModels: NonNullable<Session["voiceModels"]>;
+  voicePreferenceKey: string;
   pendingPrompts: PendingPrompt[];
   editingPending: PendingPrompt | null;
   editingMessage: Message | null;
@@ -3987,40 +3995,15 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   const pasteTimer = useRef<number | undefined>(undefined);
   const [pasteNotice, setPasteNotice] = useState("");
   const [composerTextHeight, setComposerTextHeight] = useState<number | null>(null);
-  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
-  const [voiceElapsed, setVoiceElapsed] = useState(0);
-  const [voiceError, setVoiceError] = useState("");
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const animationRef = useRef<number | null>(null);
-  const durationTimerRef = useRef<number | null>(null);
-  const recordingLimitRef = useRef<number | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const sendAfterTranscriptionRef = useRef(false);
-  const discardRecordingRef = useRef(false);
-  const waveformRef = useRef<HTMLCanvasElement>(null);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledFocusRequestRef = useRef(focusRequest);
   const inputRef = useRef(input);
   const hadInputRef = useRef(Boolean(input));
   const [hasText, setHasText] = useState(() => Boolean(input.trim()));
   const onTextChangeRef = useRef(onTextChange);
-  const filesRef = useRef(files);
-  const draftFilesRef = useRef(draftFiles);
-  const draftUploadsRef = useRef(draftUploads);
-  const editingPendingRef = useRef(editingPending);
-  const editingMessageRef = useRef(editingMessage);
-  const removedEditingFileIdsRef = useRef(removedEditingFileIds);
-  const onSendRef = useRef(onSend);
   onTextChangeRef.current = onTextChange;
-  filesRef.current = files;
-  draftFilesRef.current = draftFiles;
-  draftUploadsRef.current = draftUploads;
-  editingPendingRef.current = editingPending;
-  editingMessageRef.current = editingMessage;
-  removedEditingFileIdsRef.current = removedEditingFileIds;
-  onSendRef.current = onSend;
+
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -4034,9 +4017,6 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
 
   useEffect(() => () => {
     window.clearTimeout(pasteTimer.current);
-    discardRecordingRef.current = true;
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-    releaseAudio();
   }, []);
 
   useEffect(() => {
@@ -4051,104 +4031,9 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     return () => window.cancelAnimationFrame(frame);
   }, [focusRequest]);
 
-  function releaseAudio() {
-    if (animationRef.current !== null) cancelAnimationFrame(animationRef.current);
-    if (durationTimerRef.current !== null) window.clearInterval(durationTimerRef.current);
-    if (recordingLimitRef.current !== null) window.clearTimeout(recordingLimitRef.current);
-    animationRef.current = null; durationTimerRef.current = null; recordingLimitRef.current = null;
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    void audioContextRef.current?.close().catch(() => undefined);
-    audioContextRef.current = null;
-  }
-
-  function drawWaveform(analyser: AnalyserNode) {
-    const canvas = waveformRef.current;
-    if (canvas) {
-      const values = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(values);
-      const context = canvas.getContext("2d");
-      if (context) {
-        const width = canvas.clientWidth * window.devicePixelRatio;
-        const height = canvas.clientHeight * window.devicePixelRatio;
-        if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-        context.clearRect(0, 0, width, height);
-        context.fillStyle = "#4b5794";
-        const bars = 36; const gap = 2 * window.devicePixelRatio; const barWidth = Math.max(2, (width - gap * (bars - 1)) / bars);
-        for (let index = 0; index < bars; index += 1) {
-          const sample = values[Math.floor(index * values.length / bars)] / 255;
-          const barHeight = Math.max(3 * window.devicePixelRatio, sample * height * .9);
-          context.beginPath();
-          context.roundRect(index * (barWidth + gap), (height - barHeight) / 2, barWidth, barHeight, barWidth / 2);
-          context.fill();
-        }
-      }
-    }
-    animationRef.current = requestAnimationFrame(() => drawWaveform(analyser));
-  }
-
-  async function startRecording() {
-    if (voiceState !== "idle" || submitting || selectionSaving) return;
-    setVoiceError("");
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setVoiceError("当前浏览器不支持录音，请改用最新版 Chrome、Edge 或 Safari。");
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
-      const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      streamRef.current = stream; recorderRef.current = recorder; chunksRef.current = [];
-      sendAfterTranscriptionRef.current = false; discardRecordingRef.current = false;
-      recorder.ondataavailable = (event) => { if (event.data.size > 0) chunksRef.current.push(event.data); };
-      recorder.onerror = () => {
-        discardRecordingRef.current = true;
-        if (recorder.state === "recording") recorder.stop();
-        setVoiceError("录音中断，请检查麦克风权限后重试。"); releaseAudio(); setVoiceState("idle");
-      };
-      recorder.onstop = () => void processRecording(recorder.mimeType || mimeType || "audio/webm");
-      recorder.start(250);
-      setVoiceElapsed(0); setVoiceState("recording");
-      const startedAt = Date.now();
-      durationTimerRef.current = window.setInterval(() => setVoiceElapsed(Math.floor((Date.now() - startedAt) / 1000)), 250);
-      recordingLimitRef.current = window.setTimeout(() => {
-        if (recorder.state === "recording") {
-          sendAfterTranscriptionRef.current = false;
-          recorder.stop();
-          setVoiceState("transcribing");
-        }
-      }, 5 * 60 * 1000);
-      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (AudioContextClass) {
-        const audioContext = new AudioContextClass(); audioContextRef.current = audioContext;
-        const analyser = audioContext.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = .76;
-        audioContext.createMediaStreamSource(stream).connect(analyser);
-        drawWaveform(analyser);
-      }
-    } catch (reason) {
-      releaseAudio(); setVoiceState("idle");
-      const denied = reason instanceof DOMException && ["NotAllowedError", "PermissionDeniedError"].includes(reason.name);
-      setVoiceError(denied ? "请允许浏览器使用麦克风，然后再试一次。" : "无法开始录音，请检查麦克风是否可用。");
-    }
-  }
-
-  function finishRecording(sendAfter: boolean) {
-    if (voiceState !== "recording" || recorderRef.current?.state !== "recording") return;
-    sendAfterTranscriptionRef.current = sendAfter;
-    recorderRef.current.stop();
-    setVoiceState("transcribing");
-  }
-
-  function cancelRecording() {
-    if (voiceState !== "recording" || recorderRef.current?.state !== "recording") return;
-    discardRecordingRef.current = true;
-    recorderRef.current.stop();
-    releaseAudio();
-    setVoiceState("idle"); setVoiceElapsed(0);
-  }
-
   function handleTextChange(value: string) {
+    const textarea = textareaRef.current;
+    if (textarea && textarea.value !== value) textarea.value = value;
     const hadInput = hadInputRef.current;
     inputRef.current = value;
     hadInputRef.current = Boolean(value);
@@ -4157,31 +4042,6 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     onTextChangeRef.current(value);
   }
 
-  async function processRecording(mimeType: string) {
-    releaseAudio(); recorderRef.current = null;
-    if (discardRecordingRef.current) { chunksRef.current = []; return; }
-    const blob = new Blob(chunksRef.current, { type: mimeType }); chunksRef.current = [];
-    if (blob.size === 0) { setVoiceError("没有录到声音，请重新录制。"); setVoiceState("idle"); return; }
-    const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : "webm";
-    try {
-      const retainedNames = (editingMessageRef.current?.files ?? editingPendingRef.current?.files ?? [])
-        .filter((file) => !removedEditingFileIdsRef.current.includes(file.id))
-        .map((file) => file.original_name);
-      const attachmentNames = [...retainedNames, ...draftFilesRef.current.map((file) => file.original_name), ...draftUploadsRef.current.map((file) => file.name), ...filesRef.current.map((file) => file.name)].slice(0, 12);
-      const result = await api.transcribeAudio(blob, `recording.${extension}`, {
-        conversationId: conversationId ?? undefined,
-        draftText: inputRef.current,
-        attachmentNames,
-      });
-      const existing = inputRef.current;
-      const combined = existing ? `${existing}${/\s$/.test(existing) ? "" : "\n"}${result.text}` : result.text;
-      handleTextChange(combined); setVoiceState("idle"); setVoiceElapsed(0);
-      if (sendAfterTranscriptionRef.current) onSendRef.current(combined);
-    } catch (reason) {
-      setVoiceError(reason instanceof Error ? reason.message : "语音识别失败，请重试。");
-      setVoiceState("idle");
-    } finally { sendAfterTranscriptionRef.current = false; }
-  }
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
     onAddFiles(Array.from(list));
@@ -4207,7 +4067,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     window.clearTimeout(pasteTimer.current);
     pasteTimer.current = window.setTimeout(() => setPasteNotice(""), 2600);
   }
-  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); voiceState === "recording" ? finishRecording(true) : onSend(inputRef.current); } }
+  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!voiceBusy && !submitting && !selectionSaving) onSend(inputRef.current); } }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
   const sandboxOptions = agentOptions?.sandboxModes.map((mode) => ({
@@ -4223,7 +4083,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     running: Boolean(sending && onCancel),
     hasText: Boolean(hasText || askAgentQuote),
     hasAttachments: files.length > 0 || draftFiles.length > 0 || draftUploads.length > 0 || hasRetainedEditingFile,
-    voiceActive: voiceState !== "idle",
+    voiceActive: voiceBusy,
   });
   const awaitingInstruction = Boolean(editingPending && !editingPending.content.trim() && !editingPending.quote_excerpt);
   const hasUnsentDraft = !editingPending && !editingMessage && Boolean(hasText || askAgentQuote || draftFiles.length || draftUploads.length);
@@ -4275,11 +4135,14 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     {!editingPending && !editingMessage && draftUploads.length > 0 && <div className="pending-files">{draftUploads.map((file) => <span key={file.id} className="uploading"><LoaderCircle className="spin" size={14} /><span className="pending-file-name">{file.name}</span></span>)}</div>}
     {files.length > 0 && <div className="pending-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={14} /><span className="pending-file-name">{file.name}</span><button onClick={() => setFiles(files.filter((_, i) => i !== index))}><X size={13} /></button></span>)}</div>}
     {pasteNotice && <div className="paste-notice" role="status" aria-live="polite"><Check size={14} />{pasteNotice}</div>}
-    {voiceError && <div className="voice-error" role="alert"><span>{voiceError}</span><button type="button" onClick={() => setVoiceError("")}><X size={13} /></button></div>}
-    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceState === "recording" ? "可以继续输入文字；点击发送会先转写语音…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : editingMessage ? "修改这条历史消息并重发…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting || voiceState === "transcribing"} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
-    {voiceState !== "idle" && <div className={`voice-panel ${voiceState}`}>
-      {voiceState === "recording" ? <><button type="button" className="voice-cancel" onClick={cancelRecording} title="取消录音"><X size={15} /></button><canvas ref={waveformRef} aria-label="实时音量波形" /><time>{formatVoiceDuration(voiceElapsed)}</time><button type="button" className="voice-stop" onClick={() => finishRecording(false)} title="停止并转成文字"><Square size={12} fill="currentColor" /></button></> : <><LoaderCircle className="spin" size={17} /><span>正在识别语音…</span></>}
-    </div>}
+    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceBusy ? "可以继续编辑草稿；识别完成后不会自动发送…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : editingMessage ? "修改这条历史消息并重发…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
+    {voiceEnabled && <VoiceInput
+      key={`${conversationId}:${editingPending?.id ?? ""}:${editingMessage?.id ?? ""}:${voicePreferenceKey}`}
+      models={voiceModels} preferenceKey={voicePreferenceKey} conversationId={conversationId ?? undefined}
+      disabled={submitting || selectionSaving} draftText={inputRef.current}
+      attachmentNames={[...(editingMessage?.files ?? editingPending?.files ?? []).filter((file) => !removedEditingFileIds.includes(file.id)).map((file) => file.original_name), ...draftFiles.map((file) => file.original_name), ...draftUploads.map((file) => file.name), ...files.map((file) => file.name)].slice(0, 12)}
+      onBusyChange={setVoiceBusy} onTranscript={(text) => { handleTextChange(appendVoiceTranscript(inputRef.current, text)); textareaRef.current?.focus(); }}
+    />}
     <div className="composer-actions"><div className="composer-primary-actions"><button className="attach-button" onClick={() => fileInput.current?.click()} disabled={submitting}><Paperclip size={17} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
       {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending || editingMessage)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
@@ -4288,10 +4151,9 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
       {sandboxOptions.length > 1 && <SettingMenu className={`permission ${sandboxMode === "danger-full-access" ? "danger-selected" : ""}`} label="权限" value={sandboxMode} options={sandboxOptions} placeholder="工作区写入" title="选择 Codex 的运行权限；完全访问会跳过沙箱" disabled={submitting || selectionSaving} onChange={(value) => onSandboxChange(value as SandboxMode)} />}
     </div>
       <div className="composer-submit-actions">
-        {voiceEnabled && voiceState === "idle" && <button type="button" className="mic-button" onClick={() => void startRecording()} disabled={submitting || selectionSaving} title="录音输入" aria-label="录音输入"><Mic size={18} /></button>}
         {primaryAction === "stop" && onCancel
           ? <button type="button" className="send-button stop" onClick={onCancel} title="停止当前显示的任务" aria-label="停止当前显示的任务"><Square size={15} fill="currentColor" /></button>
-          : <button type="button" className="send-button" onClick={() => voiceState === "recording" ? finishRecording(true) : onSend(inputRef.current)} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceState === "transcribing" || (voiceState !== "recording" && !hasText && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title={voiceState === "recording" ? "识别语音并发送" : "发送"} aria-label={voiceState === "recording" ? "识别语音并发送" : "发送"}>{submitting || voiceState === "transcribing" ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
+          : <button type="button" className="send-button" onClick={() => onSend(inputRef.current)} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceBusy || (!hasText && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title="发送" aria-label="发送">{submitting || voiceBusy ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
       </div>
     </div>
   </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p></div>;
@@ -4527,9 +4389,4 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-}
-
-function formatVoiceDuration(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }

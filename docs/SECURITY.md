@@ -38,7 +38,8 @@
   account as trusted; with these capabilities a tenant process could in
   principle modify other tenants' files inside the container.
 - The public edition intentionally contains no host-root bridge, Docker socket, or host filesystem mount.
-- Voice recordings and their bounded spelling/topic context are sent to the DashScope endpoint configured by the operator. Context can include the draft, attachment names, text attachment heads, recent messages, and a small number of images. Disable voice by leaving `DASHSCOPE_API_KEY` empty.
+- With `TRANSCRIPTION_PROVIDER=local`, recordings and an allowlisted model ID go only to a permission-restricted Unix socket. The independent unprivileged ASR process runs in a network namespace without external connectivity; it receives no draft/attachment/conversation context and never falls back to cloud recognition. Model files are prepared separately. Upload authentication, CSRF checks, ownership checks, rate/size limits, and temporary-upload cleanup remain on the web server. Protect the socket directory and do not make it world-writable. See [Local voice](LOCAL_VOICE.md).
+- With `TRANSCRIPTION_PROVIDER=dashscope`, recordings and bounded spelling/topic context are sent to the operator-configured DashScope endpoint. Context can include drafts, attachment names, text attachment heads, recent messages, and small images. Use `TRANSCRIPTION_PROVIDER=disabled` to disable all voice input; removing `DASHSCOPE_API_KEY` only disables the cloud path.
 - Archiving is not deletion: archived conversations retain messages, files, and Codex thread references until explicitly deleted.
 - Interrupted jobs are never automatically retried because the previous turn may already have produced side effects.
 - Back up state volumes and test restore procedures before upgrades.

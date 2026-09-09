@@ -6,7 +6,8 @@ export type { MessageSourceReference } from "./message-source.js";
 
 export const BASE_PATH = "/codex-web";
 
-export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean; canChangeUsername?: boolean; providerManagementEnabled?: boolean };
+export type VoiceModelOption = { id: string; label: string; local: boolean };
+export type Session = { authenticated: boolean; username?: string; displayName?: string; csrfToken?: string; chatFontSize?: number; chatColumnWidth?: number; voiceEnabled?: boolean; voiceModels?: VoiceModelOption[]; canChangeUsername?: boolean; providerManagementEnabled?: boolean };
 export type Conversation = {
   id: string; title: string; title_source: "default" | "ai" | "manual" | "legacy"; status: "idle" | "running"; has_unread_result: number; has_pending_work: number; rollout_bytes: number | null; archived_at: string | null; created_at: string; updated_at: string;
   contextUsage?: { usedTokens: number; contextWindow: number | null; updatedAt: string | null } | null;
@@ -521,13 +522,14 @@ export const api = {
     files.forEach((file) => body.append("files", file));
     return request<PendingMutationResponse>(`/conversations/${conversationId}/messages/${messageId}`, { method: "PUT", body });
   },
-  transcribeAudio: (audio: Blob, fileName: string, context: { conversationId?: string; draftText?: string; attachmentNames?: string[] } = {}) => {
+  transcribeAudio: (audio: Blob, fileName: string, context: { conversationId?: string; draftText?: string; attachmentNames?: string[]; model?: string } = {}, signal?: AbortSignal) => {
     const body = new FormData();
     body.set("audio", audio, fileName);
     body.set("conversationId", context.conversationId ?? "");
     body.set("draftText", context.draftText ?? "");
     body.set("attachmentNames", JSON.stringify(context.attachmentNames ?? []));
-    return request<{ text: string }>("/transcriptions", { method: "POST", body });
+    if (context.model) body.set("model", context.model);
+    return request<{ text: string }>("/transcriptions", { method: "POST", body, signal });
   },
   reorderPendingPrompts: (conversationId: string, ids: string[]) => request<{ pendingPrompts: PendingPrompt[] }>(
     `/conversations/${conversationId}/pending-prompts/order`,

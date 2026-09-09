@@ -201,9 +201,13 @@ stateDiagram-v2
 
 ## 可选语音输入
 
-在 `.env` 中设置你自己的 `DASHSCOPE_API_KEY` 和 HTTPS `PUBLIC_BASE_URL` 后，页面会显示麦克风按钮。默认使用 `qwen3.5-omni-plus`，可通过 `DASHSCOPE_ASR_MODEL` 修改。未设置 Key 时语音功能完全关闭。
+本地模式：部署独立 CPU 语音服务并设置 `TRANSCRIPTION_PROVIDER=local`。主输入框及侧边聊天支持使用时选择 **SenseVoiceSmall INT8** 或 **Qwen3-ASR-0.6B**；当前浏览器按用户名记住上次选择。停止录音后回填可编辑草稿，不自动发送。模型准备、离线迁移、服务管理和限制见 [本地语音部署](docs/LOCAL_VOICE.md)。本地服务只接收录音和模型选择，不接收草稿、附件或对话内容，也不会失败后改用云 API。
 
-语音模型使用的额外拼写/话题上下文默认限制为约 500 token，由草稿、附件名、文本附件开头 16 KiB、最近对话、固定技术词和最多两张小图片共同分配；未发送的大文件不会整份进入转写请求。可通过 `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`、`TRANSCRIPTION_CONTEXT_MAX_IMAGES` 和 `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES` 调整。
+本地识别不需要付费 Key 或公网地址，但麦克风仍需 HTTPS 或 localhost。设置 `TRANSCRIPTION_PROVIDER=disabled` 可关闭全部语音输入。
+
+可选云端兼容模式：设置 `TRANSCRIPTION_PROVIDER=dashscope`、你自己的 `DASHSCOPE_API_KEY` 和 HTTPS `PUBLIC_BASE_URL`。默认使用 `qwen3.5-omni-plus`，可通过 `DASHSCOPE_ASR_MODEL` 修改；该模式未设置 Key 时关闭。未配置 `TRANSCRIPTION_PROVIDER` 的旧部署继续按云端设置判断是否启用。
+
+仅云端模式使用额外拼写/话题上下文，默认限制为约 500 token，由草稿、附件名、文本附件开头 16 KiB、最近对话、固定技术词和最多两张小图片共同分配；未发送的大文件不会整份进入转写请求。可通过 `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`、`TRANSCRIPTION_CONTEXT_MAX_IMAGES` 和 `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES` 调整。
 
 公网部署请配置 HTTPS；浏览器通常只允许在 HTTPS 或 localhost 页面调用麦克风。
 

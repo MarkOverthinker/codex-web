@@ -361,7 +361,7 @@ for details.
 The web service itself starts fully offline, but Codex tasks still require a
 configured `~/.codex` for the `APP_USERNAME` system user and network reach to
 the model API (or an internal endpoint configured in `config.toml`). Optional
-voice transcription additionally needs `ffmpeg` and DashScope access. See the
+cloud voice transcription additionally needs `ffmpeg` and DashScope access. Offline SenseVoiceSmall/Qwen3-ASR deployment instead uses a separate CPU sidecar; see [Local voice](LOCAL_VOICE.md). See the
 generated `README-OFFLINE.md` inside the bundle for details.
 
 ## Reverse proxy
@@ -373,7 +373,7 @@ Set `PUBLIC_BASE_URL` to the final URL. When the frp server uses a non-80
 `http://proxy-html.gyli.site:8088/codex-web`). Do not publish container port
 37821 directly to the internet.
 
-For optional voice transcription, keep `DASHSCOPE_API_KEY` only in `.env`. The default context budget is 500 approximate tokens, two images, and 2 MiB per image. Adjust `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`, `TRANSCRIPTION_CONTEXT_MAX_IMAGES`, and `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES` only after considering request cost and data exposure.
+For optional cloud voice transcription (`TRANSCRIPTION_PROVIDER=dashscope`), keep `DASHSCOPE_API_KEY` only in `.env`. The default context budget is 500 approximate tokens, two images, and 2 MiB per image. Adjust `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`, `TRANSCRIPTION_CONTEXT_MAX_IMAGES`, and `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES` only after considering request cost and data exposure. Local voice transcription (`TRANSCRIPTION_PROVIDER=local`) does not use these cloud credentials or context settings; see [Local voice input](LOCAL_VOICE.md).
 
 ## Updating
 

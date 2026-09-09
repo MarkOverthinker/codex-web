@@ -20,6 +20,9 @@ import {
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { formatSourceLocation } from "./message-source";
 import { copyText } from "./copy-path";
+import { VoiceInput } from "./voice-input";
+import { appendVoiceTranscript } from "./voice-input-state";
+import type { VoiceModelOption } from "./api";
 
 export type SideChatReferenceRequest = {
   id: number;
@@ -35,6 +38,8 @@ export type SideChatForkRequest = {
 };
 
 type SideChatPaneProps = {
+  voiceModels: VoiceModelOption[];
+  voicePreferenceKey: string;
   currentConversation: Conversation;
   agentOptions: AgentOptions | null;
   referenceRequest: SideChatReferenceRequest | null;
@@ -99,10 +104,11 @@ function SideMessage({ message, citationFiles, onOpenSourceReference }: { messag
   </article>;
 }
 
-export function SideChatPane({ currentConversation, agentOptions, referenceRequest, forkRequest, onReferenceHandled, onForkHandled, onPromoted, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
+export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversation, agentOptions, referenceRequest, forkRequest, onReferenceHandled, onForkHandled, onPromoted, onClose, onError, onOpenSourceReference, width, widthMin, widthMax, onResizeStart, onResizeKeyDown }: SideChatPaneProps) {
   const [history, setHistory] = useState<SideChatSummary[]>([]);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [input, setInput] = useState("");
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [reference, setReference] = useState<MessageSourceReference | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -363,7 +369,7 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (submitting || (!input.trim() && !reference)) return;
+    if (submitting || voiceBusy || (!input.trim() && !reference)) return;
     setSubmitting(true);
     try {
       const target = await ensureActiveSideConversation(currentConversation);
@@ -443,11 +449,14 @@ export function SideChatPane({ currentConversation, agentOptions, referenceReque
       <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={reference ? "基于这段引用继续提问…" : "在侧边线程中提问…"} rows={3} disabled={submitting || (!detail && !canCreateForCurrent)} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
       }} />
+      <VoiceInput key={`${detail?.conversation.id ?? currentConversation.id}:${voicePreferenceKey}`} models={voiceModels} preferenceKey={voicePreferenceKey}
+        conversationId={detail?.conversation.id ?? currentConversation.id} disabled={submitting || loading || (!detail && !canCreateForCurrent)}
+        draftText={input} onBusyChange={setVoiceBusy} onTranscript={(text) => setInput((draft) => appendVoiceTranscript(draft, text))} />
       <div className="side-chat-composer-footer">
         <span>{busy ? `${detail?.pendingPrompts.length ?? 0} 条等待中` : detail ? "独立线程，不随主任务切换" : "发送时自动创建侧边对话"}</span>
         {detail?.activeJob
           ? <button type="button" className="side-chat-send stop" onClick={() => void api.cancelConversation(detail.conversation.id).then(() => refresh(detail.conversation.id, false))} title="停止"><Square size={14} /></button>
-          : <button type="submit" className="side-chat-send" disabled={submitting || (!detail && !canCreateForCurrent) || (!input.trim() && !reference)} title="发送">{submitting ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={16} />}</button>}
+          : <button type="submit" className="side-chat-send" disabled={submitting || voiceBusy || (!detail && !canCreateForCurrent) || (!input.trim() && !reference)} title="发送">{submitting ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={16} />}</button>}
       </div>
     </form>
   </aside>;

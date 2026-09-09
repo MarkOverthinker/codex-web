@@ -17,6 +17,7 @@ function testConfig(dataRoot: string) {
     dashscopeApiKey: "test-dashscope-key",
     transcriptionPollMs: 0,
     transcriptionTimeoutMs: 1000,
+    transcriptionProvider: "dashscope",
   });
 }
 
