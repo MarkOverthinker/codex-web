@@ -47,6 +47,8 @@ import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
 import { useTaskCategoryGridLayout } from "./task-grid-layout";
+import { MobileTools, useMobileDrawer, useMobileLayout, useMobileViewport } from "./mobile-layout";
+import { MOBILE_MEDIA_QUERY, shouldSubmitOnEnter } from "./mobile-input";
 
 const SELECTED_CONVERSATION_KEY = "codex-web:selected-conversation";
 const TASK_CATEGORY_EXPANDED_KEY = "codex-web:task-categories-expanded";
@@ -413,10 +415,13 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
 }
 
 function Workspace({ session, onLogout, onSessionChange, themePreference, onThemePreferenceChange }: { session: Session; onLogout: () => void; onSessionChange: (session: Session) => void; themePreference: ThemePreference; onThemePreferenceChange: (preference: ThemePreference) => void }) {
+  useMobileViewport();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(() => readLocalStorageValue(SELECTED_CONVERSATION_KEY));
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeMobileSidebar = useCallback(() => setSidebarOpen(false), []);
+  useMobileDrawer(sidebarOpen, closeMobileSidebar);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readLocalStorageValue(SIDEBAR_COLLAPSED_KEY) === "true");
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
@@ -2813,6 +2818,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           {providerManagementEnabled && <button type="button" className="account-settings-archive" onClick={() => { setProviderManagerOpen(true); setAccountSettingsOpen(false); }}><Settings2 size={15} /><span>打开 API 源管理器</span></button>}
           <button type="button" className="account-settings-archive" onClick={() => { setBillingPanelOpen(true); setAccountSettingsOpen(false); }}><BarChart3 size={15} /><span>API 调用计费统计</span></button>
           <button type="button" className="account-settings-archive" onClick={() => { setPresetPromptManagerOpen(true); setAccountSettingsOpen(false); }}><ListChecks size={15} /><span>预设 Prompt 管理</span></button>
+          {navigator.userAgent.includes("CodexWebAndroid/") && <a className="account-settings-archive" href="codexweb://settings"><Settings2 size={15} /><span>安卓连接设置</span></a>}
         </section>}
         <div className="account-row">
           <button className="account-profile" type="button" aria-expanded={accountSettingsOpen} onClick={() => setAccountSettingsOpen((open) => !open)}>
@@ -3119,7 +3125,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="desktop-header"><div className="desktop-header-leading"><button type="button" className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} onClick={toggleDesktopSidebar}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></div></header>
-      <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开侧栏"><Menu size={20} /></button><div className="wordmark"><span className="brand-mark small"><Zap size={14} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div></header>
+      <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开任务列表" aria-controls="primary-sidebar" aria-expanded={sidebarOpen}><Menu size={22} /></button><div className="mobile-title"><strong>{currentDetail?.conversation.title ?? "Codex Web"}</strong><small>{sending ? "任务执行中 · 可继续排队" : "你的 AI 工作台"}</small></div><button type="button" className="icon-button" onClick={() => void newConversation()} aria-label="新建任务"><Plus size={22} /></button><div id="mobile-chat-tools" /></header>
       {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onEditMessage={(message) => void beginMessageEdit(message)} onForkSideChat={forkMessageToSideChat} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
         : <Welcome onSuggestion={(text) => applyExternalComposerText(text)} />}
@@ -3572,7 +3578,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
     window.getSelection()?.removeAllRanges();
   }
 
-  return <section ref={chatRef} className="chat"><div className="chat-header"><div><span className="chat-kicker">CODEX WEB <i>/</i> AI 工作台</span><h1>{detail.conversation.title}</h1>{workingDirSettings?.enabled && <div className="chat-working-dir" title={detail.conversation.working_dir ?? undefined}>{detail.conversation.working_dir ?? "独立工作区"}</div>}</div><div className="chat-header-actions"><ContextUsageBadge usage={detail.contextUsage} /><span className="message-count">已加载 {detail.messages.length} 条</span>{workingDirSettings?.enabled && <SettingMenu
+  return <section ref={chatRef} className="chat"><div className="chat-header"><div><span className="chat-kicker">CODEX WEB <i>/</i> AI 工作台</span><h1>{detail.conversation.title}</h1>{workingDirSettings?.enabled && <div className="chat-working-dir" title={detail.conversation.working_dir ?? undefined}>{detail.conversation.working_dir ?? "独立工作区"}</div>}</div><div className="chat-header-actions"><MobileTools label="会话工具" targetId="mobile-chat-tools"><ContextUsageBadge usage={detail.contextUsage} /><span className="message-count">已加载 {detail.messages.length} 条</span>{workingDirSettings?.enabled && <SettingMenu
       className="working-dir"
       label="目录"
       value={detail.conversation.working_dir ?? ""}
@@ -3589,7 +3595,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
         if (value === "__browse__") { onBrowseWorkingDir(detail.conversation.working_dir ?? undefined); return; }
         onWorkingDirChange(value || null);
       }}
-    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}{latestForkableMessage && <button type="button" className="chat-tool-trigger chat-fork-trigger" onClick={() => onForkSideChat(latestForkableMessage.id)} disabled={!forkEnabled} aria-label="从最新回答 Fork 到侧边聊天" title={forkEnabled ? "保留到最新回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={16} /><span>Fork 最新回答</span></button>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button type="button" className={`chat-tool-trigger ${fileExplorerOpen ? "active" : ""}`} onClick={onToggleFileExplorer} aria-pressed={fileExplorerOpen} aria-label="打开文件浏览器" title="打开文件浏览器"><FolderTree size={16} /><span>文件</span></button><ReviewButton key={`${detail.conversation.id}:${detail.conversation.working_dir}`} conversationId={detail.conversation.id} /><button type="button" className="chat-tool-trigger" onClick={onOpenBilling} aria-label="查看 API 计费统计" title="查看 API 计费统计"><BarChart3 size={16} /><span>API 统计</span></button><button className="icon-button" aria-label="更多"><MoreHorizontal size={20} /></button></div></div>
+    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}{latestForkableMessage && <button type="button" className="chat-tool-trigger chat-fork-trigger" onClick={() => onForkSideChat(latestForkableMessage.id)} disabled={!forkEnabled} aria-label="从最新回答 Fork 到侧边聊天" title={forkEnabled ? "保留到最新回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={16} /><span>Fork 最新回答</span></button>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button type="button" className={`chat-tool-trigger ${fileExplorerOpen ? "active" : ""}`} onClick={onToggleFileExplorer} aria-pressed={fileExplorerOpen} aria-label="打开文件浏览器" title="打开文件浏览器"><FolderTree size={16} /><span>文件</span></button><ReviewButton key={`${detail.conversation.id}:${detail.conversation.working_dir}`} conversationId={detail.conversation.id} /><button type="button" className="chat-tool-trigger" onClick={onOpenBilling} aria-label="查看 API 计费统计" title="查看 API 计费统计"><BarChart3 size={16} /><span>API 统计</span></button></MobileTools></div></div>
     <OutputFilesPanel key={detail.conversation.id} files={orderedOutputFiles} onPreview={handlePreview} />
     <MessageList
       messages={detail.messages}
@@ -4067,7 +4073,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     window.clearTimeout(pasteTimer.current);
     pasteTimer.current = window.setTimeout(() => setPasteNotice(""), 2600);
   }
-  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!voiceBusy && !submitting && !selectionSaving) onSend(inputRef.current); } }
+  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (shouldSubmitOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, mobile: window.matchMedia(MOBILE_MEDIA_QUERY).matches })) { event.preventDefault(); if (!voiceBusy && !submitting && !selectionSaving) onSend(inputRef.current); } }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
   const sandboxOptions = agentOptions?.sandboxModes.map((mode) => ({
@@ -4143,12 +4149,14 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
       attachmentNames={[...(editingMessage?.files ?? editingPending?.files ?? []).filter((file) => !removedEditingFileIds.includes(file.id)).map((file) => file.original_name), ...draftFiles.map((file) => file.original_name), ...draftUploads.map((file) => file.name), ...files.map((file) => file.name)].slice(0, 12)}
       onBusyChange={setVoiceBusy} onTranscript={(text) => { handleTextChange(appendVoiceTranscript(inputRef.current, text)); textareaRef.current?.focus(); }}
     />}
-    <div className="composer-actions"><div className="composer-primary-actions"><button className="attach-button" onClick={() => fileInput.current?.click()} disabled={submitting}><Paperclip size={17} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
+    <div className="composer-actions"><div className="composer-primary-actions"><button type="button" className="attach-button" aria-label="添加文件" onClick={() => fileInput.current?.click()} disabled={submitting}><Plus size={21} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
+      <MobileTools label="任务选项" summary={`${selectedModelOption?.label ?? "模型与选项"}${sandboxMode === "danger-full-access" ? " · 完全访问" : ""}`}>
       {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending || editingMessage)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <ProviderModelMenu agentOptions={agentOptions} selectedModel={selectedModel} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
       {sandboxOptions.length > 1 && <SettingMenu className={`permission ${sandboxMode === "danger-full-access" ? "danger-selected" : ""}`} label="权限" value={sandboxMode} options={sandboxOptions} placeholder="工作区写入" title="选择 Codex 的运行权限；完全访问会跳过沙箱" disabled={submitting || selectionSaving} onChange={(value) => onSandboxChange(value as SandboxMode)} />}
+      </MobileTools>
     </div>
       <div className="composer-submit-actions">
         {primaryAction === "stop" && onCancel
@@ -4218,6 +4226,7 @@ function ProviderModelMenu({ agentOptions, selectedModel, disabled, onChange }: 
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
+  const mobile = useMobileLayout();
   const models = agentOptions?.models ?? [];
   const providers = agentOptions?.providers ?? [];
   const selected = models.find((model) => model.id === selectedModel);
@@ -4276,8 +4285,8 @@ function ProviderModelMenu({ agentOptions, selectedModel, disabled, onChange }: 
       <span>模型</span><strong className="setting-value">{selected ? `${selected.providerName || ""}${selected.providerName ? " · " : ""}${selected.label}` : "加载中"}</strong><ChevronDown size={13} />
     </button>
     {open && <div id={menuId} className="setting-menu-panel provider-model-panel" role="menu" aria-label="API 源和模型">
-      {providerGroups.map((provider) => <div key={provider.id} className={`model-provider-group ${openProviderId === provider.id ? "open" : ""}`} onMouseEnter={() => setOpenProviderId(provider.id)}>
-        <button type="button" className="model-provider-trigger" aria-haspopup="true" aria-expanded={openProviderId === provider.id} onFocus={() => setOpenProviderId(provider.id)} onClick={() => setOpenProviderId((current) => current === provider.id ? null : provider.id)}>
+      {providerGroups.map((provider) => <div key={provider.id} className={`model-provider-group ${openProviderId === provider.id ? "open" : ""}`} onMouseEnter={() => { if (!mobile) setOpenProviderId(provider.id); }}>
+        <button type="button" className="model-provider-trigger" aria-haspopup="true" aria-expanded={openProviderId === provider.id} onFocus={() => { if (!mobile) setOpenProviderId(provider.id); }} onClick={() => setOpenProviderId((current) => current === provider.id ? null : provider.id)}>
           <span><strong>{provider.name}</strong><small>{provider.models.length > 0 ? `${provider.models.length} 个模型` : "暂无可用模型"}</small></span><ChevronRight size={14} />
         </button>
         <div className="model-provider-submenu" role="listbox" aria-label={`${provider.name} 模型`}>
