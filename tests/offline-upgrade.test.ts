@@ -91,4 +91,6 @@ test("offline packaging uses a committed snapshot and portable runtime checksums
   assert.ok(source.includes('UV_OFFLINE=1 PYTHON_RUNTIME_ROOT="$STAGING/app/data/python"'));
   assert.ok(source.includes('mktemp -d "$STAGING_ROOT/build.XXXXXX"'));
   assert.ok(source.includes('cp "$STAGING/upgrade.sh" "$OUTPUT_DIR/upgrade.sh"'));
+  assert.ok(source.includes("--owner=0 --group=0 --numeric-owner"));
+  assert.ok(source.includes("不要运行旧安装目录里的旧脚本"));
 });
