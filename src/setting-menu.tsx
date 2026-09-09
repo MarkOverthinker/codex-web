@@ -1,9 +1,9 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 
 export type SettingMenuOption = { id: string; label: string; description?: string };
 
-export function SettingMenu({ className, label, value, options, placeholder, title, disabled, onChange, direction = "up" }: {
+export function SettingMenu({ className, label, value, options, placeholder, title, disabled, onChange, direction = "up", footer }: {
   className: string;
   label: string;
   value: string;
@@ -13,6 +13,7 @@ export function SettingMenu({ className, label, value, options, placeholder, tit
   disabled: boolean;
   onChange: (value: string) => void;
   direction?: "up" | "down";
+  footer?: ReactNode;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -69,10 +70,10 @@ export function SettingMenu({ className, label, value, options, placeholder, tit
     <button type="button" className="setting-select" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId} disabled={disabled} title={title} onClick={() => setOpen((current) => !current)} onKeyDown={keyDown}>
       <span>{label}</span><strong className="setting-value">{(selected?.label ?? value) || placeholder}</strong><ChevronDown size={13} />
     </button>
-    {open && <div id={menuId} className={`setting-menu-panel ${direction === "down" ? "open-down" : ""}`} role="listbox" aria-label={label}>
+    {open && <div className={`setting-menu-panel ${direction === "down" ? "open-down" : ""}`}><div id={menuId} role="listbox" aria-label={label}>
       {options.map((option, index) => <button key={option.id} type="button" role="option" aria-selected={option.id === value} className={`${option.id === value ? "selected" : ""} ${index === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(option)}>
         <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>{option.id === value && <Check size={14} />}
       </button>)}
-    </div>}
+    </div>{footer}</div>}
   </div>;
 }

@@ -21,7 +21,7 @@ import {
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { formatSourceLocation } from "./message-source";
 import { copyText } from "./copy-path";
-import { useVoiceInput, VoiceControls, VoiceStatus } from "./voice-input";
+import { useVoiceInput, VoiceControls, VoicePreferences, VoiceStatus } from "./voice-input";
 import { appendVoiceTranscript } from "./voice-input-state";
 import type { VoiceModelOption } from "./api";
 
@@ -453,6 +453,7 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
       {voice.models.length > 0 && <label><span>语音</span><select aria-label="语音识别模型" value={voice.model} disabled={voice.disabled || voice.phase !== "idle"} onChange={(event) => voice.selectModel(event.target.value)}>
         {voice.models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
       </select></label>}
+      {voice.local && <details className="side-voice-preferences"><summary>语音断句与术语设置</summary><VoicePreferences voice={voice} /></details>}
     </div>
     {detail?.conversation.fork_source_message_id && <div className="side-chat-fork-banner"><GitFork size={13} /><span>已从主对话指定位置 Fork；首次发送时创建独立线程。</span></div>}
     <div ref={messagesRef} className="side-chat-messages">

@@ -15,5 +15,18 @@
     "file": "silero_vad.onnx",
     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
     "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+  },
+  {
+    "name": "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8",
+    "file": "punctuation.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2",
+    "sha256": "c0d5aa5f8eeb686032345e180bedf39319dc2e0556781c6264bcadba8328a6e1"
+  },
+  {
+    "model": "fun-asr-nano-fp32",
+    "name": "sherpa-onnx-funasr-nano-2025-12-30",
+    "file": "funasr-nano-fp32.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-funasr-nano-2025-12-30.tar.bz2",
+    "sha256": "92ac72f74ce5e621564f7693de5d383fa11b1ad836fc0bbfc14ed7cb4cc68509"
   }
 ]

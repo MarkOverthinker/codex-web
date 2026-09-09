@@ -41,6 +41,8 @@ test("desktop voice selection shares the settings row and microphone sits next t
   expect(sendBounds!.x - micBounds!.x - micBounds!.width).toBeLessThan(12);
   expect(Math.abs(micBounds!.y - sendBounds!.y)).toBeLessThan(3);
   await model.click();
+  await expect(page.getByRole("option", { name: "SenseVoiceSmall INT8", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Fun-ASR-Nano FP32", exact: true })).toBeVisible();
   await page.getByRole("option", { name: "Qwen3-ASR-0.6B", exact: true }).click();
   await expect(model).toContainText("Qwen3-ASR-0.6B");
   await page.reload();
@@ -72,6 +74,55 @@ test("stop only transcribes; chosen model and latest manually edited draft are p
   await expect(input).toHaveValue("识别期间修改的草稿\n语音补充");
   expect(sent).toHaveLength(0);
   expect(errors).toEqual([]);
+});
+
+test("voice punctuation and terms persist and accompany transcription", async ({ page }) => {
+  await setupVoice(page);
+  let payload = "";
+  await page.route("**/api/transcriptions", async (route) => {
+    payload = route.request().postData() ?? "";
+    await route.fulfill({ json: { text: "Codex" } });
+  });
+  const menu = page.getByRole("button", { name: "语音", exact: true });
+  await menu.click();
+  await page.getByRole("option", { name: "Qwen3-ASR-0.6B", exact: true }).click();
+  await menu.click();
+  await page.getByLabel("语音常用术语").fill("Codex, TypeScript");
+  await page.getByLabel("语音断句方式").selectOption("original");
+  await page.reload();
+  await menu.click();
+  await expect(page.getByLabel("语音常用术语")).toHaveValue("Codex, TypeScript");
+  await expect(page.getByLabel("语音断句方式")).toHaveValue("original");
+  await menu.click();
+  await page.getByRole("button", { name: "录音输入", exact: true }).click();
+  await page.getByRole("button", { name: "停止录音并转写", exact: true }).click();
+  await expect.poll(() => payload).toContain('"hotwords":["Codex","TypeScript"]');
+  expect(payload).toContain('"punctuation":"original"');
+});
+
+test("Nano remains selectable and invalid terms do not block switching back to SenseVoice", async ({ page }) => {
+  await setupVoice(page);
+  let payload = "";
+  await page.route("**/api/transcriptions", async (route) => {
+    payload = route.request().postData() ?? "";
+    await route.fulfill({ json: { text: "测试" } });
+  });
+  const menu = page.getByRole("button", { name: "语音", exact: true });
+  await menu.click();
+  await page.getByRole("option", { name: "Fun-ASR-Nano FP32", exact: true }).click();
+  await expect(menu).toContainText("Fun-ASR-Nano FP32");
+  await menu.click();
+  await page.getByLabel("语音常用术语").fill("<invalid>");
+  await expect(page.locator(".voice-preferences [role=alert]")).toBeVisible();
+  await page.getByRole("option", { name: "SenseVoiceSmall INT8", exact: true }).click();
+  await menu.click();
+  await page.getByLabel("语音断句方式").selectOption("original");
+  await expect(page.locator(".voice-preferences [role=alert]")).toHaveCount(0);
+  await menu.click();
+  await page.getByRole("button", { name: "录音输入", exact: true }).click();
+  await page.getByRole("button", { name: "停止录音并转写", exact: true }).click();
+  await expect.poll(() => payload).toContain('"hotwords":[]');
+  expect(payload).toContain('"punctuation":"original"');
 });
 
 test("send during recording transcribes then sends exactly once with the latest draft", async ({ page }) => {
@@ -150,13 +201,13 @@ test("side chat places voice model with settings and supports stop-only and tran
   await expect(side.locator(".side-chat-composer").getByRole("combobox")).toHaveCount(0);
   await side.getByRole("button", { name: "录音输入", exact: true }).click();
   await side.getByRole("button", { name: "停止录音并转写", exact: true }).click();
-  await expect(side.locator("textarea")).toHaveValue("侧边语音");
+  await expect(side.locator(".side-chat-composer textarea")).toHaveValue("侧边语音");
   expect(sent).toHaveLength(0);
   await side.getByRole("button", { name: "录音输入", exact: true }).click();
   await side.getByRole("button", { name: "发送", exact: true }).click();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0].replace(/\r\n/g, "\n")).toContain("侧边语音\n侧边语音");
-  await expect(side.locator("textarea")).toHaveValue("");
+  await expect(side.locator(".side-chat-composer textarea")).toHaveValue("");
   expect(errors).toEqual([]);
 });
 

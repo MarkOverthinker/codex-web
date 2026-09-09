@@ -1,6 +1,7 @@
 import type { TaskListCategorySettings } from "./task-categories.js";
 import type { GitReview, ReviewScope } from "./git-review.js";
 import type { MessageSourceReference } from "./message-source.js";
+import type { VoiceOptions } from "./voice-options.js";
 
 export type { MessageSourceReference } from "./message-source.js";
 
@@ -522,13 +523,14 @@ export const api = {
     files.forEach((file) => body.append("files", file));
     return request<PendingMutationResponse>(`/conversations/${conversationId}/messages/${messageId}`, { method: "PUT", body });
   },
-  transcribeAudio: (audio: Blob, fileName: string, context: { conversationId?: string; draftText?: string; attachmentNames?: string[]; model?: string } = {}, signal?: AbortSignal) => {
+  transcribeAudio: (audio: Blob, fileName: string, context: { conversationId?: string; draftText?: string; attachmentNames?: string[]; model?: string; options?: VoiceOptions } = {}, signal?: AbortSignal) => {
     const body = new FormData();
     body.set("audio", audio, fileName);
     body.set("conversationId", context.conversationId ?? "");
     body.set("draftText", context.draftText ?? "");
     body.set("attachmentNames", JSON.stringify(context.attachmentNames ?? []));
     if (context.model) body.set("model", context.model);
+    if (context.options) body.set("options", JSON.stringify(context.options));
     return request<{ text: string }>("/transcriptions", { method: "POST", body, signal });
   },
   reorderPendingPrompts: (conversationId: string, ids: string[]) => request<{ pendingPrompts: PendingPrompt[] }>(
