@@ -1,0 +1,9 @@
+{
+  "version": "0.3.0-preview",
+  "date": "2026-09-09",
+  "apk": "../../android/app/build/outputs/apk/preview/app-preview.apk",
+  "output": "../../tmp/android-download-site",
+  "signerSha256": "REPLACE_WITH_TRUSTED_CERTIFICATE_SHA256",
+  "notes": ["对话首页、按项目分类的右滑任务抽屉与底部导航。", "输入框上方队列提示，点击向上展开；局部加载和加密浏览缓存。"],
+  "limitations": "预览版；尚未完成魅族/Flyme 真机和全部真实账户业务验收。"
+}
