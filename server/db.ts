@@ -40,6 +40,7 @@ export type ConversationRow = {
   status: "idle" | "running";
   has_unread_result: number;
   has_pending_work: number;
+  latest_job_status?: JobStatus | null;
   rollout_bytes: number | null;
   context_used_tokens: number | null;
   context_window: number | null;
@@ -282,7 +283,8 @@ const conversationSelect = `
   CASE WHEN
     EXISTS (SELECT 1 FROM jobs WHERE jobs.conversation_id=conversations.id AND jobs.status='queued')
     OR EXISTS (SELECT 1 FROM pending_prompts WHERE pending_prompts.conversation_id=conversations.id AND pending_prompts.status='queued')
-  THEN 1 ELSE 0 END AS has_pending_work
+  THEN 1 ELSE 0 END AS has_pending_work,
+  (SELECT jobs.status FROM jobs WHERE jobs.conversation_id=conversations.id ORDER BY jobs.created_at DESC,jobs.id DESC LIMIT 1) AS latest_job_status
 `;
 
 export class AppDatabase {
