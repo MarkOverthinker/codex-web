@@ -395,7 +395,9 @@ class AppServerTurnClient {
   }
 
   private handleNotification(message: RpcNotification): void {
+    if (this.terminal) return;
     const params = message.params ?? {};
+    if (typeof params.threadId === "string" && params.threadId !== this.threadId) return;
     if (message.method === "thread/tokenUsage/updated") {
       const tokenUsage = params.tokenUsage as JsonObject | undefined;
       const last = tokenUsage?.last as JsonObject | undefined;
