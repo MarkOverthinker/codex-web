@@ -26,9 +26,9 @@ import org.json.JSONObject
 
 @Composable
 fun ToolsScreen(model: ClientModel, download: (FileRequest) -> Unit, editPending: (JSONObject) -> Unit,
-                confirm: (String, () -> Unit) -> Unit) {
+                confirm: (String, () -> Unit) -> Unit, rootPage: ToolPage? = null) {
     val state = model.state
-    val page = state.page ?: return
+    val page = state.page ?: rootPage ?: return
     val data = state.pageData ?: JSONObject()
     var form by remember(page) { mutableStateOf<FormRequest?>(null) }
     var submitting by remember(page) { mutableStateOf(false) }
@@ -291,17 +291,31 @@ private fun HostScreen(model: ClientModel, data: JSONObject, confirm: (String, (
 private fun SettingsScreen(model: ClientModel, form: (FormRequest) -> Unit, confirm: (String, () -> Unit) -> Unit) {
     val state = model.state
     ToolColumn {
-        Text(state.session?.text("displayName").orEmpty().ifBlank { state.session?.text("username").orEmpty() }, style = MaterialTheme.typography.headlineSmall)
-        Text(state.server, fontSize = 12.sp)
-        ChoiceField("外观", state.theme, listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")) { model.appearance(theme = it) }
-        Text("聊天字号 · ${state.fontSize}")
-        Slider(value = state.fontSize.toFloat(), onValueChange = { model.appearance(font = it.toInt()) }, valueRange = 12f..24f, steps = 11)
+        Column(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            BrandMark(Modifier.size(56.dp))
+            Text(state.session?.text("displayName").orEmpty().ifBlank { state.session?.text("username").orEmpty() },
+                Modifier.padding(top = 14.dp), style = MaterialTheme.typography.headlineSmall)
+            Text(runCatching { java.net.URI(state.server).host }.getOrNull().orEmpty(), Modifier.padding(top = 6.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(16.dp)) {
+                ChoiceField("外观", state.theme, listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")) { model.appearance(theme = it) }
+                Text("聊天字号 · ${state.fontSize}", Modifier.padding(top = 14.dp), fontSize = 13.sp)
+                Slider(value = state.fontSize.toFloat(), onValueChange = { model.appearance(font = it.toInt()) }, valueRange = 12f..24f, steps = 11)
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         listOf(Triple("预设指令", "presets", "/preset-prompts"), Triple("工作目录", "directories", "/working-dirs"),
             Triple("任务分类", "categories", "/task-categories"), Triple("API 统计与费率", "billing", "/billing?days=30"),
             Triple("已归档任务", "archived", "/conversations/archived"), Triple("导入历史会话", "import", "/conversations/importable-sessions")
         ).forEach { (title, kind, path) -> ToolRow(title) { model.navigate(ToolPage(title, kind, path)) } }
         if (state.session?.optBoolean("providerManagementEnabled") == true) ToolRow("API 源与模型") { model.navigate(ToolPage("API 源与模型", "providers", "/providers")) }
         else ToolRow("启用 API 源管理", "遵守服务器能力与权限检查") { model.mutate("/user-settings/provider-management", "PUT", json("enabled" to true)) }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        ToolRow("本地浏览缓存", "加密保存近期任务，打开时先展示缓存再更新") {
+            confirm("清理当前账号的任务浏览缓存？未发送草稿、登录状态和服务器数据不会删除。") { model.clearCache() }
+        }
         ToolRow("账户与密码") {
             val fields = mutableListOf(FormField("currentPassword", "当前密码", kind = "secret", required = true), FormField("newPassword", "新密码（不修改则留空）", kind = "secret"))
             if (state.session?.optBoolean("canChangeUsername") == true) fields.add(FormField("newUsername", "用户名", state.session.text("username")))
@@ -309,7 +323,9 @@ private fun SettingsScreen(model: ClientModel, form: (FormRequest) -> Unit, conf
         }
         ToolRow("退出登录") { confirm("退出当前账号？未同步草稿会先尝试保存；任务继续在服务器执行。") { model.logout() } }
         ToolRow("更换服务器") { confirm("注销并更换服务器？服务器上的任务与数据不会删除。") { model.changeServer() } }
-        Text("原生客户端 0.2.0-preview\n核心页面不使用 WebView。预览版尚需真机与真实账户验收。", style = MaterialTheme.typography.bodySmall)
+        }
+        Text("Codex Native · 0.3.0-preview\n原生对话 · 项目任务 · 本地缓存", Modifier.fillMaxWidth().padding(vertical = 12.dp), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 

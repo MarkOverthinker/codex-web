@@ -47,6 +47,8 @@ data class Composer(
 
 data class ToolPage(val title: String, val kind: String, val path: String, val args: JSONObject = JSONObject())
 
+enum class HomeTab(val title: String) { Chat("对话"), Workspace("工作台"), Profile("我的") }
+
 data class NativeState(
     val server: String = "",
     val session: JSONObject? = null,
@@ -70,6 +72,11 @@ data class NativeState(
     val theme: String = "system",
     val fontSize: Int = 16,
     val voiceModel: String = "",
+    val homeTab: HomeTab = HomeTab.Chat,
+    val operation: String? = null,
+    val detailFromCache: Boolean = false,
+    val parentAvailable: Boolean = false,
+    val workingDirs: JSONObject = JSONObject(),
 ) {
     val authenticated get() = session?.optBoolean("authenticated") == true
     val conversation get() = detail?.objectValue("conversation") ?: JSONObject()

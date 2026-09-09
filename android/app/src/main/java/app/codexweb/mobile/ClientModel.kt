@@ -41,6 +41,22 @@ class ClientModel(
     private var pageGeneration = 0
     private val pages = ArrayDeque<ToolPage>()
     private val parents = ArrayDeque<String>()
+    private val cache = SnapshotCache(store)
+    private fun accountKey() = "${state.server}:${state.session?.text("username")}"
+    private fun lastConversationKey() = "last-conversation:${accountKey()}"
+
+    private suspend fun cached(account: String, key: String): JSONObject? = try { cache.get(account, key) }
+    catch (reason: Exception) { if (reason is CancellationException) throw reason; null }
+
+    private suspend fun saveCache(account: String, key: String, value: JSONObject) {
+        try { cache.put(account, key, value) }
+        catch (reason: Exception) { if (reason is CancellationException) throw reason }
+    }
+
+    private suspend fun discardCache(account: String, key: String) {
+        try { cache.remove(account, key) }
+        catch (reason: Exception) { if (reason is CancellationException) throw reason }
+    }
 
     init {
         viewModelScope.launch {
@@ -83,9 +99,23 @@ class ClientModel(
                 state = state.copy(session = session, connection = if (session.optBoolean("authenticated")) "已连接" else "请登录")
                 withContext(Dispatchers.IO) { store.write("server", normalized) }
                 if (session.optBoolean("authenticated")) {
-                    state = state.copy(selectedId = null, detail = null, page = null, composer = Composer())
+                    state = state.copy(selectedId = null, detail = null, page = null, composer = Composer(), conversations = emptyList(),
+                        options = JSONObject(), presets = emptyList(), categorySettings = JSONObject(), workingDirs = JSONObject(), homeTab = HomeTab.Chat)
+                    val account = accountKey()
+                    cached(account, "conversations")?.let { state = state.copy(conversations = it.rows("conversations")) }
+                    state = state.copy(options = cached(account, "options") ?: JSONObject(), presets = cached(account, "presets")?.rows("presetPrompts").orEmpty(),
+                        categorySettings = cached(account, "categories")?.objectValue("settings") ?: JSONObject(), workingDirs = cached(account, "directories")?.objectValue("settings") ?: JSONObject())
+                    val last = withContext(Dispatchers.IO) { store.read(lastConversationKey()) }
+                    val cachedId = last?.takeIf { it != "_new" } ?: state.conversations.firstOrNull()?.text("id").takeIf { last != "_new" }
+                    if (cachedId != null) cached(account, "detail:$cachedId")?.let { detail ->
+                        state = state.copy(selectedId = cachedId, detail = detail, detailFromCache = true, connection = "本机缓存 · 正在更新")
+                    }
                     refreshCatalogs()
-                    refreshList()
+                    runCatching { refreshList() }.onFailure { if (it is CancellationException || it is ApiFailure && it.status == 401) throw it }
+                    val saved = withContext(Dispatchers.IO) { store.read(lastConversationKey()) }
+                    val selected = saved?.takeIf { it != "_new" && state.conversations.any { row -> row.text("id") == it } }
+                        ?: state.conversations.firstOrNull()?.text("id").takeIf { saved != "_new" }
+                    if (selected != null) openInternal(selected) else restoreNewChat()
                     startPolling()
                 }
             } catch (reason: Exception) { error(reason) }
@@ -96,53 +126,136 @@ class ClientModel(
     suspend fun get(path: String): JSONObject = requireNotNull(api).call(path)
 
     private suspend fun refreshCatalogs() {
-        state = state.copy(options = get("/agent-options"))
-        state = state.copy(presets = get("/preset-prompts").rows("presetPrompts"))
-        state = state.copy(categorySettings = get("/task-categories").objectValue("settings"))
+        state = state.copy(options = catalog("options", "/agent-options"))
+        state = state.copy(presets = catalog("presets", "/preset-prompts").rows("presetPrompts"))
+        state = state.copy(categorySettings = catalog("categories", "/task-categories").objectValue("settings"))
+        state = state.copy(workingDirs = catalog("directories", "/working-dirs").objectValue("settings"))
+    }
+
+    private suspend fun catalog(key: String, path: String): JSONObject {
+        val account = accountKey()
+        return try { get(path).also { saveCache(account, key, it) } }
+        catch (reason: Exception) {
+            if (reason is CancellationException || reason is ApiFailure && reason.status == 401) throw reason
+            cached(account, key) ?: throw reason
+        }
     }
 
     private suspend fun refreshList() {
         val generation = epoch
-        val conversations = get("/conversations").rows("conversations")
-        if (generation == epoch) state = state.copy(conversations = conversations)
+        val account = accountKey()
+        val result = get("/conversations")
+        if (generation == epoch) {
+            state = state.copy(conversations = result.rows("conversations"))
+            saveCache(account, "conversations", result)
+        }
     }
 
-    fun refresh() = action {
+    fun refresh() = action("refresh") {
         refreshList()
         state.selectedId?.let { reconcile(it) }
         if (state.page != null) loadPage()
     }
 
-    fun action(block: suspend () -> Unit) {
+    fun action(operation: String = "request", block: suspend () -> Unit) {
         if (state.busy || state.connecting) return
-        state = state.copy(busy = true, error = null)
+        state = state.copy(busy = true, error = null, operation = operation)
         viewModelScope.launch {
             try { block() } catch (reason: Exception) { error(reason) }
-            finally { state = state.copy(busy = false) }
+            finally { state = state.copy(busy = false, operation = null) }
         }
     }
 
-    fun createConversation(workingDir: String? = null) = action {
+    fun createConversation(workingDir: String? = null) = action("new") {
         flushDraft()
         val value = requireNotNull(api).call("/conversations", "POST", if (workingDir == null) JSONObject() else json("workingDir" to workingDir))
         openInternal(value.objectValue("conversation").text("id"))
         refreshList()
     }
 
-    fun openConversation(id: String) = action { flushDraft(); parents.clear(); openInternal(id) }
+    fun openConversation(id: String) = action("open") { flushDraft(); parents.clear(); openInternal(id) }
+
+    fun selectTab(tab: HomeTab) {
+        pages.clear()
+        pageGeneration++
+        state = state.copy(homeTab = tab, page = null, pageData = null, pageLoading = false)
+    }
+
+    private suspend fun restoreNewChat() {
+        val saved = withContext(Dispatchers.IO) { store.read(draftKey("_new")) }?.let { runCatching { JSONObject(it) }.getOrNull() }
+        disconnectStream()
+        pages.clear()
+        parents.clear()
+        pageGeneration++
+        state = state.copy(selectedId = null, detail = null, page = null, pageData = null, pageLoading = false,
+            homeTab = HomeTab.Chat, detailFromCache = false, parentAvailable = false, sendUncertain = false,
+            composer = Composer(content = saved?.text("content").orEmpty(), dirty = saved != null),
+            draftStatus = if (saved != null) "本机草稿" else "")
+    }
+
+    fun startNewChat() = action("new") {
+        flushDraft()
+        backupJob?.join()
+        restoreNewChat()
+        withContext(Dispatchers.IO) { store.write(lastConversationKey(), "_new") }
+    }
+
+    private suspend fun ensureConversation(): String {
+        state.selectedId?.let { return it }
+        val snapshot = state.composer
+        val created = requireNotNull(api).call("/conversations", "POST", JSONObject()).objectValue("conversation").text("id")
+        require(created.isNotBlank())
+        backupJob?.join()
+        withContext(Dispatchers.IO) {
+            store.write(draftKey(created), snapshot.payload().changed("revision" to snapshot.revision).toString())
+            store.write(lastConversationKey(), created)
+            store.write(draftKey("_new"), null)
+        }
+        openInternal(created)
+        refreshList()
+        return created
+    }
+
+    fun withConversation(callback: () -> Unit) = action("prepare") { ensureConversation(); callback() }
+
+    fun clearCache() = action("cache") { cache.clear(accountKey()); note("浏览缓存已清理，未发送草稿保留") }
 
     private suspend fun openInternal(id: String) {
         require(id.isNotBlank())
-        val detail = get("/conversations/${id.segment()}")
-        val composer = Composer.from(detail.optJSONObject("composerDraft"))
+        backupJob?.join()
+        val account = accountKey()
+        val cached = cached(account, "detail:$id")
         val backup = withContext(Dispatchers.IO) { store.read(draftKey(id)) }?.let { runCatching { JSONObject(it) }.getOrNull() }
+        disconnectStream()
+        pages.clear()
+        pageGeneration++
+        val cachedComposer = Composer.from(cached?.optJSONObject("composerDraft"))
+        if (cached != null) state = state.copy(selectedId = id, detail = cached, page = null, pageData = null, pageLoading = false,
+            homeTab = HomeTab.Chat, detailFromCache = true, parentAvailable = parents.isNotEmpty(),
+            composer = if (backup == null) cachedComposer else cachedComposer.copy(content = backup.text("content"), quote = backup.text("quoteExcerpt"), source = backup.optJSONObject("sourceReference"), dirty = true, revision = backup.optLong("revision") + 1),
+            connection = "本机缓存 · 正在更新", sendUncertain = backup?.optBoolean("sendUncertain") == true)
+        val detail = try { get("/conversations/${id.segment()}").also { saveCache(account, "detail:$id", it) } }
+        catch (reason: Exception) {
+            if (reason is CancellationException) throw reason
+            if (reason is ApiFailure && reason.status in listOf(401, 403, 404)) {
+                state = state.copy(selectedId = null, detail = null, composer = Composer(), detailFromCache = false)
+                discardCache(account, "detail:$id")
+                throw reason
+            }
+            if (cached == null) throw reason
+            state = state.copy(connection = "离线 · 浏览缓存", draftStatus = "仅存本机 · 联网后可发送")
+            return
+        }
+        val composer = Composer.from(detail.optJSONObject("composerDraft"))
         disconnectStream()
         pages.clear()
         pageGeneration++
         val recovered = backup?.let { composer.copy(content = it.text("content"), quote = it.text("quoteExcerpt"),
             source = it.optJSONObject("sourceReference"), dirty = true, revision = it.optLong("revision") + 1) } ?: composer
         state = state.copy(selectedId = id, detail = detail, composer = recovered, page = null, pageData = null,
-            draftStatus = if (backup != null) "已恢复本机未同步草稿" else "", connection = "已连接", sendUncertain = backup?.optBoolean("sendUncertain") == true)
+            draftStatus = if (backup != null) "已恢复本机未同步草稿" else "", connection = "已连接", sendUncertain = backup?.optBoolean("sendUncertain") == true,
+            homeTab = HomeTab.Chat, detailFromCache = false, pageLoading = false, parentAvailable = parents.isNotEmpty())
+        if (parents.isEmpty()) withContext(Dispatchers.IO) { store.write(lastConversationKey(), id) }
         runCatching { requireNotNull(api).call("/conversations/${id.segment()}/seen", "POST") }
         connectStream()
         if (recovered.dirty) scheduleDraft()
@@ -167,10 +280,11 @@ class ClientModel(
 
     private fun scheduleDraft() {
         debounce?.cancel()
-        val id = state.selectedId ?: return
+        val id = state.selectedId ?: "_new"
         val snapshot = state.composer
         val key = draftKey(id)
         queueBackup(key, snapshot.payload().changed("revision" to snapshot.revision, "sendUncertain" to state.sendUncertain).toString())
+        if (id == "_new" || state.detailFromCache) { state = state.copy(draftStatus = "本机草稿"); return }
         debounce = viewModelScope.launch {
             delay(700)
             viewModelScope.launch {
@@ -196,6 +310,7 @@ class ClientModel(
     }
 
     private suspend fun flushDraft() = draftMutex.withLock {
+        if (state.detailFromCache) { backupJob?.join(); return@withLock }
         val id = state.selectedId ?: return@withLock
         val snapshot = state.composer
         if (!snapshot.dirty || state.sendUncertain) return@withLock
@@ -210,10 +325,11 @@ class ClientModel(
     }
 
     fun send() {
+        if (state.detailFromCache) { note("当前为本机缓存，请联网刷新后发送。"); return }
         if (state.sendUncertain) { note("上次发送结果尚未确认，请先核对消息和队列。 "); return }
         if (state.composer.content.isBlank() && state.composer.files.isEmpty()) return
-        action {
-            val id = state.selectedId ?: return@action
+        action("send") {
+            val id = ensureConversation()
             flushDraft()
             draftMutex.withLock {
                 val snapshot = state.composer
@@ -249,7 +365,7 @@ class ClientModel(
         if (received) queueBackup(draftKey(id), null) else scheduleDraft()
     }
 
-    fun upload(body: RequestBody, id: String) = action {
+    fun upload(body: RequestBody, id: String) = action("upload") {
         if (state.selectedId != id) { note("会话已切换，请重新选择附件"); return@action }
         flushDraft()
         draftMutex.withLock {
@@ -259,11 +375,14 @@ class ClientModel(
         note("附件已保存到服务器草稿")
     }
 
-    fun transcribe(body: RequestBody, id: String, cleanup: () -> Unit = {}) = action {
-        val value = try { requireNotNull(api).call("/transcriptions", "POST", body = body) } finally { cleanup() }
-        if (state.selectedId != id) { note("会话已切换，转写结果：${value.text("text")}"); return@action }
-        changeText(listOf(state.composer.content, value.text("text")).filter { it.isNotBlank() }.joinToString("\n"))
-        note("转写已回填，请确认后发送")
+    fun transcribe(body: RequestBody, id: String, cleanup: () -> Unit = {}) {
+        if (state.busy || state.connecting) { cleanup(); note("当前操作尚未结束，请稍后重新录音"); return }
+        action("voice") {
+            val value = try { requireNotNull(api).call("/transcriptions", "POST", body = body) } finally { cleanup() }
+            if (state.selectedId != id) { note("会话已切换，转写结果：${value.text("text")}"); return@action }
+            changeText(listOf(state.composer.content, value.text("text")).filter { it.isNotBlank() }.joinToString("\n"))
+            note("转写已回填，请确认后发送")
+        }
     }
 
     fun removeAttachment(fileId: String) = action {
@@ -273,8 +392,20 @@ class ClientModel(
 
     private suspend fun reconcile(id: String, syncDraft: Boolean = false) {
         val generation = epoch
-        val detail = get("/conversations/${id.segment()}")
+        val account = accountKey()
+        val detail = try { get("/conversations/${id.segment()}") }
+        catch (reason: Exception) {
+            if (reason is ApiFailure && reason.status in listOf(401, 403, 404)) {
+                if (state.selectedId == id && generation == epoch) {
+                    disconnectStream()
+                    state = state.copy(selectedId = null, detail = null, composer = Composer(), detailFromCache = false)
+                }
+                discardCache(account, "detail:$id")
+            }
+            throw reason
+        }
         if (state.selectedId != id || generation != epoch) return
+        saveCache(accountKey(), "detail:$id", detail)
         val oldMessages = state.detail?.rows("messages").orEmpty()
         val fresh = detail.rows("messages")
         val first = fresh.firstOrNull()
@@ -292,7 +423,7 @@ class ClientModel(
             else if (state.composer.dirty) state.composer.copy(files = serverDraft.files)
             else serverDraft.copy(revision = state.composer.revision)
         state = state.copy(detail = if (messages === fresh) nextDetail else nextDetail.changed("messages" to messages.jsonArray(), "messagePage" to previousPage),
-            composer = composer, connection = "已连接")
+            composer = composer, connection = "已连接", detailFromCache = false)
         connectStream()
     }
 
@@ -421,6 +552,7 @@ class ClientModel(
     fun archiveOrDelete(delete: Boolean) = action {
         flushDraft()
         requireNotNull(api).call(state.conversationPath + if (delete) "" else "/archive", if (delete) "DELETE" else "POST")
+        state.selectedId?.let { discardCache(accountKey(), "detail:$it") }
         disconnectStream()
         pages.clear()
         state = state.copy(selectedId = null, detail = null, composer = Composer(), page = null)
