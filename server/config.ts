@@ -36,6 +36,7 @@ export type AppConfig = {
   dashscopeModel: string;
   transcriptionProvider: "local" | "dashscope" | "disabled";
   localAsrSocket: string;
+  localAsrModels: string[];
   transcriptionPollMs: number;
   transcriptionTimeoutMs: number;
   transcriptionContextTokenBudget: number;
@@ -87,6 +88,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     dashscopeModel: overrides.dashscopeModel ?? (process.env.DASHSCOPE_ASR_MODEL || "qwen3.5-omni-plus"),
     transcriptionProvider: overrides.transcriptionProvider ?? (process.env.TRANSCRIPTION_PROVIDER === "local" ? "local" : process.env.TRANSCRIPTION_PROVIDER === undefined || process.env.TRANSCRIPTION_PROVIDER === "dashscope" ? "dashscope" : "disabled"),
     localAsrSocket: overrides.localAsrSocket ?? (process.env.LOCAL_ASR_SOCKET || path.join(projectRoot, "data", "local-asr", "asr.sock")),
+    localAsrModels: overrides.localAsrModels ?? (process.env.LOCAL_ASR_MODELS ?? "sensevoice-small-int8,qwen3-asr-0.6b").split(",").map((model) => model.trim()).filter(Boolean),
     transcriptionPollMs: overrides.transcriptionPollMs ?? Number(process.env.TRANSCRIPTION_POLL_MS ?? 2000),
     transcriptionTimeoutMs: overrides.transcriptionTimeoutMs ?? Number(process.env.TRANSCRIPTION_TIMEOUT_MS ?? 120000),
     transcriptionContextTokenBudget: boundedInteger(

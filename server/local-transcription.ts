@@ -1,29 +1,39 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { parseVoiceOptions, type VoiceOptions } from "../src/voice-options.js";
 
 export const LOCAL_VOICE_MODELS = [
   { id: "sensevoice-small-int8", label: "SenseVoiceSmall INT8", local: true },
   { id: "qwen3-asr-0.6b", label: "Qwen3-ASR-0.6B", local: true },
 ] as const;
 
+export const AVAILABLE_LOCAL_VOICE_MODELS = [
+  ...LOCAL_VOICE_MODELS,
+  { id: "fun-asr-nano-fp32", label: "Fun-ASR-Nano FP32", local: true },
+] as const;
+
 export class LocalTranscriptionError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
-export function transcribeLocally(socketPath: string, filePath: string, model: string, timeoutMs: number): Promise<string> {
+export function transcribeLocally(socketPath: string, filePath: string, model: string, timeoutMs: number, options?: VoiceOptions): Promise<string> {
   if (!path.isAbsolute(socketPath) || Buffer.byteLength(socketPath) > 107 || socketPath.includes("\0")) {
     return Promise.reject(new LocalTranscriptionError("本地语音服务的 socket 路径无效或过长，请联系管理员。", 503));
   }
-  if (!LOCAL_VOICE_MODELS.some((candidate) => candidate.id === model)) {
+  if (!AVAILABLE_LOCAL_VOICE_MODELS.some((candidate) => candidate.id === model)) {
     return Promise.reject(new LocalTranscriptionError("请选择有效的本地语音模型。", 400));
   }
   const audio = fs.readFileSync(filePath);
+  let encodedOptions: string;
+  try { encodedOptions = Buffer.from(JSON.stringify(parseVoiceOptions(options ?? {}))).toString("base64"); }
+  catch (error) { return Promise.reject(new LocalTranscriptionError(error instanceof Error ? error.message : "无效的语音选项。", 400)); }
   if (audio.length > 15 * 1024 * 1024) return Promise.reject(new LocalTranscriptionError("录音文件过大。", 413));
   return new Promise((resolve, reject) => {
     const request = http.request({ socketPath, agent: false, path: `/transcribe/${model}`, method: "POST", headers: {
       "Content-Type": "application/octet-stream", "Content-Length": audio.length,
       "X-Audio-Extension": filePath.split(".").pop() ?? "",
+      "X-ASR-Options": encodedOptions,
     } });
     const deadline = setTimeout(() => request.destroy(new LocalTranscriptionError("本地语音识别超时，请缩短录音后重试。", 504)), timeoutMs);
     deadline.unref();

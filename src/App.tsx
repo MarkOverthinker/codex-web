@@ -23,7 +23,7 @@ import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { normalizeMathDelimiters } from "./markdown-math";
 import { chooseComposerPrimaryAction } from "./composer-action";
-import { useVoiceInput, VoiceControls, VoiceStatus } from "./voice-input";
+import { useVoiceInput, VoiceControls, VoicePreferences, VoiceStatus } from "./voice-input";
 import { SettingMenu } from "./setting-menu";
 import { appendVoiceTranscript } from "./voice-input-state";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
@@ -4169,7 +4169,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <ProviderModelMenu agentOptions={agentOptions} selectedModel={selectedModel} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
-      {voice.models.length > 0 && <SettingMenu className="voice-model" label="语音" value={voice.model} options={voice.models} placeholder="选择模型" title="选择语音识别模型" disabled={voice.disabled || voiceBusy} onChange={voice.selectModel} />}
+      {voice.models.length > 0 && <SettingMenu className="voice-model" label="语音" value={voice.model} options={voice.models} placeholder="选择模型" title="选择语音识别模型" disabled={voice.disabled || voiceBusy} onChange={voice.selectModel} footer={<VoicePreferences voice={voice} />} />}
       {sandboxOptions.length > 1 && <SettingMenu className={`permission ${sandboxMode === "danger-full-access" ? "danger-selected" : ""}`} label="权限" value={sandboxMode} options={sandboxOptions} placeholder="工作区写入" title="选择 Codex 的运行权限；完全访问会跳过沙箱" disabled={submitting || selectionSaving} onChange={(value) => onSandboxChange(value as SandboxMode)} />}
       </MobileTools>
     </div>

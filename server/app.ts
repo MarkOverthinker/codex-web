@@ -57,6 +57,7 @@ import {
 import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
 import { assertHostPathReadable, chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isManagedHostPath, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, tenantPaths, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
+import { parseVoiceOptions } from "../src/voice-options.js";
 import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./share-link.js";
 import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
@@ -2574,7 +2575,7 @@ export function createApp(overrides: AppOverrides = {}) {
         callback(null, `${crypto.randomUUID()}${AUDIO_MIME_EXTENSIONS[mime] ?? ""}`);
       },
     }),
-    limits: { files: 1, fileSize: 15 * 1024 * 1024, fields: 4, fieldSize: 10 * 1024 },
+    limits: { files: 1, fileSize: 15 * 1024 * 1024, fields: 5, fieldSize: 10 * 1024 },
     fileFilter(_req, file, callback) {
       const mime = file.mimetype.toLowerCase().split(";", 1)[0];
       callback(null, Boolean(AUDIO_MIME_EXTENSIONS[mime]));
@@ -2600,7 +2601,10 @@ export function createApp(overrides: AppOverrides = {}) {
       if (conversationId && !conversation) return res.status(404).json({ error: "会话不存在。" });
       const model = typeof req.body?.model === "string" ? req.body.model : undefined;
       if (config.transcriptionProvider === "local") {
-        const text = await transcription.transcribe(file.filename, {}, model);
+        let options;
+        try { options = parseVoiceOptions(req.body?.options === undefined ? {} : JSON.parse(req.body.options)); }
+        catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : "无效的语音选项。" }); }
+        const text = await transcription.transcribe(file.filename, {}, model, options);
         return res.json({ text });
       }
       let attachmentNames: string[] = [];

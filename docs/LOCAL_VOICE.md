@@ -1,4 +1,4 @@
-# 本地双模型语音输入
+# 本地多模型语音输入
 
 ## 使用方式
 
@@ -6,6 +6,13 @@
 
 - **SenseVoiceSmall INT8**：低延迟、低内存。
 - **Qwen3-ASR-0.6B**：本部署也使用 INT8 ONNX 权重，作为中文识别质量对照。
+- **Fun-ASR-Nano FP32**：可额外启用的对照模型，占用更多内存；不取代上述两个模型，也不保证更快或更准。
+
+语音选择菜单内可设置“上下文标点”或“保留模型原标点”，并填写常用术语。侧边聊天在设置区提供相同选项，网页按用户名在当前浏览器保存。Qwen和Nano支持术语提示，SenseVoice不支持；提示不保证拼写正确。原生客户端不传新选项时仍可使用默认上下文标点，但没有新增术语编辑界面。
+
+识别先合并间隔不超过2秒、合并长度允许的语音段，再按最长16秒的有界窗口识别；不再把每个音频块强制插成一行。短暂停顿不等于句号。合并文本后使用本地CT-Punc INT8恢复标点；如果结果改动原字符或英文词边界则回退，路径、版本号、负数等敏感技术文本也保留原样。不使用生成式润色，不删除口头语，不保证断句完全符合说话意图。旧离线安装没有标点权重时保留原标点。
+
+推理缓存最多两组识别器，初始预热两个旧模型；首次选择Nano或更换其术语表可能触发重新加载。录音仍在用户停止后识别，本轮没有加入边录边识别。
 
 桌面主输入框的“语音”选择框与模型、思考等级等选项放在同一行；App/窄屏将它收进“任务选项”面板，输入栏仅保留一个语音按钮。侧边聊天的语音模型放在上方模型设置区。麦克风按钮位于发送按钮旁。
 
@@ -25,13 +32,13 @@ Python服务在无外部网络的命名空间运行，只监听Unix socket。它
 
 VAD片段前后保留最多200毫秒上下文，邻接片段在间隙中点限制扩展，避免重复音频。它可减少词首被切掉的情况，但不保证所有边界词都正确。
 
-两模型在独立进程启动时加载并常驻；并发识别串行化，忙时返回429，不创建无界队列。请求超时、每段生成长度、音频时长和转换超时均有上限。VAD不是百分之百准确的“无幻觉保证”；低音量、纯噪声、术语及真实口述仍需用户检查。
+两个旧模型在独立进程启动时预热，之后按两项LRU缓存加载；并发识别串行化，忙时返回429，不创建无界队列。请求超时、每段生成长度、音频时长和转换超时均有上限。VAD不是百分之百准确的“无幻觉保证”；低音量、纯噪声、术语及真实口述仍需用户检查。
 
 ## 准备模型与依赖
 
 需要 Linux x86_64、Python 3.12、uv、curl、允许非特权user/network namespace的`unshare`。现有包固定在 `requirements.txt`；模型来源与SHA-256固定在 `models.json`。安装器不修改共享Python，而是在ASR目录创建专用`runtime/`。
 
-默认配置 `services/local-asr/deployment.toml` 将数据放在项目的 `data/local-asr/`；可改 `root`。**解析后的socket绝对路径必须不超过107字节**。CPU线程默认为4，服务只需要CPU，不需要GPU。建议预留至少4 GiB可用内存和数GiB磁盘空间；安装时同时保留压缩包、展开权重、wheels和运行环境。
+默认配置 `services/local-asr/deployment.toml` 将数据放在项目的 `data/local-asr/`；可改 `root`。**解析后的socket绝对路径必须不超过107字节**。CPU线程默认为6，服务只需要CPU，不需要GPU。只用旧模型建议预留至少4 GiB可用内存，启用Nano建议8 GiB；安装时同时保留压缩包、展开权重、wheels和运行环境，需预留相应磁盘空间。
 
 在Codex Web任务环境中准备：
 
@@ -57,12 +64,12 @@ python services/local-asr/install-user-service.py services/local-asr/deployment.
 systemctl --user status codex-web-asr.service
 ```
 
-安装器在ASR数据目录生成unit并链接到用户管理器，启用 `codex-web-asr.service`。若需要无人登录时随系统启动，应由管理员为该用户启用systemd lingering。unit设置CPU配额400%、MemoryMax=6G、UMask0077、NoNewPrivileges，并用`unshare`隔离网络。不要以root运行这个安装器或把推理合并到web服务进程。
+安装器在ASR数据目录生成unit并链接到用户管理器，启用 `codex-web-asr.service`。若需要无人登录时随系统启动，应由管理员为该用户启用systemd lingering。unit设置CPU配额600%、MemoryMax=12G、UMask0077、NoNewPrivileges，并用`unshare`隔离网络。上限不是预分配；调线程时应同步调整unit中的OMP_NUM_THREADS和CPUQuota。不要以root运行这个安装器或把推理合并到web服务进程。
 
 也可在终端前台验证：
 
 ```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=4 \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=6 \
 unshare --user --map-root-user --net \
 data/local-asr/runtime/bin/python services/local-asr/service.py services/local-asr/deployment.toml
 
@@ -77,6 +84,7 @@ curl --unix-socket data/local-asr/asr.sock http://localhost/health
 TRANSCRIPTION_PROVIDER=local
 # Default: <projectRoot>/data/local-asr/asr.sock; set an absolute path when customized.
 LOCAL_ASR_SOCKET=
+LOCAL_ASR_MODELS=sensevoice-small-int8,qwen3-asr-0.6b,fun-asr-nano-fp32
 ```
 
 随后重建并重启web服务。安装了reloader的host-mode部署使用 `npm run reload`；运行中的任务可能使重载排队等待。ASR服务不依赖web重载；后续修改Python服务或配置时，需单独 `systemctl --user restart codex-web-asr.service`。
@@ -86,6 +94,8 @@ socket默认0600，ASR根目录默认0700。web UID必须能够连接：root运�
 不需要 `DASHSCOPE_API_KEY` 或公网 `PUBLIC_BASE_URL`，但浏览器麦克风仍需HTTPS或localhost。离线局域网请准备浏览器信任的本地TLS证书。仅语音识别离线，不代表Codex的编码模型也能离线。
 
 ## 离线迁移
+
+仓库的通用离线打包脚本默认不包含 `data/local-asr`，必须另外携带下列资产。TOML的 `models` 决定安装及加载哪些模型，网页的 `LOCAL_ASR_MODELS` 必须与其一致；环境变量省略时仍只展示两个旧模型。默认TOML包含三个模型，删除Nano项即可仅准备旧模型和标点模型。
 
 复制本服务源文件、配置、`models.json`、`requirements.txt`，以及ASR目录的`models/`、`wheels/`、`manifest.json`。不要依赖Git保存权重，也不要直接复制venv当作跨机器可移植运行环境。
 
