@@ -20,3 +20,22 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: cp .env.example .env && docker compose config --quiet
+
+  mobile-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:mobile
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: mobile-ui-traces
+          path: test-results/
+          retention-days: 7

@@ -76,6 +76,14 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
     recorder.current.stop();
   }
 
+  useEffect(() => {
+    const pause = () => {
+      if (phaseRef.current === "recording") stop();
+    };
+    window.addEventListener("codex-native-pause", pause);
+    return () => window.removeEventListener("codex-native-pause", pause);
+  }, []);
+
   async function start() {
     if (phaseRef.current !== "idle" || disabled || !model) return;
     setError("");

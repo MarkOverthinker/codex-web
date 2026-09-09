@@ -4,9 +4,12 @@ import App from "./App";
 import { AppErrorBoundary } from "./error-boundary";
 import { installClientErrorReporting } from "./client-errors";
 import { applyThemePreference, readStoredThemePreference } from "./theme";
+import { installMobileBack } from "./mobile-layout";
 import "./styles.css";
+import "./mobile.css";
 
 installClientErrorReporting();
+installMobileBack();
 
 function renderBootstrapFallback(message: string): void {
   const host = document.body ?? document.documentElement;

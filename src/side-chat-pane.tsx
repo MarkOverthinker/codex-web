@@ -1,3 +1,4 @@
+import { MOBILE_MEDIA_QUERY, shouldSubmitOnEnter } from "./mobile-input";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -447,7 +448,7 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
       </div>
       {reference && <SourceReferenceCard reference={reference} onOpen={reference.kind === "conversation-context" ? undefined : () => onOpenSourceReference(reference)} onClear={() => setReference(null)} />}
       <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={reference ? "基于这段引用继续提问…" : "在侧边线程中提问…"} rows={3} disabled={submitting || (!detail && !canCreateForCurrent)} onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+        if (shouldSubmitOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, mobile: window.matchMedia(MOBILE_MEDIA_QUERY).matches })) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
       }} />
       <VoiceInput key={`${detail?.conversation.id ?? currentConversation.id}:${voicePreferenceKey}`} models={voiceModels} preferenceKey={voicePreferenceKey}
         conversationId={detail?.conversation.id ?? currentConversation.id} disabled={submitting || loading || (!detail && !canCreateForCurrent)}

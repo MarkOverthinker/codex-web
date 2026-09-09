@@ -13,6 +13,7 @@
     "init-providers": "node scripts/init-provider-sources.mjs",
     "hash-password": "node scripts/hash-password.mjs",
     "test": "tsc -p tsconfig.server.json && node --import tsx --test tests/*.test.ts",
+    "test:mobile": "playwright test",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.60.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.2.0",
