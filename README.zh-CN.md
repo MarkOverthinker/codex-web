@@ -203,7 +203,7 @@ stateDiagram-v2
 
 ## 可选语音输入
 
-本地模式：部署独立 CPU 语音服务并设置 `TRANSCRIPTION_PROVIDER=local`。主输入框及侧边聊天支持使用时选择 **SenseVoiceSmall INT8** 或 **Qwen3-ASR-0.6B**；当前浏览器按用户名记住上次选择。停止录音后回填可编辑草稿，不自动发送。模型准备、离线迁移、服务管理和限制见 [本地语音部署](docs/LOCAL_VOICE.md)。本地服务只接收录音和模型选择，不接收草稿、附件或对话内容，也不会失败后改用云 API。
+本地模式：部署独立 CPU 语音服务并设置 `TRANSCRIPTION_PROVIDER=local`。主输入框及侧边聊天支持使用时选择 **SenseVoiceSmall INT8** 或 **Qwen3-ASR-0.6B**；当前浏览器按用户名记住上次选择。桌面语音选择框与模型、思考等级同排；App将选择框收进“任务选项”，输入栏仅保留发送旁的一个语音按钮。再次点击语音按钮仅转写回填，录音中点击发送则识别成功后合并最新草稿并发送一次；失败、空结果或取消不发送。模型准备、离线迁移、服务管理和限制见 [本地语音部署](docs/LOCAL_VOICE.md)。本地服务只接收录音和模型选择，不接收草稿、附件或对话内容，也不会失败后改用云 API。
 
 本地识别不需要付费 Key 或公网地址，但麦克风仍需 HTTPS 或 localhost。设置 `TRANSCRIPTION_PROVIDER=disabled` 可关闭全部语音输入。
 

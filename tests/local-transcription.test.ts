@@ -37,12 +37,13 @@ test("voice choices reject stale values and transcripts preserve the current dra
   assert.equal(appendVoiceTranscript("原稿", "  "), "原稿");
 });
 
-test("composer retains its editable textarea and does not auto-send transcription", () => {
+test("composer retains its editable textarea and only sends voice after explicit send intent", () => {
   const source = fs.readFileSync("src/App.tsx", "utf8");
   const composer = source.slice(source.indexOf("function Composer({"), source.indexOf("function PresetMenu("));
   assert.match(composer, /<textarea ref=\{textareaRef\} defaultValue=\{input\}/);
   assert.match(composer, /appendVoiceTranscript\(inputRef.current, text\)/);
-  assert.doesNotMatch(composer, /sendAfterTranscription|finishRecording\(true\)/);
+  assert.match(composer, /if \(send\) onSend\(combined\)/);
+  assert.match(composer, /voice\.phase === "recording"\) voice\.stop\(true\)/);
 });
 
 test("local provider routes both models through a socket without sending context or using cloud credentials", async (context) => {

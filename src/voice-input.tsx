@@ -1,19 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LoaderCircle, Mic, Square, X } from "lucide-react";
 import { api, type VoiceModelOption } from "./api";
 import { validVoiceModel } from "./voice-input-state";
 
 type Phase = "idle" | "requesting" | "recording" | "transcribing";
 
-export function VoiceInput({ models, preferenceKey, conversationId, disabled, draftText = "", attachmentNames = [], onTranscript, onBusyChange }: {
+export function useVoiceInput({ models, preferenceKey, scopeKey, conversationId, disabled, draftText = "", attachmentNames = [], onTranscript }: {
   models: VoiceModelOption[];
   preferenceKey: string;
+  scopeKey: string;
   conversationId?: string;
   disabled: boolean;
   draftText?: string;
   attachmentNames?: string[];
-  onTranscript: (text: string) => void;
-  onBusyChange: (busy: boolean) => void;
+  onTranscript: (text: string, send: boolean) => void;
 }) {
   const storageKey = `codex-web:voice-model:${preferenceKey}`;
   const [selected, setSelected] = useState(() => {
@@ -34,13 +34,13 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
   const timer = useRef<number | undefined>(undefined);
   const limit = useRef<number | undefined>(undefined);
   const controller = useRef<AbortController | null>(null);
-  const callbacks = useRef({ onTranscript, onBusyChange });
-  callbacks.current = { onTranscript, onBusyChange };
+  const sendAfterRecognition = useRef(false);
+  const callbacks = useRef({ onTranscript });
+  callbacks.current = { onTranscript };
 
   function transition(next: Phase) {
     phaseRef.current = next;
     setPhase(next);
-    callbacks.current.onBusyChange(next !== "idle");
   }
 
   function release() {
@@ -55,6 +55,7 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
 
   function cancel() {
     generation.current += 1;
+    sendAfterRecognition.current = false;
     controller.current?.abort();
     if (recorder.current?.state === "recording") recorder.current.stop();
     recorder.current = null;
@@ -62,16 +63,26 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
     transition("idle");
   }
 
-  useEffect(() => () => {
-    generation.current += 1;
-    controller.current?.abort();
-    if (recorder.current?.state === "recording") recorder.current.stop();
-    release();
-    callbacks.current.onBusyChange(false);
-  }, []);
+  useLayoutEffect(() => {
+    transition("idle");
+    setError("");
+    return () => {
+      generation.current += 1;
+      sendAfterRecognition.current = false;
+      controller.current?.abort();
+      if (recorder.current?.state === "recording") recorder.current.stop();
+      release();
+    };
+  }, [scopeKey, models.length > 0]);
 
-  function stop() {
+  useEffect(() => {
+    try { setSelected(validVoiceModel(localStorage.getItem(storageKey), models)); }
+    catch { setSelected(validVoiceModel(null, models)); }
+  }, [storageKey]);
+
+  function stop(send = false) {
     if (phaseRef.current !== "recording" || recorder.current?.state !== "recording") return;
+    sendAfterRecognition.current = send;
     transition("transcribing");
     recorder.current.stop();
   }
@@ -90,6 +101,7 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
     if (!window.isSecureContext) { setError("麦克风需要 HTTPS 或 localhost 安全环境。"); return; }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setError("当前浏览器不支持录音，请使用 Chrome、Edge 或 Safari。"); return; }
     const current = ++generation.current;
+    sendAfterRecognition.current = false;
     const chunks: Blob[] = [];
     const context = { conversationId, model, draftText, attachmentNames };
     transition("requesting");
@@ -116,7 +128,7 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
           const result = await api.transcribeAudio(blob, `recording.${extension}`, context, controller.current.signal);
           if (generation.current !== current) return;
           if (!result.text.trim()) throw new Error("未检测到有效人声，请重试。");
-          callbacks.current.onTranscript(result.text);
+          callbacks.current.onTranscript(result.text, sendAfterRecognition.current);
         } catch (reason) {
           if (generation.current === current) setError(reason instanceof Error ? reason.message : "语音识别失败，请重试。");
         } finally {
@@ -128,7 +140,7 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
       transition("recording");
       const started = Date.now();
       timer.current = window.setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 250);
-      limit.current = window.setTimeout(stop, 300_000);
+      limit.current = window.setTimeout(() => stop(), 300_000);
       try {
         const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
         if (AudioContextClass) {
@@ -160,16 +172,32 @@ export function VoiceInput({ models, preferenceKey, conversationId, disabled, dr
     }
   }
 
-  if (!models.length) return null;
-  return <div className="voice-input">
-    <div className="voice-input-controls">
-      <label>语音模型<select aria-label="语音识别模型" value={model} disabled={phase !== "idle" || disabled} onChange={(event) => {
-        setSelected(event.target.value);
-        try { localStorage.setItem(storageKey, event.target.value); } catch {}
-      }}>{models.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
-      {phase === "idle" ? <button type="button" className="mic-button" onClick={() => void start()} disabled={disabled} title="录音输入，停止后回填草稿" aria-label="录音输入"><Mic size={17} /></button>
-        : <><button type="button" className="voice-cancel" onClick={cancel} aria-label="取消语音输入"><X size={16} /></button>{phase === "recording" ? <><canvas ref={canvas} width={160} height={24} aria-label="录音音量" /><time>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</time><button type="button" className="voice-stop" onClick={stop} aria-label="停止录音并转写"><Square size={14} /></button></> : <><LoaderCircle className="spin" size={16} /><span role="status">{phase === "requesting" ? "等待麦克风权限…" : "正在识别语音…"}</span></>}</>}
-    </div>
-    {error && <p className="voice-error" role="alert">{error}</p>}
-  </div>;
+  function selectModel(value: string) {
+    if (phaseRef.current !== "idle" || disabled) return;
+    const next = validVoiceModel(value, models);
+    setSelected(next);
+    try { localStorage.setItem(storageKey, next); } catch {}
+  }
+
+  return { phase, model, models, disabled, seconds, error, canvas, start, stop, cancel, selectModel };
+}
+
+type VoiceState = ReturnType<typeof useVoiceInput>;
+
+export function VoiceControls({ voice }: { voice: VoiceState }) {
+  if (!voice.models.length) return null;
+  return <>
+    {voice.phase === "recording"
+      ? <button type="button" className="mic-button recording" onClick={() => voice.stop()} title="结束录音并转写到草稿" aria-label="停止录音并转写"><Square size={16} fill="currentColor" /></button>
+      : <button type="button" className="mic-button" onClick={() => void voice.start()} disabled={voice.disabled || voice.phase !== "idle"} title="录音输入" aria-label="录音输入">{voice.phase === "idle" ? <Mic size={17} /> : <LoaderCircle className="spin" size={17} />}</button>}
+  </>;
+}
+
+export function VoiceStatus({ voice }: { voice: VoiceState }) {
+  return <>
+    {voice.phase !== "idle" && <div className="voice-status" role="status">{voice.phase === "recording"
+      ? <><canvas ref={voice.canvas} width={160} height={24} aria-label="录音音量" /><time>{Math.floor(voice.seconds / 60)}:{String(voice.seconds % 60).padStart(2, "0")}</time><span>结束录音回填草稿，或点击发送以转写并发送</span></>
+      : <span>{voice.phase === "requesting" ? "等待麦克风权限…" : "正在识别语音…"}</span>}<button type="button" className="voice-cancel" onClick={voice.cancel} title="取消语音输入" aria-label="取消语音输入"><X size={16} /></button></div>}
+    {voice.error && <p className="voice-error" role="alert">{voice.error}</p>}
+  </>;
 }
