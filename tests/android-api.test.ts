@@ -29,6 +29,7 @@ test("native Android protocol uses cookie plus CSRF and preserves server drafts,
   const csrf = login.body.csrfToken as string;
   await agent.post(`${prefix}/conversations`).send({}).expect(403);
   const created = await agent.post(`${prefix}/conversations`).set("X-CSRF-Token", csrf).send({}).expect(201);
+  assert.equal(created.body.conversation.latest_job_status, null);
   const conversationPath = `${prefix}/conversations/${created.body.conversation.id}`;
   const draft = { content: "检查这个文件\n保留换行", quoteExcerpt: "引用", sourceReference: null };
   await agent.put(`${conversationPath}/draft`).set("X-CSRF-Token", csrf).send(draft).expect(200);
@@ -41,6 +42,8 @@ test("native Android protocol uses cookie plus CSRF and preserves server drafts,
   const send = await agent.post(`${conversationPath}/messages`).set("X-CSRF-Token", csrf)
     .field("message", draft.content).field("quoteExcerpt", draft.quoteExcerpt).field("useComposerDraft", "true").expect(202);
   assert.ok(send.body.job || send.body.pendingPrompt);
+  const queuedList = await agent.get(`${prefix}/conversations`).expect(200);
+  assert.equal(queuedList.body.conversations[0].latest_job_status, "queued");
   const next = await agent.post(`${conversationPath}/messages`).set("X-CSRF-Token", csrf)
     .field("message", "第二条排队指令").field("useComposerDraft", "true").expect(202);
   assert.ok(next.body.pendingPrompt);
@@ -59,6 +62,12 @@ test("native Android protocol uses cookie plus CSRF and preserves server drafts,
   const side = await agent.post(`${conversationPath}/side-chats`).set("X-CSRF-Token", csrf).expect(201);
   await agent.post(`${prefix}/side-chats/${side.body.conversation.id}/open`).set("X-CSRF-Token", csrf).expect(200);
   await agent.delete(`${conversationPath}/pending-prompts/${promptId}`).set("X-CSRF-Token", csrf).expect(204);
+  const latestJob = instance.db.getLatestJobForConversation(created.body.conversation.id);
+  assert.ok(latestJob);
+  instance.db.finishJob(latestJob.id, created.body.conversation.id, "completed");
+  const finishedList = await agent.get(`${prefix}/conversations`).expect(200);
+  assert.equal(finishedList.body.conversations[0].latest_job_status, "completed");
+  assert.equal(finishedList.body.conversations[0].has_pending_work, 0);
   await agent.post(`${prefix}/auth/logout`).set("X-CSRF-Token", csrf).expect(200);
   await agent.get(conversationPath).expect(401);
 });
