@@ -46,6 +46,8 @@ def main():
     wheelhouse = root / "wheels"
     wheelhouse.mkdir(exist_ok=True)
     specifications = json.loads((source_root / "models.json").read_text())
+    enabled = configuration.get("models", ["sensevoice-small-int8", "qwen3-asr-0.6b"])
+    specifications = [specification for specification in specifications if "model" not in specification or specification["model"] in enabled]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(prepare_model, root, specification, configuration["offline"]) for specification in specifications]
         if not configuration["offline"]:

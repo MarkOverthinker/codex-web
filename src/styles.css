@@ -2085,3 +2085,11 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .voice-status > span { flex: 1; min-width: 0; }
 .voice-error { margin: 5px 0; }
 .side-chat-settings.with-voice { grid-template-columns: minmax(0, 1fr) minmax(0, .65fr) minmax(0, 1fr); }
+.voice-preferences { display: grid; gap: 8px; min-width: 0; margin: 8px 0 0; padding: 10px 6px 4px; border: 0; border-top: 1px solid var(--line); color: var(--ink); }
+.voice-preferences legend { font-size: 11px; }
+.voice-preferences label { display: grid; gap: 5px; font-size: 11px; }
+.voice-preferences select, .voice-preferences textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; }
+.voice-preferences small, .voice-preferences p { margin: 0; white-space: normal; font-size: 10px; line-height: 1.5; }
+.side-voice-preferences { grid-column: 1 / -1; font-size: 11px; }
+.side-voice-preferences summary { cursor: pointer; }
+.setting-menu.voice-model .setting-menu-panel { width: min(290px, calc(100vw - 28px)); }

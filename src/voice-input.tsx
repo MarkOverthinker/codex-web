@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { LoaderCircle, Mic, Square, X } from "lucide-react";
 import { api, type VoiceModelOption } from "./api";
 import { validVoiceModel } from "./voice-input-state";
+import { hotwordsFromText, parseVoiceOptions, type VoiceOptions } from "./voice-options";
 
 type Phase = "idle" | "requesting" | "recording" | "transcribing";
 
@@ -21,6 +22,15 @@ export function useVoiceInput({ models, preferenceKey, scopeKey, conversationId,
     catch { return validVoiceModel(null, models); }
   });
   const model = validVoiceModel(selected, models);
+  const preferencesKey = `${storageKey}:options`;
+  const [preferences, setPreferences] = useState<VoiceOptions>(() => {
+    try { return parseVoiceOptions(JSON.parse(localStorage.getItem(preferencesKey) ?? "{}")); }
+    catch { return parseVoiceOptions({}); }
+  });
+  const [hotwordText, setHotwordText] = useState(() => preferences.hotwords.join(", "));
+  const [optionsError, setOptionsError] = useState("");
+  const local = models.find((option) => option.id === model)?.local ?? false;
+  const supportsHotwords = local && model !== "sensevoice-small-int8";
   const [phase, setPhase] = useState<Phase>("idle");
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState("");
@@ -78,6 +88,12 @@ export function useVoiceInput({ models, preferenceKey, scopeKey, conversationId,
   useEffect(() => {
     try { setSelected(validVoiceModel(localStorage.getItem(storageKey), models)); }
     catch { setSelected(validVoiceModel(null, models)); }
+    let next: VoiceOptions;
+    try { next = parseVoiceOptions(JSON.parse(localStorage.getItem(preferencesKey) ?? "{}")); }
+    catch { next = parseVoiceOptions({}); }
+    setPreferences(next);
+    setHotwordText(next.hotwords.join(", "));
+    setOptionsError("");
   }, [storageKey]);
 
   function stop(send = false) {
@@ -98,12 +114,14 @@ export function useVoiceInput({ models, preferenceKey, scopeKey, conversationId,
   async function start() {
     if (phaseRef.current !== "idle" || disabled || !model) return;
     setError("");
+    if (supportsHotwords && optionsError) { setError(optionsError); return; }
     if (!window.isSecureContext) { setError("麦克风需要 HTTPS 或 localhost 安全环境。"); return; }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setError("当前浏览器不支持录音，请使用 Chrome、Edge 或 Safari。"); return; }
     const current = ++generation.current;
     sendAfterRecognition.current = false;
     const chunks: Blob[] = [];
-    const context = { conversationId, model, draftText, attachmentNames };
+    const context = { conversationId, model, draftText, attachmentNames,
+      ...(local ? { options: { ...preferences, hotwords: supportsHotwords ? preferences.hotwords : [] } } : {}) };
     transition("requesting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -176,13 +194,42 @@ export function useVoiceInput({ models, preferenceKey, scopeKey, conversationId,
     if (phaseRef.current !== "idle" || disabled) return;
     const next = validVoiceModel(value, models);
     setSelected(next);
+    if (next === "sensevoice-small-int8" && optionsError) {
+      setHotwordText(preferences.hotwords.join(", "));
+      setOptionsError("");
+    }
     try { localStorage.setItem(storageKey, next); } catch {}
   }
 
-  return { phase, model, models, disabled, seconds, error, canvas, start, stop, cancel, selectModel };
+  function updatePreferences(text: string, punctuation: VoiceOptions["punctuation"]) {
+    if (phaseRef.current !== "idle" || disabled) return;
+    setHotwordText(text);
+    try {
+      const next = parseVoiceOptions({ hotwords: hotwordsFromText(text), punctuation });
+      setPreferences(next);
+      setOptionsError("");
+      try { localStorage.setItem(preferencesKey, JSON.stringify(next)); } catch {}
+    } catch (reason) { setOptionsError(reason instanceof Error ? reason.message : "语音选项无效。"); }
+  }
+
+  return { phase, model, models, disabled, seconds, error, canvas, start, stop, cancel, selectModel,
+    local, supportsHotwords, preferences, hotwordText, optionsError, updatePreferences };
 }
 
 type VoiceState = ReturnType<typeof useVoiceInput>;
+
+export function VoicePreferences({ voice }: { voice: VoiceState }) {
+  if (!voice.local) return null;
+  return <fieldset className="voice-preferences" disabled={voice.disabled || voice.phase !== "idle"}>
+    <legend>本地识别选项</legend>
+    <label>断句方式<select aria-label="语音断句方式" value={voice.preferences.punctuation} onChange={(event) => voice.updatePreferences(voice.hotwordText, event.target.value as VoiceOptions["punctuation"])}>
+      <option value="smart">上下文标点（不润色原话）</option><option value="original">保留模型原标点</option>
+    </select></label>
+    <label>常用术语<textarea aria-label="语音常用术语" rows={2} maxLength={500} value={voice.hotwordText} placeholder="例如 Codex, TypeScript, FastAPI" disabled={!voice.supportsHotwords} onChange={(event) => voice.updatePreferences(event.target.value, voice.preferences.punctuation)} /></label>
+    <small>{voice.supportsHotwords ? "逗号或换行分隔；最多20项、总长160字。仅辅助拼写，不保证正确。" : "当前模型不支持术语提示；可改用Qwen或Fun-ASR。"}</small>
+    {voice.supportsHotwords && voice.optionsError && <p role="alert">{voice.optionsError}</p>}
+  </fieldset>;
+}
 
 export function VoiceControls({ voice }: { voice: VoiceState }) {
   if (!voice.models.length) return null;

@@ -1,4 +1,6 @@
 import errno
+import base64
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler
 import json
 import logging
@@ -18,8 +20,9 @@ import imageio_ffmpeg
 import numpy as np
 import sherpa_onnx
 
+from pipeline import join_transcripts, normalize_hotwords, restore_punctuation, speech_windows
+from recognizers import MODEL_IDS, create_punctuator, create_recognizer
 
-MODEL_IDS = ("sensevoice-small-int8", "qwen3-asr-0.6b")
 FORMATS = {"webm": "matroska", "ogg": "ogg", "mp4": "mov", "mp3": "mp3", "wav": "wav", "aac": "aac", "flac": "flac"}
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
@@ -51,35 +54,42 @@ def decode_audio(payload, extension, maximum_seconds):
 
 
 class Engine:
-    def __init__(self, root, threads, maximum_seconds, timeout):
+    def __init__(self, root, threads, maximum_seconds, timeout, models=None, chunk_seconds=16):
         self.root = root
         self.maximum_seconds = maximum_seconds
         self.timeout = timeout
         self.lock = threading.Lock()
-        sense = root / "models" / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
-        qwen = root / "models" / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
-        self.recognizers = {
-            MODEL_IDS[0]: sherpa_onnx.OfflineRecognizer.from_sense_voice(
-                model=str(sense / "model.int8.onnx"), tokens=str(sense / "tokens.txt"),
-                num_threads=threads, provider="cpu", use_itn=True,
-            ),
-            MODEL_IDS[1]: sherpa_onnx.OfflineRecognizer.from_qwen3_asr(
-                conv_frontend=str(qwen / "conv_frontend.onnx"), encoder=str(qwen / "encoder.int8.onnx"),
-                decoder=str(qwen / "decoder.int8.onnx"), tokenizer=str(qwen / "tokenizer"),
-                num_threads=threads, provider="cpu", max_total_len=512, max_new_tokens=256,
-            ),
-        }
+        self.threads = threads
+        self.models = tuple(models if models is not None else MODEL_IDS[:2])
+        if not self.models or any(model not in MODEL_IDS for model in self.models):
+            raise ValueError("Invalid enabled ASR models")
+        if not 1 <= threads <= 16 or not 4 <= chunk_seconds <= 18:
+            raise ValueError("Use 1–16 threads and 4–18 second recognition chunks")
+        self.chunk_seconds = chunk_seconds
+        self.recognizers = OrderedDict()
+        self.punctuator = create_punctuator(root, threads)
+        for model in self.models[:2]:
+            self.recognizer(model, ())
         config = sherpa_onnx.VadModelConfig()
         config.silero_vad.model = str(root / "models" / "silero_vad.onnx")
         config.silero_vad.threshold = 0.5
         config.silero_vad.min_silence_duration = 0.5
         config.silero_vad.min_speech_duration = 0.2
-        config.silero_vad.max_speech_duration = 18
+        config.silero_vad.max_speech_duration = chunk_seconds - 0.5
         config.sample_rate = 16000
         config.num_threads = 1
         self.vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=maximum_seconds + 2)
 
-    def transcribe(self, audio, model, started):
+    def recognizer(self, model, hotwords):
+        key = (model, tuple(hotwords) if model == "fun-asr-nano-fp32" else ())
+        if key not in self.recognizers:
+            if len(self.recognizers) >= 2:
+                self.recognizers.popitem(last=False)
+            self.recognizers[key] = create_recognizer(self.root, model, self.threads, hotwords)
+        self.recognizers.move_to_end(key)
+        return self.recognizers[key]
+
+    def transcribe(self, audio, model, started, hotwords=(), punctuation="smart"):
         if float(np.max(np.abs(audio))) < 0.0001:
             return {"text": "", "model": model, "segments": 0}
         self.vad.reset()
@@ -96,22 +106,30 @@ class Engine:
                 segment = self.vad.front
                 spans.append((segment.start, segment.start + len(segment.samples)))
                 self.vad.pop()
-            for index, (start, end) in enumerate(spans):
+            windows = speech_windows(spans, len(audio), int(self.chunk_seconds * 16000))
+            recognizer = self.recognizer(model, hotwords) if windows else None
+            for start, end in windows:
                 if time.monotonic() - started > self.timeout:
                     raise InputError("本地识别超时，请缩短录音后重试。", 504)
-                left = 0 if index == 0 else (spans[index - 1][1] + start) // 2
-                right = len(audio) if index + 1 == len(spans) else (end + spans[index + 1][0]) // 2
-                samples = audio[max(left, start - 3200):min(right, end + 3200)]
-                if len(samples) > 20 * 16000:
-                    raise InputError("语音分段异常，请缩短录音后重试。")
-                stream = self.recognizers[model].create_stream()
+                samples = audio[start:end]
+                stream = recognizer.create_stream()
+                if model == "qwen3-asr-0.6b" and hotwords:
+                    stream.set_option("hotwords", ",".join(hotwords))
                 stream.accept_waveform(16000, samples)
-                self.recognizers[model].decode_stream(stream)
+                recognizer.decode_stream(stream)
                 text = stream.result.text.strip()
                 if not text or text in {"<sil>", "/sil"}:
                     raise InputError("有声片段未能完整识别，请换一个模型或重新录制。")
                 texts.append(text)
-            return {"text": "\n".join(texts), "model": model, "segments": len(texts)}
+            text = join_transcripts(texts)
+            punctuation_applied = False
+            if punctuation == "smart":
+                try:
+                    text, punctuation_applied = restore_punctuation(text, self.punctuator)
+                except Exception:
+                    logging.warning("Punctuation restoration failed; preserving ASR text")
+            return {"text": text, "model": model, "segments": len(texts), "punctuation_applied": punctuation_applied,
+                "hotwords_applied": bool(hotwords) and model != "sensevoice-small-int8"}
         finally:
             self.vad.reset()
 
@@ -140,12 +158,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self):
-        self.reply(200, {"ready": True, "models": list(MODEL_IDS), "offline": True}) if self.path == "/health" else self.reply(404, {"error": "Not found"})
+        self.reply(200, {"ready": True, "models": list(self.server.engine.models), "offline": True, "punctuation": self.server.engine.punctuator is not None}) if self.path == "/health" else self.reply(404, {"error": "Not found"})
 
     def do_POST(self):
         engine = self.server.engine
         model = self.path.removeprefix("/transcribe/")
-        if self.path != "/transcribe/" + model or model not in MODEL_IDS:
+        if self.path != "/transcribe/" + model or model not in engine.models:
             self.reply(400, {"error": "请选择有效的本地语音模型。"})
             return
         if not engine.lock.acquire(blocking=False):
@@ -153,6 +171,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         started = time.monotonic()
         try:
+            options = parse_options(self.headers.get("X-ASR-Options", ""))
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
@@ -163,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(payload) != length:
                 raise InputError("录音上传不完整。", 400)
             audio = decode_audio(payload, self.headers.get("X-Audio-Extension", ""), engine.maximum_seconds)
-            result = engine.transcribe(audio, model, started)
+            result = engine.transcribe(audio, model, started, **options)
             self.reply(200, {**result, "audio_seconds": len(audio) / 16000})
         except InputError as error:
             self.reply(error.status, {"error": str(error)})
@@ -174,6 +193,23 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(503, {"error": "本地语音识别失败，请稍后重试。"})
         finally:
             engine.lock.release()
+
+
+def parse_options(encoded):
+    if not encoded:
+        return {"hotwords": [], "punctuation": "smart"}
+    try:
+        if len(encoded) > 4096:
+            raise ValueError()
+        options = json.loads(base64.b64decode(encoded, validate=True))
+        if not isinstance(options, dict) or set(options) - {"hotwords", "punctuation"}:
+            raise ValueError()
+        punctuation = options.get("punctuation", "smart")
+        if punctuation not in {"smart", "original"}:
+            raise ValueError()
+        return {"hotwords": normalize_hotwords(options.get("hotwords", [])), "punctuation": punctuation}
+    except (ValueError, TypeError, UnicodeError):
+        raise InputError("无效的语音选项或术语列表。", 400) from None
 
 
 def main():
@@ -197,13 +233,14 @@ def main():
             if probe.connect_ex(str(socket_path)) == 0:
                 raise SystemExit("ASR service is already running")
         socket_path.unlink()
-    engine = Engine(root, configuration["threads"], configuration["maximum_audio_seconds"], configuration["request_timeout_seconds"])
+    engine = Engine(root, configuration["threads"], configuration["maximum_audio_seconds"], configuration["request_timeout_seconds"],
+        configuration.get("models"), configuration.get("chunk_seconds", 16))
     os.umask(0o077)
     with Server(str(socket_path), Handler) as server:
         server.engine = engine
         os.chmod(socket_path, 0o600)
         signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
-        print("Local ASR ready: SenseVoiceSmall INT8, Qwen3-ASR-0.6B; network isolated", flush=True)
+        print("Local ASR ready; network isolated; models=" + ",".join(engine.models), flush=True)
         try:
             server.serve_forever(poll_interval=0.2)
         finally:

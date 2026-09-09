@@ -1,5 +1,7 @@
 root = "../../data/local-asr"
-threads = 4
+threads = 6
+models = ["sensevoice-small-int8", "qwen3-asr-0.6b", "fun-asr-nano-fp32"]
+chunk_seconds = 16
 request_timeout_seconds = 110
 maximum_audio_seconds = 300
 offline = false

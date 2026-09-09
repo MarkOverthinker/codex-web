@@ -21,7 +21,7 @@ export async function setup(page: Page, groupedModels = false, voiceEnabled = fa
   await page.route("**/codex-web/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace("/codex-web/api", "");
     let body: unknown;
-    if (path === "/auth/session") body = { authenticated: true, username: "demo", csrfToken: "test-only", voiceEnabled, voiceModels: voiceEnabled ? [{ id: "sensevoice-small-int8", label: "SenseVoiceSmall INT8", local: true }, { id: "qwen3-asr-0.6b", label: "Qwen3-ASR-0.6B", local: true }] : [], canChangeUsername: true };
+    if (path === "/auth/session") body = { authenticated: true, username: "demo", csrfToken: "test-only", voiceEnabled, voiceModels: voiceEnabled ? [{ id: "sensevoice-small-int8", label: "SenseVoiceSmall INT8", local: true }, { id: "qwen3-asr-0.6b", label: "Qwen3-ASR-0.6B", local: true }, { id: "fun-asr-nano-fp32", label: "Fun-ASR-Nano FP32", local: true }] : [], canChangeUsername: true };
     else if (path === "/agent-options") body = { providers: groupedModels ? [{ id: "demo-source", name: "测试 API 源" }] : [], models: [{ id: "demo-model", label: "Demo Model", description: "测试模型", reasoningEfforts: ["medium", "high"], ...(groupedModels ? { provider: "demo-source", providerName: "测试 API 源" } : {}) }], reasoningEfforts: [{ id: "medium", label: "标准" }, { id: "high", label: "深入" }], sandboxModes: [{ id: "workspace-write", label: "工作区写入", description: "限制写入范围" }, { id: "danger-full-access", label: "完全访问", description: "跳过沙箱" }], selection, defaults: selection };
     else if (path === "/conversations") body = { conversations: [conversation] };
     else if (path === "/conversations/mobile-demo") body = detail;
