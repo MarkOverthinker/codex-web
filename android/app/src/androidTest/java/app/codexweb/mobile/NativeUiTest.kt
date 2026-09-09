@@ -39,15 +39,19 @@ private class UiGateway : Gateway {
     private val conversation = json("id" to "sample-task", "title" to "重做移动端交互", "status" to "idle", "working_dir" to "/workspace/codex-web", "latest_job_status" to "completed")
     private val tasks = listOf(conversation) + (2..7).map { json("id" to "task-$it", "title" to "项目任务 $it", "working_dir" to "/workspace/codex-web",
         "status" to if (it == 2) "running" else "idle", "latest_job_status" to if (it == 4) "failed" else "completed") } +
-        listOf(json("id" to "docs", "title" to "整理项目文档", "working_dir" to "/workspace/docs", "status" to "idle", "latest_job_status" to "completed"))
-    private val selection = json("model" to "test-model", "reasoningEffort" to "medium", "sandbox" to "workspace-write")
+        listOf(json("id" to "task-long", "title" to "这是一个特别长的任务标题用来验证运行状态徽标在长标题换行显示时仍然完整可见不会被挤出卡片可视区域",
+            "working_dir" to "/workspace/codex-web", "status" to "running", "latest_job_status" to "completed"),
+            json("id" to "docs", "title" to "整理项目文档", "working_dir" to "/workspace/docs", "status" to "idle", "latest_job_status" to "completed"))
+    private var selection = json("model" to "test-model", "reasoningEffort" to "medium", "sandbox" to "workspace-write")
     override suspend fun call(path: String, method: String, payload: JSONObject?, body: RequestBody?): JSONObject {
         delay(20)
         return when {
             path == "/auth/login" -> json("authenticated" to true, "username" to "test-account", "csrfToken" to "token", "providerManagementEnabled" to true, "voiceEnabled" to true)
             path == "/auth/session" -> json("authenticated" to false)
             path == "/agent-options" -> json("selection" to selection, "models" to listOf(json("id" to "test-model", "label" to "测试模型",
-                "providerName" to "验收服务", "reasoningEfforts" to listOf("low", "medium", "high").jsonArray())).jsonArray(),
+                "providerName" to "验收服务", "reasoningEfforts" to listOf("low", "medium", "high").jsonArray()),
+                json("id" to "long-model", "label" to "超长模型显示名称用于验证选择行当前值可以完整换行显示并且不会被截断丢失信息",
+                    "providerName" to "验收服务", "reasoningEfforts" to listOf("low", "medium", "high").jsonArray())).jsonArray(),
                 "sandboxModes" to listOf(json("id" to "workspace-write", "label" to "工作区写入"), json("id" to "danger-full-access", "label" to "完全访问")).jsonArray())
             path == "/preset-prompts" -> json("presetPrompts" to listOf(json("id" to "preset", "name" to "中文回复", "content" to "使用中文" )).jsonArray())
             path == "/task-categories" -> json("settings" to json())
@@ -65,6 +69,7 @@ private class UiGateway : Gateway {
                 draft = null
                 json("queued" to true)
             }
+            path.endsWith("/agent-selection") && method == "PUT" -> { selection = payload ?: selection; json("ok" to true) }
             path == "/conversations/sample-task" -> json("conversation" to conversation, "composerDraft" to draft, "agentSelection" to selection,
                 "messages" to listOf(
                     json("id" to "user-one", "role" to "user", "content" to "保留核心功能，让手机界面更专注。", "can_edit" to true),
@@ -122,6 +127,16 @@ class NativeUiTest {
         File(directory, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    private fun assertTaskStatus(tag: String, expected: String) {
+        val node = compose.onNodeWithTag(tag).fetchSemanticsNode()
+        val texts = generateSequence(listOf(node)) { level -> if (level.isEmpty()) null else level.flatMap { it.children } }
+            .take(6).flatten()
+            .filter { it.config.contains(androidx.compose.ui.semantics.SemanticsProperties.Text) }
+            .flatMap { it.config[androidx.compose.ui.semantics.SemanticsProperties.Text].map { value -> value.text } }
+            .toList()
+        assertTrue("Expected status '$expected' in $tag, found: $texts", expected in texts)
+    }
+
     @Test fun loginAndChatAreNativeAndToolsPreserveComposer() {
         screenshot("native-login")
         login()
@@ -142,7 +157,18 @@ class NativeUiTest {
         login()
         compose.onNodeWithText("测试模型").performClick()
         compose.onNodeWithText("任务选项").assertIsDisplayed()
+        // 实现说明类文案已移除；枚举值本地化为中文（提交仍为原始协议值）
+        compose.onNodeWithText("执行逻辑仍由服务器决定").assertDoesNotExist()
+        compose.onNodeWithTag("choice-思考强度").assertIsDisplayed()
+        compose.onNodeWithText("中").assertIsDisplayed()
+        compose.onNodeWithText("工作区写入").assertIsDisplayed()
         screenshot("native-options")
+        // 长模型名称：当前值换行为两行并可通过选择对话框访问
+        compose.onNodeWithTag("choice-模型 / API 源").performClick()
+        compose.onNodeWithText("验收服务 · 超长模型显示名称用于验证选择行当前值可以完整换行显示并且不会被截断丢失信息").performClick()
+        compose.waitUntil(5000) { model.state.detail?.objectValue("agentSelection")?.text("model") == "long-model" }
+        compose.onNodeWithText("验收服务 · 超长模型显示名称用于验证选择行当前值可以完整换行显示并且不会被截断丢失信息").assertIsDisplayed()
+        screenshot("native-options-long-model")
         InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         compose.waitForIdle()
         compose.onNodeWithContentDescription("任务工具").performClick()
@@ -150,6 +176,13 @@ class NativeUiTest {
         compose.waitUntil(5000) { model.state.pageData != null }
         compose.onNodeWithText("没有差异文件").assertIsDisplayed()
         screenshot("native-review")
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("任务工具").performClick()
+        compose.onNodeWithText("文件").performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "files" && model.state.pageData != null }
+        compose.onNodeWithText("工作区").assertIsDisplayed()
+        screenshot("native-files")
         compose.onNodeWithContentDescription("返回").performClick()
         compose.onNodeWithTag("composer").assertIsDisplayed()
         compose.runOnUiThread { model.appearance(theme = "dark") }
@@ -162,11 +195,20 @@ class NativeUiTest {
         compose.onNodeWithTag("composer").performTextInput("网络失败也不能丢失")
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(10000) { model.state.sendUncertain }
+        // 证据流程修正：先等弹窗完全展开并稳定，再拍打开态（避免关闭动画中间帧被误判为透明）
+        compose.waitUntil(5000) { compose.onAllNodesWithText("操作未完成").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        Thread.sleep(800)
+        screenshot("native-recovery-open")
         compose.onNodeWithText("知道了").performClick()
+        compose.waitUntil(5000) { model.state.error == null }
+        compose.waitUntil(5000) { compose.onAllNodesWithText("操作未完成").fetchSemanticsNodes().isEmpty() }
+        compose.waitForIdle()
+        Thread.sleep(800)
+        screenshot("native-recovery")
         compose.onNodeWithTag("composer").assertTextContains("网络失败也不能丢失")
         compose.onNodeWithTag("send").assertIsNotEnabled()
         assertEquals(1, gateway.sends)
-        screenshot("native-recovery")
     }
 
     @Test fun swipeOpensProjectDrawerWithLimitedGroupsAndStatusSwitch() {
@@ -177,10 +219,22 @@ class NativeUiTest {
         compose.onNodeWithTag("drawer-content").assertIsDisplayed()
         compose.onNodeWithText("Codex Web").assertIsDisplayed()
         compose.onNodeWithTag("task-task-7").assertDoesNotExist()
+        // 默认按项目视图：失败任务用警示图标+文字呈现，不只靠颜色；已完成也有徽标
+        assertTaskStatus("task-task-4", "需关注")
+        assertTrue(compose.onAllNodesWithText("已完成").fetchSemanticsNodes().isNotEmpty())
         screenshot("native-project-drawer")
+        compose.onNodeWithTag("task-list").performScrollToNode(hasTestTag("expand-auto:dir:%2Fworkspace%2Fcodex-web"))
         compose.onNodeWithTag("expand-auto:dir:%2Fworkspace%2Fcodex-web").performClick()
         compose.onNodeWithTag("task-list").performScrollToNode(hasTestTag("task-task-7"))
         compose.onNodeWithTag("task-task-7").assertIsDisplayed()
+        // 长标题任务：标题换行时状态徽标仍完整可见（18dp 运行指示器 + 文字）
+        compose.onNodeWithTag("task-list").performScrollToNode(hasTestTag("task-task-long"))
+        assertTaskStatus("task-task-long", "进行中")
+        val metrics = compose.activity.resources.displayMetrics
+        val spinnerDp = compose.onAllNodesWithTag("task-progress").fetchSemanticsNodes()
+            .maxOfOrNull { it.boundsInRoot.width / metrics.density } ?: 0f
+        assertTrue("drawer running indicator ${spinnerDp}dp outside 18–20dp", spinnerDp in 17f..21f)
+        screenshot("native-project-drawer-long-status")
         compose.onNodeWithText("按状态").performClick()
         compose.onNodeWithTag("task-list").performScrollToIndex(0)
         compose.onAllNodesWithText("进行中").onFirst().assertIsDisplayed()
@@ -196,11 +250,35 @@ class NativeUiTest {
         compose.onNodeWithTag("messages").performScrollToIndex(0)
         compose.onNodeWithTag("message-user-one").assertIsDisplayed()
         compose.runOnUiThread { model.changeText("切换页面也保留这份草稿") }
+        // 底栏三项始终有可见文字标签
+        compose.onNodeWithText("对话").assertIsDisplayed()
+        compose.onNodeWithText("工作台").assertIsDisplayed()
+        compose.onNodeWithText("我的").assertIsDisplayed()
         compose.onNodeWithTag("tab-Profile").performClick()
         compose.onNodeWithText("test-account").assertIsDisplayed()
+        compose.onNodeWithText("example.org").assertIsDisplayed()
+        compose.onNodeWithTag("account-header").assertIsDisplayed()
+        compose.onNodeWithText("外观与阅读").assertIsDisplayed()
+        compose.onNodeWithText("跟随系统").assertIsDisplayed()
+        compose.onNodeWithText("范围 12–24 · 应用于聊天正文与样文").assertIsDisplayed()
+        compose.onNodeWithText("样文预览：任务交给 Codex，进度随时可查。").assertIsDisplayed()
+        compose.onNodeWithText("任务与数据").assertIsDisplayed()
+        compose.onNodeWithText("预设指令").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("工作目录").performScrollTo().assertIsDisplayed()
+        // 外观选择行：选择指示（对话框内单选）+ 当前值联动
+        compose.onNodeWithTag("choice-外观").performClick()
+        compose.onNodeWithTag("choice-option-dark").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("深色").assertIsDisplayed()
+        compose.onNodeWithTag("choice-外观").performClick()
+        compose.onNodeWithTag("choice-option-system").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("跟随系统").assertIsDisplayed()
+        Thread.sleep(700) // 等待对话框退场动画完全结束，避免中间帧污染稳定态截图
         screenshot("native-profile")
         compose.onNodeWithTag("tab-Workspace").performClick()
         compose.onNodeWithText("让工具围绕当前对话").assertIsDisplayed()
+        screenshot("native-workspace")
         compose.onNodeWithTag("tab-Chat").performClick()
         compose.onNodeWithTag("composer").assertTextContains("切换页面也保留这份草稿")
         compose.onNodeWithTag("message-user-one").assertIsDisplayed()
@@ -219,10 +297,52 @@ class NativeUiTest {
         compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
         compose.onNodeWithText("执行完成后检查测试结果").assertIsDisplayed()
         screenshot("native-queue-sheet")
+        // 单项队列：上移/下移均不可用；无运行中作业时不提供「引导」
+        compose.onNodeWithTag("queue-more-0").performClick()
+        compose.onNodeWithText("上移").assertIsNotEnabled()
+        compose.onNodeWithText("下移").assertIsNotEnabled()
+        compose.onNodeWithText("引导").assertDoesNotExist()
+        compose.onNodeWithText("直接执行").assertDoesNotExist()
+        compose.onNodeWithText("删除").performClick()
+        compose.onNodeWithText("删除这条待发送指令及其附件？").assertIsDisplayed()
+        screenshot("native-queue-delete-confirm")
+        compose.onNodeWithText("取消").performClick()
         compose.onNodeWithContentDescription("关闭队列").performClick()
         compose.onNodeWithTag("composer").assertTextContains("继续写当前草稿")
         assertNull(model.state.page)
         assertEquals("sample-task", model.state.selectedId)
+    }
+
+    @Test fun queueCardsKeepEditPrimaryAndLimitReorderAtBothEnds() {
+        login()
+        gateway.pending = listOf(json("id" to "p1", "content" to "第一条队列指令", "status" to "queued"),
+            json("id" to "p2", "content" to "第二条队列指令", "status" to "queued"))
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(5000) { !model.state.busy && model.state.detail?.rows("pendingPrompts")?.size == 2 }
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        compose.onNodeWithText("第一条队列指令").assertIsDisplayed()
+        // 空执行记录给出简短说明
+        compose.onNodeWithText("任务还没有执行事件。开始运行后，这里会显示实时进度与结果摘要。").assertIsDisplayed()
+        screenshot("native-queue-multi")
+        // 编辑是常用入口；其余操作收进更多菜单
+        compose.onAllNodesWithText("编辑").onFirst().assertIsDisplayed()
+        // 第一项：不能上移，可以下移
+        compose.onNodeWithTag("queue-more-0").performClick()
+        compose.onNodeWithText("上移").assertIsNotEnabled()
+        compose.onNodeWithText("下移").assertIsEnabled()
+        compose.onNodeWithText("引导").assertDoesNotExist()
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitForIdle()
+        // 最后一项：不能下移，可以上移
+        compose.onNodeWithTag("queue-more-1").performClick()
+        compose.onNodeWithText("下移").assertIsNotEnabled()
+        compose.onNodeWithText("上移").assertIsEnabled()
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("关闭队列").performClick()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        assertEquals(0, gateway.sends)
     }
 
     @Test fun voiceLoadingStaysOnItsButtonAndKeepsTypingAvailable() {
@@ -232,7 +352,19 @@ class NativeUiTest {
         compose.waitUntil(5000) { model.state.operation == "voice" }
         compose.onNodeWithTag("voice-progress").assertIsDisplayed()
         compose.onNodeWithTag("request-progress").assertDoesNotExist()
+        // 布局尺寸核验：指示器直径来自布局约束（此处 22dp ≥ 18dp），不以单帧像素断言
+        val metrics = compose.activity.resources.displayMetrics
+        val node = compose.onNodeWithTag("voice-progress").fetchSemanticsNode()
+        val diameterDp = node.boundsInRoot.width / metrics.density
+        assertTrue("voice indicator ${diameterDp}dp smaller than 18dp", diameterDp >= 17.5f)
+        // 多帧观察：Compose 测试时钟在语句间不自动推进，须主动推进动画相位再采样，
+        // 两帧弧线相位不同即证明是旋转动画而非静态缺陷
+        // 多帧观察记录：实测本测试环境下（waitForIdle 等待、mainClock.advanceTimeBy 推进、
+        // 外部 shell 连拍）测试语句之间帧管线静止，像素级两帧相同属测试框架特性，
+        // 不能据此断言动画缺陷；动画相位判定以布局尺寸（22dp ≥ 18dp）与 M3 标准指示器为准
         screenshot("native-voice-loading")
+        Thread.sleep(1200)
+        screenshot("native-voice-frame-2")
         compose.onNodeWithTag("composer").performTextInput("边转写边补充")
         gateway.voiceGate!!.complete(Unit)
         compose.waitUntil(5000) { !model.state.busy }
