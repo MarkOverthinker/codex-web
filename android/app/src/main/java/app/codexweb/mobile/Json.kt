@@ -62,6 +62,7 @@ data class NativeState(
     val page: ToolPage? = null,
     val pageData: JSONObject? = null,
     val pageLoading: Boolean = false,
+    val pageError: String? = null,
     val busy: Boolean = false,
     val error: String? = null,
     val notice: String? = null,
