@@ -2073,3 +2073,10 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .file-explorer-preview-image,
 :root[data-theme="dark"] .file-explorer-preview-frame { background: #17181c; }
 :root[data-theme="dark"] .file-explorer-preview-plain { border-color: #40434d; color: #e2e3e8; background: #17181c; }
+.voice-input { min-width: 0; margin: 6px 0; }
+.voice-input-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 32px; font-size: 12px; }
+.voice-input-controls label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.voice-input-controls select { max-width: min(250px, 55vw); border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: inherit; padding: 5px 6px; font: inherit; }
+.voice-input-controls canvas { width: 80px; height: 24px; }
+.voice-input-controls time { font-variant-numeric: tabular-nums; }
+.voice-input .voice-error { margin: 5px 0; }

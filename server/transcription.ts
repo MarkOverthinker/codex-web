@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { Request, Response } from "express";
 import type { AppConfig } from "./config.js";
+import { LOCAL_VOICE_MODELS, LocalTranscriptionError, transcribeLocally } from "./local-transcription.js";
 
 const execFileAsync = promisify(execFile);
 const AUDIO_NAME = /^[0-9a-f-]{36}\.(webm|ogg|mp4|mp3|wav|aac|flac)$/;
@@ -52,6 +53,14 @@ export class TranscriptionError extends Error {
 export class TranscriptionService {
   readonly audioRoot: string;
 
+  get models(): Array<{ id: string; label: string; local: boolean }> {
+    if (this.config.transcriptionProvider === "local") return [...LOCAL_VOICE_MODELS];
+    if (this.config.transcriptionProvider === "dashscope" && this.config.dashscopeApiKey && this.config.publicBaseUrl.startsWith("https://")) {
+      return [{ id: "dashscope", label: "云端语音识别", local: false }];
+    }
+    return [];
+  }
+
   constructor(
     private readonly config: AppConfig,
     private readonly fetchImpl: FetchLike = fetch,
@@ -78,6 +87,7 @@ export class TranscriptionService {
   }
 
   serveSignedAudio(req: Request, res: Response): void {
+    if (this.config.transcriptionProvider !== "dashscope") { res.status(404).end(); return; }
     const fileName = String(req.params.fileName ?? "");
     const expires = Number(req.query.expires);
     const signature = String(req.query.signature ?? "");
@@ -94,7 +104,18 @@ export class TranscriptionService {
     res.sendFile(fileName, { root: this.audioRoot });
   }
 
-  async transcribe(fileName: string, context: TranscriptionContext = {}): Promise<string> {
+  async transcribe(fileName: string, context: TranscriptionContext = {}, model?: string): Promise<string> {
+    if (!AUDIO_NAME.test(fileName)) throw new TranscriptionError("无效的录音文件。", 400);
+    if (this.config.transcriptionProvider === "disabled") throw new TranscriptionError("语音输入未启用。", 503);
+    if (this.config.transcriptionProvider === "local") {
+      try {
+        return await transcribeLocally(this.config.localAsrSocket, path.join(this.audioRoot, fileName), model ?? LOCAL_VOICE_MODELS[0].id, this.config.transcriptionTimeoutMs);
+      } catch (error) {
+        if (error instanceof LocalTranscriptionError) throw new TranscriptionError(error.message, error.status);
+        throw new TranscriptionError("本地语音识别失败。", 502);
+      }
+    }
+    if (model && model !== "dashscope") throw new TranscriptionError("请选择有效的语音模型。", 400);
     if (!this.config.dashscopeApiKey) throw new TranscriptionError("语音识别服务尚未配置完成。", 503);
     const prepared = await this.prepareAudio(fileName);
     const enrichedContext: TranscriptionContext = {
