@@ -400,10 +400,11 @@ PyPI wheel 下载 `0.5.8`，许可与 SBOM 一并捆绑在 `licenses/codex-relay
 ## 升级已部署的实例
 
 把新版本的离线包、`.sha256` 与 `upgrade.sh` 一起放到目标机（例如部署根上一级），
-在旧安装目录中运行：
+必须使用新包随附的 `upgrade.sh`（不要运行旧安装目录里的旧脚本）：
 
 ```bash
-./upgrade.sh codex-web-offline-linux-x64-node-*.tar.zst
+cd /path/to/upgrade-files
+bash ./upgrade.sh ./codex-web-offline-linux-x64-node-YYYYMMDD.tar.zst /path/to/codex-web
 ```
 
 脚本会依次：校验包 SHA256（旁边有 `.sha256` 时）、解压校验程序结构、自动停止服务（autostart
@@ -429,7 +430,7 @@ fi
 mkdir -p "$OUTPUT_DIR"
 archive="$OUTPUT_DIR/codex-web-offline-$PLATFORM-node$([[ "$SKIP_NODE" -eq 1 ]] && echo "-noembeddednode" || echo "")-$(date +%Y%m%d).tar.zst"
 echo "==> compressing to $archive"
-tar --zstd -C "$STAGING_ROOT" -cf "$archive" "$PACKAGE_DIR"
+tar --zstd --owner=0 --group=0 --numeric-owner -C "$STAGING_ROOT" -cf "$archive" "$PACKAGE_DIR"
 (cd "$OUTPUT_DIR" && sha256sum "$(basename "$archive")") | tee "$archive.sha256"
 cp "$STAGING/upgrade.sh" "$OUTPUT_DIR/upgrade.sh"
 cp "$STAGING/README-OFFLINE.md" "$OUTPUT_DIR/README-OFFLINE.md"
