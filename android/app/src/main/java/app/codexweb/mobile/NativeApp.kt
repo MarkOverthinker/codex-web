@@ -103,11 +103,7 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
                         { model.withConversation(pickFiles) }, { if (recording) voice() else model.withConversation(voice) }, recording, { sheet = "queue" })
                 }) {
                     when {
-                        state.page != null -> {
-                            if (state.pageLoading && state.pageData == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
-                            } else ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
-                        }
+                        state.page != null -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
                         state.homeTab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
                         state.homeTab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
                         state.selectedId == null -> WelcomeChat(model)
@@ -127,7 +123,7 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
                     }
                 }
                 if (sheet == "tools" || sheet == "options") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-                    if (sheet == "options") OptionsSheet(model)
+                    if (sheet == "options") OptionsSheet(model) { sheet = null }
                     else Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState())) {
                         Text("任务工具", Modifier.padding(20.dp), style = MaterialTheme.typography.titleLarge)
                         listOf(
@@ -434,11 +430,14 @@ private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> U
 }
 
 @Composable
-private fun OptionsSheet(model: ClientModel) {
+private fun OptionsSheet(model: ClientModel, close: () -> Unit = {}) {
     val state = model.state
     val selection = state.detail?.objectValue("agentSelection") ?: state.options.objectValue("selection")
     Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("任务选项", Modifier.padding(bottom = 8.dp), style = MaterialTheme.typography.titleLarge)
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("任务选项", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = close, enabled = !state.busy) { Icon(Icons.Outlined.Close, "关闭选项") }
+        }
         ChoiceField("模型 / API 源", selection.text("model"), state.options.rows("models").map { it.text("id") to "${it.text("providerName")} · ${it.text("label")}" }) { id ->
             val modelOption = state.options.rows("models").find { it.text("id") == id } ?: return@ChoiceField
             val efforts = modelOption.strings("reasoningEfforts")

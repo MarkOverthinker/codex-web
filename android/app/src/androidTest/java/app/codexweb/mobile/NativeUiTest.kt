@@ -3,6 +3,7 @@ package app.codexweb.mobile
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -22,6 +23,8 @@ import org.junit.runner.RunWith
 import java.io.Closeable
 import java.io.File
 
+private const val longFileName = "设计方案-最终版-请以这一份为准-不要重复导出-版本V20260910.md"
+
 private class UiStore : NativeStore {
     private val values = java.util.concurrent.ConcurrentHashMap<String, String>()
     override fun read(key: String) = values[key]
@@ -31,8 +34,12 @@ private class UiStore : NativeStore {
 private class UiGateway : Gateway {
     override var csrf = ""
     var sends = 0
+    var creates = 0
     var draft: JSONObject? = null
     var failSend = false
+    var failReview = false
+    var listingError: String? = null
+    var outputsEmpty = false
     var voiceGate: CompletableDeferred<Unit>? = null
     var pending = emptyList<JSONObject>()
     var longMessages = false
@@ -43,6 +50,58 @@ private class UiGateway : Gateway {
             "working_dir" to "/workspace/codex-web", "status" to "running", "latest_job_status" to "completed"),
             json("id" to "docs", "title" to "整理项目文档", "working_dir" to "/workspace/docs", "status" to "idle", "latest_job_status" to "completed"))
     private var selection = json("model" to "test-model", "reasoningEffort" to "medium", "sandbox" to "workspace-write")
+    private val longName = longFileName
+    private val outputs get() = if (outputsEmpty) emptyList() else listOf(
+        json("id" to "out-1", "kind" to "output", "original_name" to "重构完成报告.md", "mime_type" to "text/markdown", "size" to 15360, "created_at" to "2026-09-10T09:12:00.000Z"),
+        json("id" to "out-2", "kind" to "output", "original_name" to "数据统计-导出结果-这一份是最终版-请勿重复导出-20260910.csv", "mime_type" to "text/csv", "size" to 24680, "created_at" to "2026-09-10T09:15:00.000Z"))
+    private val reviewFiles get() = (listOf(
+        json("path" to "src/main.kt", "status" to "M", "additions" to 42, "deletions" to 7),
+        json("path" to "docs/$longName", "status" to "A", "additions" to 120, "deletions" to 0),
+        json("path" to "legacy/old-script.py", "status" to "D", "additions" to 0, "deletions" to 96),
+        json("path" to "数据统计-导出结果-这一份是最终版-请勿重复导出-20260910.csv", "status" to "?", "additions" to JSONObject.NULL, "deletions" to JSONObject.NULL)) +
+        (1..8).map { json("path" to "src/module/module-$it.kt", "status" to "M", "additions" to it, "deletions" to it) } +
+        listOf(json("path" to "src/zz-last-changed-file.kt", "status" to "M", "additions" to 3, "deletions" to 1))).jsonArray()
+    private val patchText = """
+        diff --git a/src/zz-last-changed-file.kt b/src/zz-last-changed-file.kt
+        index 3f2a9c1..8b7d2e0 100644
+        --- a/src/zz-last-changed-file.kt
+        +++ b/src/zz-last-changed-file.kt
+        @@ -12,7 +12,9 @@ class Demo {
+        +    val 超长行 = "这一行特别长用来验证差异视图支持横向滚动而不会换行挤压布局，字符数远超屏幕宽度许多许多许多许多许多许多许多许多许多许多许多许多许多许多，直到水平滚动确认生效为止"
+             保留的上下文行内容
+        +    val added = true
+    """.trimIndent()
+
+    private fun params(path: String): Map<String, String> = path.substringAfter('?', "")
+        .split('&').filter { it.contains('=') }
+        .associate { part -> val pair = part.split('=', limit = 2); pair[0] to java.net.URLDecoder.decode(pair[1], "UTF-8") }
+
+    private fun roots() = listOf(
+        json("id" to "working-dir", "label" to "当前工作目录", "path" to "/workspace/codex-web", "available" to true),
+        json("id" to "workspace", "label" to "会话工作区", "path" to "会话工作区", "available" to true),
+        json("id" to "library", "label" to "资料库", "path" to "资料库", "available" to false)).jsonArray()
+
+    private fun listing(rootId: String, path: String): JSONObject {
+        if (path == "受限目录") throw ApiFailure(403, "EACCES: permission denied, scandir '/workspace/codex-web/受限目录'")
+        listingError?.let { throw ApiFailure(403, it) }
+        val display = "会话工作区"
+        return when (path) {
+            "" -> json("rootId" to rootId, "path" to "", "parentPath" to JSONObject.NULL, "truncated" to false, "entries" to listOf(
+                json("name" to "docs", "path" to "docs", "display_path" to "$display/docs", "type" to "dir", "mime_type" to "application/octet-stream", "size" to JSONObject.NULL, "mtime" to JSONObject.NULL, "previewable" to false),
+                json("name" to "空目录", "path" to "空目录", "display_path" to "$display/空目录", "type" to "dir", "mime_type" to "application/octet-stream", "size" to JSONObject.NULL, "mtime" to JSONObject.NULL, "previewable" to false),
+                json("name" to "受限目录", "path" to "受限目录", "display_path" to "$display/受限目录", "type" to "dir", "mime_type" to "application/octet-stream", "size" to JSONObject.NULL, "mtime" to JSONObject.NULL, "previewable" to false),
+                json("name" to longName, "path" to longName, "display_path" to "$display/$longName", "type" to "file", "mime_type" to "text/markdown", "size" to 18432, "mtime" to "2026-09-09T08:30:00.000Z", "previewable" to true),
+                json("name" to "已删除文件.txt", "path" to "已删除文件.txt", "display_path" to "$display/已删除文件.txt", "type" to "file", "mime_type" to "text/plain", "size" to 256, "mtime" to "2026-09-05T10:00:00.000Z", "previewable" to true),
+                json("name" to "README.md", "path" to "README.md", "display_path" to "$display/README.md", "type" to "file", "mime_type" to "text/markdown", "size" to 2048, "mtime" to "2026-09-01T10:00:00.000Z", "previewable" to true),
+                json("name" to "架构示意图.png", "path" to "架构示意图.png", "display_path" to "$display/架构示意图.png", "type" to "file", "mime_type" to "image/png", "size" to 81920, "mtime" to "2026-09-02T10:00:00.000Z", "previewable" to true)).jsonArray())
+            "docs" -> json("rootId" to rootId, "path" to "docs", "parentPath" to "", "truncated" to false, "entries" to listOf(
+                json("name" to "归档目录", "path" to "docs/归档目录", "display_path" to "$display/docs/归档目录", "type" to "dir", "mime_type" to "application/octet-stream", "size" to JSONObject.NULL, "mtime" to JSONObject.NULL, "previewable" to false),
+                json("name" to "会议记录.txt", "path" to "docs/会议记录.txt", "display_path" to "$display/docs/会议记录.txt", "type" to "file", "mime_type" to "text/plain", "size" to 4096, "mtime" to "2026-09-08T14:00:00.000Z", "previewable" to true)).jsonArray())
+            "空目录" -> json("rootId" to rootId, "path" to "空目录", "parentPath" to "", "truncated" to false, "entries" to emptyList<JSONObject>().jsonArray())
+            else -> json("rootId" to rootId, "path" to path, "parentPath" to "", "truncated" to false, "entries" to emptyList<JSONObject>().jsonArray())
+        }
+    }
+
     override suspend fun call(path: String, method: String, payload: JSONObject?, body: RequestBody?): JSONObject {
         delay(20)
         return when {
@@ -56,7 +115,7 @@ private class UiGateway : Gateway {
             path == "/preset-prompts" -> json("presetPrompts" to listOf(json("id" to "preset", "name" to "中文回复", "content" to "使用中文" )).jsonArray())
             path == "/task-categories" -> json("settings" to json())
             path == "/working-dirs" -> json("settings" to json("favorites" to listOf(json("path" to "/workspace/codex-web", "label" to "Codex Web")).jsonArray()))
-            path == "/conversations" && method == "POST" -> json("conversation" to conversation)
+            path == "/conversations" && method == "POST" -> { creates++; json("conversation" to conversation) }
             path == "/conversations" -> json("conversations" to tasks.jsonArray())
             path == "/transcriptions" -> { voiceGate?.await(); json("text" to "语音转写的内容") }
             path.endsWith("/draft") -> {
@@ -74,9 +133,35 @@ private class UiGateway : Gateway {
                 "messages" to listOf(
                     json("id" to "user-one", "role" to "user", "content" to "保留核心功能，让手机界面更专注。", "can_edit" to true),
                     json("id" to "assistant-one", "role" to "assistant", "content" to "## 让任务回到中心\n\n保留熟悉的 Web 风格，让对话成为主界面。\n\n- 右滑打开按项目分类的任务\n- 输入区轻点即可管理队列\n- 草稿与近期对话保存在本机\n\n```kotlin\nval focus = \"专注当前对话\"\n```" + if (longMessages) "\n\n继续查看项目细节。".repeat(35) else "", "can_fork" to true)
-                ).jsonArray(), "messagePage" to json("hasMore" to false), "pendingPrompts" to pending.jsonArray(), "jobEvents" to emptyList<JSONObject>().jsonArray())
-            path.contains("/file-tree") -> json("roots" to listOf(json("id" to "workspace", "label" to "工作区", "available" to true)).jsonArray())
-            path.contains("/review") -> json("branch" to "main", "comparison" to "工作区对比", "files" to emptyList<JSONObject>().jsonArray())
+                ).jsonArray(), "messagePage" to json("hasMore" to false), "pendingPrompts" to pending.jsonArray(), "jobEvents" to emptyList<JSONObject>().jsonArray(),
+                "outputFiles" to outputs.jsonArray())
+            path.contains("/file-tree/preview") -> {
+                val target = params(path)["path"].orEmpty()
+                if (target == "已删除文件.txt") throw ApiFailure(400, "ENOENT: no such file or directory, open '/workspace/已删除文件.txt'")
+                json("mimeType" to "text/plain", "content" to "会议记录第一行\n第二行包含中文与代码：val focus = \"专注\"\n第三行结束")
+            }
+            path.contains("/file-tree") -> {
+                val query = params(path)
+                val root = query["root"].orEmpty()
+                if (root.isBlank()) json("roots" to roots())
+                else json("roots" to roots(), "listing" to listing(root, query["path"].orEmpty()))
+            }
+            path.contains("/review") -> {
+                if (failReview) throw ApiFailure(500, "读取变更失败：Git 无法读取变更，请检查仓库权限、冲突状态或输出大小。")
+                val query = params(path)
+                val file = query["file"]
+                if (file != null) json("root" to "/workspace/codex-web", "branch" to "main", "bases" to listOf("refs/heads/main").jsonArray(),
+                    "base" to JSONObject.NULL, "comparison" to "HEAD 与工作区（包含已暂存和未暂存）", "files" to reviewFiles,
+                    "patch" to patchText, "truncated" to false)
+                else when (query["scope"]) {
+                    "staged" -> json("root" to "/workspace/codex-web", "branch" to "main", "bases" to listOf("refs/heads/main").jsonArray(),
+                        "base" to JSONObject.NULL, "comparison" to "HEAD 与暂存区", "files" to emptyList<JSONObject>().jsonArray())
+                    "branch" -> json("root" to "/workspace/codex-web", "branch" to "main", "bases" to listOf("refs/heads/main").jsonArray(),
+                        "base" to "refs/heads/main", "comparison" to "main 的共同祖先 → HEAD（仅已提交）", "files" to reviewFiles)
+                    else -> json("root" to "/workspace/codex-web", "branch" to "main", "bases" to listOf("refs/heads/main").jsonArray(),
+                        "base" to JSONObject.NULL, "comparison" to "HEAD 与工作区（包含已暂存和未暂存）", "files" to reviewFiles)
+                }
+            }
             else -> json()
         }
     }
@@ -169,21 +254,72 @@ class NativeUiTest {
         compose.waitUntil(5000) { model.state.detail?.objectValue("agentSelection")?.text("model") == "long-model" }
         compose.onNodeWithText("验收服务 · 超长模型显示名称用于验证选择行当前值可以完整换行显示并且不会被截断丢失信息").assertIsDisplayed()
         screenshot("native-options-long-model")
-        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithContentDescription("关闭选项").performClick()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("任务工具").performClick()
         compose.onNodeWithText("代码 Review").performClick()
-        compose.waitUntil(5000) { model.state.pageData != null }
-        compose.onNodeWithText("没有差异文件").assertIsDisplayed()
+        compose.waitUntil(5000) { model.state.pageData != null && !model.state.pageLoading }
+        // 紧凑摘要：分支、比较范围与统计；文件行展示类型与增删
+        compose.onNodeWithText("main").assertIsDisplayed()
+        compose.onNodeWithText("HEAD 与工作区（包含已暂存和未暂存）").assertIsDisplayed()
+        compose.onNodeWithText("13 个文件 · +201 / -140 · 部分文件未统计行数").assertIsDisplayed()
+        compose.onNodeWithText("src/main.kt").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("已修改 · +42 / -7").assertIsDisplayed()
+        compose.onNodeWithText("已删除 · +0 / -96").performScrollTo().assertIsDisplayed()
         screenshot("native-review")
+        // 进入差异：长行横向滚动（CodeBlock），返回后保留列表位置
+        compose.onNodeWithTag("review-list").performScrollToNode(hasText("src/zz-last-changed-file.kt"))
+        compose.onNodeWithText("src/zz-last-changed-file.kt").performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "patch" && model.state.pageData != null && !model.state.pageLoading }
+        compose.onNodeWithText("已修改 · +3 / -1").assertIsDisplayed()
+        compose.waitUntil(5000) { compose.onAllNodesWithText("+    val added = true", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        screenshot("native-patch")
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "review" && !model.state.pageLoading && model.state.pageData != null }
+        compose.waitForIdle()
+        // 位置保留：返回后无需滚动即可看到此前所在的列表末尾文件
+        compose.onNodeWithText("src/zz-last-changed-file.kt").assertIsDisplayed()
         compose.onNodeWithContentDescription("返回").performClick()
         compose.waitForIdle()
         compose.onNodeWithContentDescription("任务工具").performClick()
         compose.onNodeWithText("文件").performClick()
         compose.waitUntil(5000) { model.state.page?.kind == "files" && model.state.pageData != null }
-        compose.onNodeWithText("工作区").assertIsDisplayed()
+        // 文件页分层：任务产物 + 浏览项目文件（根目录行带名称/状态/导航指示）
+        compose.onNodeWithText("任务产物").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("output-row:out-1").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("重构完成报告.md").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("浏览项目文件").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("会话工作区").assertIsDisplayed()
+        compose.onNodeWithText("不可用").performScrollTo().assertIsDisplayed()
         screenshot("native-files")
+        compose.onNodeWithTag("root-row:workspace").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.pageData?.optJSONObject("listing") != null && !model.state.pageLoading }
+        compose.onNodeWithTag("file-row:docs").performScrollTo().assertIsDisplayed()
+        // 长中文名截断 + 查看完整名称
+        compose.onAllNodesWithContentDescription("查看完整名称").onFirst().performClick()
+        compose.onNodeWithText("完整名称").assertIsDisplayed()
+        compose.waitForIdle()
+        Thread.sleep(700) // 等待完整名称对话框进入动画结束
+        compose.onNodeWithText("会话工作区/$longFileName").assertIsDisplayed()
+        screenshot("native-files-full-name")
+        compose.onNodeWithText("关闭").performClick()
+        compose.onNodeWithTag("file-row:docs").performClick()
+        compose.waitUntil(5000) { model.state.pageData?.optJSONObject("listing")?.text("path") == "docs" && !model.state.pageLoading }
+        compose.onNodeWithTag("file-row:docs/会议记录.txt").assertIsDisplayed()
+        screenshot("native-files-docs")
+        compose.onNodeWithTag("file-row:docs/会议记录.txt").performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "preview" && model.state.pageData != null && !model.state.pageLoading }
+        compose.waitUntil(5000) { compose.onAllNodesWithText("会议记录第一行", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("会议记录第一行", substring = true).assertIsDisplayed()
+        screenshot("native-preview-text")
         compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
         compose.onNodeWithTag("composer").assertIsDisplayed()
         compose.runOnUiThread { model.appearance(theme = "dark") }
         screenshot("native-dark")
@@ -258,6 +394,13 @@ class NativeUiTest {
         compose.onNodeWithText("test-account").assertIsDisplayed()
         compose.onNodeWithText("example.org").assertIsDisplayed()
         compose.onNodeWithTag("account-header").assertIsDisplayed()
+        // 初次进入（未滚动）状态：账号摘要必须完整可见，不以滚动后的画面替代首屏
+        screenshot("native-profile-first")
+        // 外观选择行与聊天字号行在同一卡片内左右内边距一致
+        val density = compose.activity.resources.displayMetrics.density
+        val appearanceLeft = compose.onNodeWithText("外观").fetchSemanticsNode().boundsInRoot.left
+        val fontLeft = compose.onNodeWithText("聊天字号").fetchSemanticsNode().boundsInRoot.left
+        assertTrue("外观行与字号行左边距不一致: $appearanceLeft vs $fontLeft", kotlin.math.abs(appearanceLeft - fontLeft) <= 2f * density)
         compose.onNodeWithText("外观与阅读").assertIsDisplayed()
         compose.onNodeWithText("跟随系统").assertIsDisplayed()
         compose.onNodeWithText("范围 12–24 · 应用于聊天正文与样文").assertIsDisplayed()
@@ -276,6 +419,11 @@ class NativeUiTest {
         compose.onNodeWithText("跟随系统").assertIsDisplayed()
         Thread.sleep(700) // 等待对话框退场动画完全结束，避免中间帧污染稳定态截图
         screenshot("native-profile")
+        // 滚动后返回顶部：账号摘要再次完整可见（区分“滚动状态”与“首屏布局缺陷”）
+        compose.onNodeWithTag("account-header").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("外观与阅读").assertIsDisplayed()
+        Thread.sleep(300)
+        screenshot("native-profile-top")
         compose.onNodeWithTag("tab-Workspace").performClick()
         compose.onNodeWithText("让工具围绕当前对话").assertIsDisplayed()
         screenshot("native-workspace")
@@ -370,6 +518,121 @@ class NativeUiTest {
         compose.waitUntil(5000) { !model.state.busy }
         compose.onNodeWithTag("composer").assertTextContains("边转写边补充\n语音转写的内容")
         assertEquals(0, gateway.sends)
+    }
+
+    @Test fun reviewDistinguishesEmptyDiffFromReadFailure() {
+        login()
+        compose.onNodeWithContentDescription("任务工具").performClick()
+        compose.onNodeWithText("代码 Review").performClick()
+        compose.waitUntil(5000) { model.state.pageData != null && !model.state.pageLoading }
+        // 切到暂存区：真正的空差异是成功空态，不是失败
+        compose.onNodeWithTag("choice-范围").performClick()
+        compose.onNodeWithTag("choice-option-staged").performClick()
+        compose.waitUntil(5000) { model.state.pageData?.rows("files")?.isEmpty() == true && !model.state.pageLoading }
+        compose.onNodeWithText("当前范围内没有变更").assertIsDisplayed()
+        compose.onNodeWithText("刷新").assertIsDisplayed()
+        compose.onNodeWithText("读取变更失败").assertDoesNotExist()
+        screenshot("native-review-empty")
+        // 切到分支对比且读取失败：失败态不能显示“没有变更”
+        gateway.failReview = true
+        compose.onNodeWithTag("choice-范围").performClick()
+        compose.onNodeWithTag("choice-option-branch").performClick()
+        compose.waitUntil(5000) { model.state.pageError != null && !model.state.pageLoading }
+        compose.waitForIdle()
+        Thread.sleep(700) // 等待范围对话框退场动画结束，避免中间帧污染稳定态截图
+        compose.onNodeWithText("读取变更失败").assertIsDisplayed()
+        compose.onNodeWithText("当前范围内没有变更").assertDoesNotExist()
+        compose.onNodeWithText("没有变更").assertDoesNotExist()
+        screenshot("native-review-failed")
+        // 恢复后重试成功：文件列表出现，错误不残留
+        gateway.failReview = false
+        compose.onNodeWithText("重试").performClick()
+        compose.waitUntil(5000) { model.state.pageError == null && model.state.pageData?.rows("files")?.isNotEmpty() == true && !model.state.pageLoading }
+        compose.onNodeWithText("src/main.kt").assertIsDisplayed()
+        compose.onNodeWithText("main 的共同祖先 → HEAD（仅已提交）").assertIsDisplayed()
+        screenshot("native-review-recovered")
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        assertEquals(0, gateway.sends)
+    }
+
+    @Test fun filePagesCoverEmptyArtifactsEmptyDirErrorsAndRetry() {
+        gateway.outputsEmpty = true
+        login()
+        compose.onNodeWithTag("composer").performTextInput("浏览文件期间草稿不丢失")
+        compose.onNodeWithContentDescription("任务工具").performClick()
+        compose.onNodeWithText("文件").performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "files" && model.state.pageData != null && !model.state.pageLoading }
+        // 无产物：说明任务文件将出现在哪里，并可返回对话
+        compose.onNodeWithText("任务产物").assertIsDisplayed()
+        compose.onNodeWithText("任务还没有生成文件").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("返回对话").assertIsDisplayed()
+        screenshot("native-files-empty-outputs")
+        compose.onNodeWithText("返回对话").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("composer").assertTextContains("浏览文件期间草稿不丢失")
+        // 重新进入；列目录失败先于内容出现：错误态必须准确且不冒充空目录
+        gateway.listingError = "EACCES: permission denied, scandir '/workspace/codex-web'"
+        compose.onNodeWithContentDescription("任务工具").performClick()
+        compose.onNodeWithText("文件").performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "files" && model.state.pageData != null && !model.state.pageLoading }
+        compose.onNodeWithTag("root-row:workspace").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.pageError != null && !model.state.pageLoading }
+        compose.onNodeWithText("没有权限读取该位置，请检查目录权限。").assertIsDisplayed()
+        compose.onNodeWithText("这个目录是空的").assertDoesNotExist()
+        screenshot("native-files-error")
+        // 重试成功后错误不残留（重试只重读，不重放写请求）
+        gateway.listingError = null
+        compose.onNodeWithText("重试").performClick()
+        compose.waitUntil(5000) { model.state.pageError == null && model.state.pageData?.optJSONObject("listing") != null && !model.state.pageLoading }
+        compose.onNodeWithTag("file-row:docs").performScrollTo().assertIsDisplayed()
+        screenshot("native-files-error-recovered")
+        // 403：受限目录给出权限文案并可返回
+        compose.onNodeWithTag("file-row:受限目录").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.pageError != null && !model.state.pageLoading }
+        compose.onNodeWithText("没有权限读取该位置，请检查目录权限。").assertIsDisplayed()
+        compose.onNodeWithText("返回").performClick()
+        compose.waitUntil(5000) { model.state.pageError == null && model.state.pageData?.optJSONObject("listing")?.text("path") == "" && !model.state.pageLoading }
+        // 空目录状态 + 上一级返回
+        compose.onNodeWithTag("file-row:空目录").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.pageData?.optJSONObject("listing")?.text("path") == "空目录" && !model.state.pageLoading }
+        compose.onNodeWithText("这个目录是空的").assertIsDisplayed()
+        screenshot("native-files-empty-dir")
+        compose.onNodeWithText("上一级").performClick()
+        compose.waitUntil(5000) { model.state.pageData?.optJSONObject("listing")?.text("path") == "" && !model.state.pageLoading }
+        // 404：预览不存在的文件给出准确文案；重试按钮存在
+        compose.onNodeWithTag("file-row:已删除文件.txt").performScrollTo().performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithText("文件或目录不存在，可能已被移动、重命名或删除。").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("重试").assertIsDisplayed()
+        screenshot("native-preview-missing")
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        compose.onNodeWithTag("composer").assertTextContains("浏览文件期间草稿不丢失")
+        assertEquals(0, gateway.sends)
+        assertEquals(0, gateway.creates)
+    }
+
+    @Test fun newConversationHidesRenameUntilTaskExists() {
+        login()
+        compose.onNodeWithContentDescription("新建对话").performClick()
+        compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
+        compose.onNodeWithTag("welcome-chat").assertIsDisplayed()
+        // 没有可重命名对象：任务工具入口禁用，未创建任何任务
+        compose.onNodeWithContentDescription("任务工具").assertIsNotEnabled()
+        assertEquals(0, gateway.creates)
+        compose.onNodeWithTag("composer").performTextInput("从新对话发送")
+        compose.onNodeWithTag("send").performClick()
+        compose.waitUntil(10000) { gateway.sends == 1 && !model.state.busy }
+        assertNotNull(model.state.selectedId)
+        assertEquals("", model.state.composer.content)
+        assertEquals(1, gateway.creates)
     }
 
     @Test fun newConversationStartsWithComposerInsteadOfTaskDashboard() {

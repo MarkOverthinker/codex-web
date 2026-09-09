@@ -394,6 +394,14 @@ export function createApp(overrides: AppOverrides = {}) {
     return Boolean(size !== null && (mimeType.startsWith("image/") || mimeType === "application/pdf" || (isTextPreviewMime(mimeType) && size <= FILE_TREE_PREVIEW_MAX_BYTES)));
   }
 
+  /** fs 的 errno 原文带绝对路径，统一转成面向用户的文案；刻意抛出的校验错误原样保留。 */
+  function fileTreeClientError(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : "";
+    if (/ENOENT|no such file/i.test(message)) return "文件或目录不存在，可能已被移动、重命名或删除。";
+    if (/EACCES|EPERM|permission denied/i.test(message)) return "没有权限读取该位置，请检查目录权限。";
+    return message || fallback;
+  }
+
   function listFileTreeDirectory(conversation: ConversationRow, rootId: string, rawPath: unknown) {
     const target = fileTreeTargetFor(conversation, rootId, rawPath);
     if (!target) throw new Error("文件根目录不可用。");
@@ -2271,7 +2279,7 @@ export function createApp(overrides: AppOverrides = {}) {
         listing: listFileTreeDirectory(conversation, rootId, req.query.path),
       });
     } catch (error) {
-      return res.status(400).json({ error: error instanceof Error ? error.message : "无法读取文件目录。" });
+      return res.status(400).json({ error: fileTreeClientError(error, "无法读取文件目录。") });
     }
   });
 
@@ -2291,7 +2299,7 @@ export function createApp(overrides: AppOverrides = {}) {
       res.setHeader("Cache-Control", "private, no-store");
       return res.json({ mimeType: target.mimeType, content });
     } catch (error) {
-      return res.status(400).json({ error: error instanceof Error ? error.message : "文件读取失败。" });
+      return res.status(400).json({ error: fileTreeClientError(error, "文件读取失败。") });
     }
   });
 
@@ -2312,7 +2320,7 @@ export function createApp(overrides: AppOverrides = {}) {
       res.setHeader("Content-Disposition", contentDisposition(inline ? "inline" : "attachment", path.basename(target.absolute)));
       return res.sendFile(path.basename(target.absolute), { root: path.dirname(target.absolute) });
     } catch (error) {
-      return res.status(400).json({ error: error instanceof Error ? error.message : "文件读取失败。" });
+      return res.status(400).json({ error: fileTreeClientError(error, "文件读取失败。") });
     }
   });
 

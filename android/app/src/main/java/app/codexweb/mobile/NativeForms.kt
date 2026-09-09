@@ -89,11 +89,11 @@ fun NativeForm(title: String, fields: List<FormField>, explanation: String = "",
 }
 
 @Composable
-fun ChoiceField(label: String, value: String, options: List<Pair<String, String>>, choose: (String) -> Unit) {
+fun ChoiceField(label: String, value: String, options: List<Pair<String, String>>, modifier: Modifier = Modifier, choose: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     val current = options.find { it.first == value }?.second ?: value.ifBlank { "默认" }
-    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+    Row(modifier = modifier.fillMaxWidth().heightIn(min = 56.dp)
         .clickable { expanded = true }
         .testTag("choice-$label"), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(vertical = 8.dp)) {

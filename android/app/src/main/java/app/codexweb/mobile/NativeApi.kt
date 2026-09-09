@@ -108,8 +108,10 @@ class NativeApi(
         val response = execute(request(path, "GET", null))
         if (!response.isSuccessful) {
             val status = response.code
+            val raw = response.body?.string().orEmpty()
             response.close()
-            throw ApiFailure(status, "文件获取失败 ($status)，不跟随重定向。")
+            val detail = runCatching { JSONObject(raw).text("error") }.getOrNull()?.ifEmpty { null }
+            throw ApiFailure(status, detail ?: "文件获取失败 ($status)，不跟随重定向。")
         }
         return response
     }

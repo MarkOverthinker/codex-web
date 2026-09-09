@@ -3,9 +3,11 @@
 package app.codexweb.mobile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -35,6 +37,10 @@ fun ToolsScreen(model: ClientModel, download: (FileRequest) -> Unit, editPending
     val data = state.pageData ?: JSONObject()
     var form by remember(page) { mutableStateOf<FormRequest?>(null) }
     var submitting by remember(page) { mutableStateOf(false) }
+    // Review 文件列表的滚动状态提升到 ToolsScreen：进入差异再返回时保留所选范围与列表位置。
+    // 用普通 remember（而非 rememberSaveable）：页面分支切换不销毁 ToolsScreen，位置得以保留。
+    val reviewListState = remember { LazyListState() }
+    var reviewSeenPath by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state.busy, submitting) {
         if (submitting && !state.busy) {
             if (state.error == null) form = null
@@ -46,35 +52,45 @@ fun ToolsScreen(model: ClientModel, download: (FileRequest) -> Unit, editPending
         "queue" -> QueueScreen(model, editPending, confirm)
         "files" -> FileTreeScreen(model, data)
         "preview" -> NativePreview(model, page, download, confirm)
-        "review" -> ReviewScreen(model, data, openForm)
-        "patch" -> ToolColumn { if (data.optBoolean("truncated")) Text("差异已截断", color = MaterialTheme.colorScheme.error); CodeBlock(data.text("patch")) }
-        "side" -> ToolColumn {
-            Text("线程独占一个页面，与主任务互不挤占。", style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = { model.createSide("${state.conversationPath}/side-chats") }, enabled = !state.busy) { Text("新建侧边线程") }
-            OutlinedButton(onClick = { model.createSide("${state.conversationPath}/side-chat/context") }, enabled = !state.busy) { Text("携带主任务上下文") }
-            data.rows("sideChats").forEach { item -> val conversation = item.objectValue("conversation")
-                ToolRow(conversation.text("title"), conversation.text("updated_at")) { model.openSide(conversation.text("id")) }
-                TextButton(onClick = { confirm("将这个侧边线程提升为独立主任务？") { model.mutate("/side-chats/${conversation.text("id").segment()}/promote") } }) { Text("提升为主任务") }
+        "review" -> {
+            LaunchedEffect(page.path) {
+                if (reviewSeenPath != null && reviewSeenPath != page.path) reviewListState.scrollToItem(0)
+                reviewSeenPath = page.path
             }
-            if (data.rows("sideChats").isEmpty() && !state.pageLoading) Text("还没有侧边线程")
+            ReviewScreen(model, data, reviewListState)
         }
-        "directories" -> DirectoriesScreen(model, data, openForm, confirm)
-        "host" -> HostScreen(model, data, confirm)
-        "settings" -> SettingsScreen(model, openForm, confirm)
-        "presets" -> PresetsScreen(model, data, openForm, confirm)
-        "providers" -> ProvidersScreen(model, data, openForm, confirm)
-        "models" -> ModelsScreen(model, data, openForm, confirm)
-        "billing" -> BillingScreen(model, data, openForm, confirm)
-        "categories" -> CategoriesScreen(model, data, openForm, confirm)
-        "category-tasks" -> CategoryTasks(model, page)
-        "archived" -> ToolColumn {
-            if (data.rows("conversations").isEmpty()) Text("没有已归档任务")
-            data.rows("conversations").forEach { item ->
-                ToolRow(item.text("title"), "恢复后返回任务列表查看") { model.mutate("/conversations/${item.text("id").segment()}/restore") }
+        "patch" -> PatchScreen(model, page, data)
+        else -> when {
+            state.pageLoading && state.pageData == null -> PageLoadingView("正在读取…")
+            state.pageError != null && state.pageData == null -> PageErrorView(model)
+            page.kind == "side" -> ToolColumn {
+                Text("线程独占一个页面，与主任务互不挤占。", style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = { model.createSide("${state.conversationPath}/side-chats") }, enabled = !state.busy) { Text("新建侧边线程") }
+                OutlinedButton(onClick = { model.createSide("${state.conversationPath}/side-chat/context") }, enabled = !state.busy) { Text("携带主任务上下文") }
+                data.rows("sideChats").forEach { item -> val conversation = item.objectValue("conversation")
+                    ToolRow(conversation.text("title"), conversation.text("updated_at")) { model.openSide(conversation.text("id")) }
+                    TextButton(onClick = { confirm("将这个侧边线程提升为独立主任务？") { model.mutate("/side-chats/${conversation.text("id").segment()}/promote") } }) { Text("提升为主任务") }
+                }
+                if (data.rows("sideChats").isEmpty() && !state.pageLoading) Text("还没有侧边线程")
             }
+            page.kind == "directories" -> DirectoriesScreen(model, data, openForm, confirm)
+            page.kind == "host" -> HostScreen(model, data, confirm)
+            page.kind == "settings" -> SettingsScreen(model, openForm, confirm)
+            page.kind == "presets" -> PresetsScreen(model, data, openForm, confirm)
+            page.kind == "providers" -> ProvidersScreen(model, data, openForm, confirm)
+            page.kind == "models" -> ModelsScreen(model, data, openForm, confirm)
+            page.kind == "billing" -> BillingScreen(model, data, openForm, confirm)
+            page.kind == "categories" -> CategoriesScreen(model, data, openForm, confirm)
+            page.kind == "category-tasks" -> CategoryTasks(model, page)
+            page.kind == "archived" -> ToolColumn {
+                if (data.rows("conversations").isEmpty()) Text("没有已归档任务")
+                data.rows("conversations").forEach { item ->
+                    ToolRow(item.text("title"), "恢复后返回任务列表查看") { model.mutate("/conversations/${item.text("id").segment()}/restore") }
+                }
+            }
+            page.kind == "import" -> ImportScreen(model, data)
+            else -> EmptyState("未识别的页面", "请返回任务列表重试。")
         }
-        "import" -> ImportScreen(model, data)
-        else -> EmptyState("未识别的页面", "请返回任务列表重试。")
     }
     form?.let { request -> NativeForm(request.title, request.fields, request.explanation, busy = state.busy, onDismiss = { form = null }) { payload ->
         submitting = true
@@ -89,6 +105,165 @@ fun ToolColumn(content: @Composable ColumnScope.() -> Unit) {
         content()
         Spacer(Modifier.height(32.dp))
     }
+}
+
+@Composable
+private fun PageLoadingView(hint: String) {
+    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Spacer(Modifier.height(88.dp))
+        CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
+        Text(hint, Modifier.padding(top = 14.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** 页内读取失败：只提供只读的重试（刷新）与返回，不重放任何发送/上传请求。 */
+@Composable
+private fun PageErrorView(model: ClientModel, title: String = "读取失败") {
+    Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.error)
+        Text(title, Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
+        Text(friendlyIoMessage(model.state.pageError.orEmpty()), Modifier.padding(top = 8.dp),
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Row(Modifier.padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = { model.back() }) { Text("返回") }
+            Button(onClick = { model.refresh() }, enabled = !model.state.busy) { Text("重试") }
+        }
+    }
+}
+
+@Composable
+private fun InlineError(message: String, retry: () -> Unit, back: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.error)
+        Text(friendlyIoMessage(message), Modifier.padding(top = 12.dp), fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Row(Modifier.padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = back) { Text("返回") }
+            Button(onClick = retry) { Text("重试") }
+        }
+    }
+}
+
+/** 服务端 4xx 错误信息可能带 errno 原文（含绝对路径），客户端转换为准确的用户文案。 */
+internal fun friendlyIoMessage(message: String): String = when {
+    message.isBlank() -> "读取失败，请检查网络后重试。"
+    message.contains("ENOENT") || message.contains("no such file", true) -> "文件或目录不存在，可能已被移动、重命名或删除。"
+    message.contains("EACCES") || message.contains("EPERM") || message.contains("permission denied", true) -> "没有权限读取该位置，请检查目录权限。"
+    else -> message
+}
+
+@Composable
+private fun BreadcrumbRow(rootLabel: String, relativePath: String) {
+    val segments = listOf(rootLabel) + relativePath.split("/").filter { it.isNotBlank() }
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+        segments.forEachIndexed { index, segment ->
+            if (index > 0) Text(" / ", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(segment.trim(), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 12.sp,
+                fontWeight = if (index == segments.lastIndex) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Normal,
+                color = if (index == segments.lastIndex) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, description: String) {
+    Column(Modifier.padding(top = 10.dp, bottom = 6.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Text(description, Modifier.padding(top = 2.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun EmptyHint(title: String, description: String, actionLabel: String? = null, action: () -> Unit = {}) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(Icons.Outlined.FolderOpen, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(title, Modifier.padding(top = 12.dp), fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Text(description, Modifier.padding(top = 6.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        if (actionLabel != null) OutlinedButton(onClick = action, modifier = Modifier.padding(top = 14.dp)) { Text(actionLabel) }
+    }
+}
+
+@Composable
+private fun RootEntryRow(root: JSONObject, onOpen: () -> Unit) {
+    val available = root.optBoolean("available")
+    ListItem(modifier = Modifier.clickable(enabled = available, onClick = onOpen).heightIn(min = 60.dp).testTag("root-row:${root.text("id")}"),
+        leadingContent = { Icon(if (available) Icons.Outlined.FolderOpen else Icons.Outlined.FolderOff, null, Modifier.size(22.dp),
+            tint = if (available) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) },
+        headlineContent = { Text(root.text("label")) },
+        supportingContent = {
+            Text(if (available) root.text("path").ifBlank { "可浏览" } else "当前不可用，无法浏览此目录",
+                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 12.sp)
+        },
+        trailingContent = {
+            if (available) Icon(Icons.Outlined.ChevronRight, "浏览此目录", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            else Text("不可用", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+        })
+}
+
+@Composable
+private fun FileEntryRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, meta: String,
+                         tint: Color = MaterialTheme.colorScheme.primary, needsFull: Boolean = false,
+                         onShowFull: (() -> Unit)? = null, rowTag: String = "", onClick: () -> Unit) {
+    ListItem(modifier = Modifier.clickable(onClick = onClick).heightIn(min = 56.dp)
+        .then(if (rowTag.isBlank()) Modifier else Modifier.testTag(rowTag)),
+        leadingContent = { Icon(icon, null, Modifier.size(22.dp), tint = tint) },
+        headlineContent = { Text(title, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        supportingContent = if (meta.isBlank()) null else ({ Text(meta, maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 12.sp) }),
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (needsFull && onShowFull != null) IconButton(onClick = onShowFull, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Outlined.Info, "查看完整名称", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        })
+}
+
+private fun fileIcon(mime: String, isDir: Boolean): androidx.compose.ui.graphics.vector.ImageVector = when {
+    isDir -> Icons.Outlined.Folder
+    mime.startsWith("image/") -> Icons.Outlined.Image
+    mime == "application/pdf" -> Icons.Outlined.PictureAsPdf
+    mime.startsWith("text/") || mime.contains("json") || mime.contains("xml") -> Icons.Outlined.Description
+    else -> Icons.Outlined.InsertDriveFile
+}
+
+private fun fileSizeLabel(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
+    else -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0)
+}
+
+private fun fileMeta(size: Long, mtime: String): String =
+    listOf(if (size >= 0) fileSizeLabel(size) else "", mtime.takeIf { it.length >= 10 }?.take(10) ?: "").filter { it.isNotBlank() }.joinToString(" · ")
+
+private fun queryValues(path: String): Map<String, String> = path.substringAfter('?', "")
+    .split('&').filter { it.contains('=') }
+    .associate { part -> val pair = part.split('=', limit = 2)
+        pair[0] to java.net.URLDecoder.decode(pair[1], "UTF-8") }
+
+private fun reviewStatusLabel(status: String): String = when (status) {
+    "M" -> "已修改"; "A" -> "新增"; "D" -> "已删除"; "R" -> "重命名"; "C" -> "复制"; "?" -> "未跟踪"
+    else -> status.ifBlank { "变更" }
+}
+
+@Composable
+private fun reviewStatusColor(status: String): Color = when (status) {
+    "D" -> MaterialTheme.colorScheme.error
+    "A" -> MaterialTheme.colorScheme.primary
+    "?" -> BrandAmber
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun reviewStatusIcon(status: String): androidx.compose.ui.graphics.vector.ImageVector = when (status) {
+    "M" -> Icons.Outlined.Edit
+    "A" -> Icons.Outlined.AddCircle
+    "D" -> Icons.Outlined.Delete
+    "R", "C" -> Icons.Outlined.SwapHoriz
+    "?" -> Icons.Outlined.HelpOutline
+    else -> Icons.Outlined.InsertDriveFile
 }
 
 @Composable
@@ -197,54 +372,210 @@ private fun QueueCard(model: ClientModel, prompt: JSONObject, index: Int, total:
 private fun FileTreeScreen(model: ClientModel, data: JSONObject) {
     val state = model.state
     val listing = data.optJSONObject("listing")
-    ToolColumn {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            data.rows("roots").forEach { root -> AssistChip(onClick = {
-                model.navigate(ToolPage(root.text("label"), "files", "${state.conversationPath}/file-tree?root=${root.text("id").segment()}&path="))
-            }, enabled = root.optBoolean("available"), label = { Text(root.text("label")) }) }
+    val page = state.page ?: return
+    var nameInfo by remember(page) { mutableStateOf<Pair<String, String>?>(null) }
+    when {
+        state.pageLoading && state.pageData == null -> ToolColumn {
+            page.args.text("rootLabel").takeIf { it.isNotBlank() }?.let { label ->
+                BreadcrumbRow(label, page.args.text("path"))
+                Spacer(Modifier.height(24.dp))
+            }
+            PageLoadingView("正在读取文件…")
         }
-        if (listing != null) {
-            val root = listing.text("rootId")
-            Text(listing.text("path").ifBlank { "/" }, fontSize = 12.sp)
-            if (!listing.isNull("parentPath")) TextButton(onClick = {
-                model.navigate(ToolPage("文件", "files", "${state.conversationPath}/file-tree?root=${root.segment()}&path=${listing.text("parentPath").segment()}"))
-            }) { Text("上级目录") }
-            listing.rows("entries").forEach { entry ->
-                ToolRow((if (entry.text("type") == "dir") "目录 · " else "") + entry.text("name"), entry.text("display_path")) {
-                    val query = "root=${root.segment()}&path=${entry.text("path").segment()}"
-                    if (entry.text("type") == "dir") model.navigate(ToolPage(entry.text("name"), "files", "${state.conversationPath}/file-tree?$query"))
-                    else model.navigate(ToolPage(entry.text("name"), "preview", "", json("downloadPath" to "${state.conversationPath}/file-tree/file?$query", "mime" to entry.text("mime_type"))))
+        state.pageError != null && state.pageData == null -> ToolColumn {
+            page.args.text("rootLabel").takeIf { it.isNotBlank() }?.let { label -> BreadcrumbRow(label, page.args.text("path")) }
+            Spacer(Modifier.height(12.dp))
+            InlineError(model.state.pageError.orEmpty(), retry = { model.refresh() }, back = { model.back() })
+        }
+        else -> LazyColumn(Modifier.fillMaxSize().testTag("files-list"), contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (listing == null) {
+                item(key = "section-output") { SectionHeader("任务产物", "任务运行生成的结果文件，点击预览或下载") }
+                val outputs = state.detail?.rows("outputFiles").orEmpty()
+                items(outputs, key = { "output:${it.text("id")}" }) { file ->
+                    FileEntryRow(fileIcon(file.text("mime_type"), false), file.text("original_name", file.text("name")),
+                        fileMeta(file.optLong("size", -1), file.text("created_at")), rowTag = "output-row:${file.text("id")}") { model.previewFile(file) }
+                }
+                if (outputs.isEmpty()) item(key = "output-empty") {
+                    EmptyHint("任务还没有生成文件", "任务完成后，生成的文件会出现在这里。可以返回对话继续描述你需要的产物。",
+                        "返回对话") { model.back() }
+                }
+                item(key = "divider") { HorizontalDivider(Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f)) }
+                item(key = "section-browse") { SectionHeader("浏览项目文件", "按根目录查看任务工作目录、会话工作区和资料库") }
+                items(data.rows("roots"), key = { "root:${it.text("id")}" }) { root ->
+                    RootEntryRow(root) {
+                        model.navigate(ToolPage(root.text("label"), "files",
+                            "${state.conversationPath}/file-tree?root=${root.text("id").segment()}&path=",
+                            json("rootId" to root.text("id"), "rootLabel" to root.text("label"), "path" to "")))
+                    }
+                }
+                item(key = "attach") {
+                    FileEntryRow(Icons.Outlined.AttachFile, "从服务器添加附件", "浏览服务器目录并加入草稿", tint = MaterialTheme.colorScheme.onSurfaceVariant) {
+                        model.navigate(ToolPage("服务器文件", "host", "/path-browser", json("attach" to true)))
+                    }
+                }
+            } else {
+                val rootId = listing.text("rootId")
+                val rootLabel = data.rows("roots").find { it.text("id") == rootId }?.text("label")
+                    ?: page.args.text("rootLabel", "文件")
+                item(key = "breadcrumb") {
+                    Column(Modifier.padding(bottom = 6.dp)) {
+                        BreadcrumbRow(rootLabel, listing.text("path"))
+                        if (!listing.isNull("parentPath")) TextButton(onClick = { model.back() }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                            // 上一层目录就在页面栈中：返回弹出而不是再压入一层，避免返回链越退越长
+                            Icon(Icons.Outlined.ArrowUpward, null, Modifier.size(16.dp))
+                            Text("上一级", Modifier.padding(start = 6.dp), fontSize = 13.sp)
+                        }
+                    }
+                }
+                val entries = listing.rows("entries")
+                items(entries, key = { "entry:${it.text("path")}" }) { entry ->
+                    val isDir = entry.text("type") == "dir"
+                    val name = entry.text("name")
+                    val needsFull = name.length > 18 || entry.text("display_path").length > 34
+                    FileEntryRow(fileIcon(entry.text("mime_type"), isDir), name, fileMeta(entry.optLong("size", -1), entry.text("mtime"))
+                        .ifBlank { if (isDir) "目录" else "" },
+                        needsFull = needsFull, rowTag = "file-row:${entry.text("path")}",
+                        onShowFull = if (needsFull) ({ nameInfo = name to entry.text("display_path") }) else null) {
+                        val query = "root=${rootId.segment()}&path=${entry.text("path").segment()}"
+                        if (isDir) model.navigate(ToolPage(name, "files", "${state.conversationPath}/file-tree?$query",
+                            json("rootId" to rootId, "rootLabel" to rootLabel, "path" to entry.text("path"))))
+                        else {
+                            val mime = entry.text("mime_type")
+                            val args = json("downloadPath" to "${state.conversationPath}/file-tree/file?$query", "mime" to mime)
+                            if (entry.optBoolean("previewable") && !mime.startsWith("image/") && mime != "application/pdf") {
+                                args.put("snippetPath", "${state.conversationPath}/file-tree/preview?$query")
+                            }
+                            model.navigate(ToolPage(name, "preview", "", args))
+                        }
+                    }
+                }
+                if (entries.isEmpty()) item(key = "empty-dir") {
+                    EmptyHint("这个目录是空的", "子目录和文件会显示在这里，也可以返回上一级查看其他内容。")
+                }
+                if (listing.optBoolean("truncated")) item(key = "truncated") {
+                    Text("目录内容较多已截断，请进入更具体的子目录查看。", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (listing.optBoolean("truncated")) Text("目录内容已截断，使用更具体的子目录。")
-            if (listing.rows("entries").isEmpty()) Text("目录为空")
+            item(key = "bottom-space") { Spacer(Modifier.height(24.dp)) }
         }
-        if (listing == null) {
-            Text("结果文件", style = MaterialTheme.typography.titleMedium)
-            state.detail?.rows("outputFiles").orEmpty().forEach { file -> FileChip(file) { model.previewFile(file) } }
-            OutlinedButton(onClick = { model.navigate(ToolPage("服务器文件", "host", "/path-browser", json("attach" to true))) }) { Text("从服务器添加附件") }
-        }
+    }
+    nameInfo?.let { (name, fullPath) ->
+        AlertDialog(onDismissRequest = { nameInfo = null }, title = { Text("完整名称") },
+            text = { Column { Text(name, Modifier.horizontalScroll(rememberScrollState())); Text(fullPath, Modifier.padding(top = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+            confirmButton = { TextButton(onClick = { nameInfo = null }) { Text("关闭") } })
     }
 }
 
 @Composable
-private fun ReviewScreen(model: ClientModel, data: JSONObject, form: (FormRequest) -> Unit) {
+private fun ReviewScreen(model: ClientModel, data: JSONObject, listState: LazyListState) {
     val state = model.state
-    val scope = state.page?.args?.text("scope", "working") ?: "working"
-    ToolColumn {
-        Text("${data.text("branch")} · ${data.text("comparison")}")
-        ChoiceField("范围", scope, listOf("working" to "工作区", "staged" to "暂存区", "branch" to "分支对比")) { value ->
-            model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=$value", json("scope" to value)))
-        }
-        if (scope == "branch") ChoiceField("基准分支", data.text("base"), data.strings("bases").map { it to it }) { base ->
-            model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=branch&base=${base.segment()}", json("scope" to "branch")))
-        }
-        data.rows("files").forEach { file ->
-            ToolRow(file.text("path"), "${file.text("status")} · +${file.text("additions", "0")} / -${file.text("deletions", "0")}") {
-                model.navigate(ToolPage(file.text("path"), "patch", "${state.conversationPath}/review?scope=$scope&base=${data.text("base").segment()}&file=${file.text("path").segment()}"))
+    val page = state.page ?: return
+    val query = queryValues(page.path)
+    val scope = page.args.text("scope", query["scope"] ?: "working")
+    val navigateScope: (String) -> Unit = { value ->
+        model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=$value", json("scope" to value)), replace = true)
+    }
+    if (state.pageLoading && state.pageData == null) { PageLoadingView("正在读取变更…"); return }
+    // 读取失败必须与“真正的空差异”区分：失败态给错误、重试与返回，不显示“没有变更”
+    if (state.pageError != null && state.pageData == null) { PageErrorView(model, "读取变更失败"); return }
+    val files = data.rows("files")
+    val counted = files.filter { it.optLong("additions", -1) >= 0 }
+    val additions = counted.sumOf { it.optLong("additions", 0) }
+    val deletions = counted.sumOf { it.optLong("deletions", 0) }
+    val summaryLine = when {
+        files.isEmpty() -> ""
+        counted.size < files.size -> "${files.size} 个文件 · +$additions / -$deletions · 部分文件未统计行数"
+        else -> "${files.size} 个文件 · +$additions / -$deletions"
+    }
+    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("review-list"),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        item(key = "summary") {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.AccountTree, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(data.text("branch").ifBlank { "未知分支" }, Modifier.padding(start = 8.dp),
+                            fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    }
+                    Text(data.text("comparison").ifBlank { "读取变更范围失败" }, Modifier.padding(top = 2.dp), fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (summaryLine.isNotBlank()) Text(summaryLine, Modifier.padding(top = 2.dp), fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ChoiceField("范围", scope, listOf("working" to "工作区", "staged" to "暂存区", "branch" to "分支对比"),
+                        Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp)) { navigateScope(it) }
+                    if (scope == "branch") ChoiceField("基准分支", data.text("base"), data.strings("bases").map { it to it },
+                        Modifier.padding(top = 4.dp, start = 16.dp, end = 16.dp)) { base ->
+                        model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=branch&base=${base.segment()}", json("scope" to "branch")), replace = true)
+                    }
+                }
             }
         }
-        if (data.rows("files").isEmpty() && !state.pageLoading) Text("没有差异文件")
+        state.pageError?.let { message -> item(key = "stale-error") {
+            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("刷新失败：${friendlyIoMessage(message)}", Modifier.weight(1f), fontSize = 12.sp, maxLines = 3)
+                    TextButton(onClick = { model.refresh() }, enabled = !state.busy) { Text("重试") }
+                }
+            }
+        } }
+        if (files.isEmpty()) item(key = "empty-diff") {
+            Column(Modifier.fillMaxWidth().padding(vertical = 36.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Outlined.TaskAlt, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
+                Text("当前范围内没有变更", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
+                Text("对比已完成且没有差异。可切换范围或刷新后查看其他变更。", Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                OutlinedButton(onClick = { model.refresh() }, enabled = !state.busy, modifier = Modifier.padding(top = 18.dp)) { Text("刷新") }
+            }
+        }
+        items(files, key = { "file:${it.text("path")}" }) { file ->
+            val status = file.text("status")
+            ListItem(modifier = Modifier.clickable {
+                model.navigate(ToolPage(file.text("path"), "patch",
+                    "${state.conversationPath}/review?scope=$scope&base=${data.text("base").segment()}&file=${file.text("path").segment()}",
+                    json("scope" to scope)))
+            }.heightIn(min = 56.dp),
+                leadingContent = { Icon(reviewStatusIcon(status), null, Modifier.size(20.dp), tint = reviewStatusColor(status)) },
+                headlineContent = { Text(file.text("path"), fontFamily = FontFamily.Monospace, fontSize = 13.sp, maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                supportingContent = {
+                    val stat = file.optLong("additions", -1)
+                    Text("${reviewStatusLabel(status)}" + if (stat >= 0) " · +${file.optLong("additions", 0)} / -${file.optLong("deletions", 0)}" else " · 行数未统计",
+                        fontSize = 12.sp)
+                },
+                trailingContent = { Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) })
+        }
+        item(key = "bottom-space") { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun PatchScreen(model: ClientModel, page: ToolPage, data: JSONObject) {
+    val state = model.state
+    when {
+        state.pageLoading && state.pageData == null -> PageLoadingView("正在读取差异…")
+        state.pageError != null && state.pageData == null -> PageErrorView(model, "读取差异失败")
+        else -> ToolColumn {
+            data.rows("files").find { it.text("path") == page.title }?.let { file ->
+                val stat = file.optLong("additions", -1)
+                Text("${reviewStatusLabel(file.text("status"))}" + if (stat >= 0) " · +${file.optLong("additions", 0)} / -${file.optLong("deletions", 0)}" else "",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (data.optBoolean("truncated")) Text("差异过长已截断，这里仅显示前一部分。", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+            val patch = data.text("patch")
+            when {
+                patch == "二进制文件，不提供文本 diff。" || patch == "符号链接或特殊文件，不提供内容预览。" -> Surface(
+                    shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Info, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(patch, Modifier.padding(start = 10.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                patch.isBlank() -> Text("此文件没有可显示的文本差异。", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> CodeBlock(patch)
+            }
+        }
     }
 }
 
@@ -342,7 +673,8 @@ private fun SettingsScreen(model: ClientModel, form: (FormRequest) -> Unit, conf
             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column {
-                ChoiceField("外观", state.theme, listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")) { model.appearance(theme = it) }
+                ChoiceField("外观", state.theme, listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色"),
+                    Modifier.padding(horizontal = 16.dp)) { model.appearance(theme = it) }
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp).testTag("font-size-row")) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

@@ -8,6 +8,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -41,7 +42,8 @@ fun NativePreview(model: ClientModel, page: ToolPage, download: (FileRequest) ->
     val path = page.args.text("downloadPath")
     val mime = page.args.text("mime", "application/octet-stream")
     var pageIndex by remember(page) { mutableIntStateOf(0) }
-    val preview by produceState<PreviewContent?>(null, path, pageIndex, model.state.server) {
+    var retry by remember(page) { mutableIntStateOf(0) }
+    val preview by produceState<PreviewContent?>(null, path, pageIndex, retry, model.state.server) {
         value = null
         value = withContext(Dispatchers.IO) {
             try {
@@ -82,7 +84,10 @@ fun NativePreview(model: ClientModel, page: ToolPage, download: (FileRequest) ->
                         else -> PreviewContent(error = "此格式请下载后用系统应用打开。")
                     }
                 }
-            } catch (reason: Exception) { PreviewContent(error = reason.message ?: "预览失败") }
+            } catch (reason: Exception) {
+                if (reason is kotlinx.coroutines.CancellationException) throw reason
+                PreviewContent(error = friendlyIoMessage(reason.message ?: "预览失败"))
+            }
         }
     }
     ToolColumn {
@@ -93,8 +98,14 @@ fun NativePreview(model: ClientModel, page: ToolPage, download: (FileRequest) ->
                 model.note("分享链接已复制，有效期至 ${result.text("expiresAt")}")
             })
         } }) { Text("创建分享链接") }
-        if (preview == null) CircularProgressIndicator()
-        preview?.error?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (preview == null) CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
+        preview?.error?.let { message ->
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(message, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                // 重试只重新读取内容，不重放任何写请求；“此格式请下载”属于确定性结论，不提供重试
+                if (!message.startsWith("此格式")) TextButton(onClick = { retry++ }) { Text("重试") }
+            }
+        }
         preview?.bitmap?.let { bitmap -> Image(bitmap.asImageBitmap(), page.title, Modifier.fillMaxWidth().heightIn(max = 650.dp)) }
         if ((preview?.pages ?: 0) > 1) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(onClick = { pageIndex-- }, enabled = pageIndex > 0) { Text("上一页") }

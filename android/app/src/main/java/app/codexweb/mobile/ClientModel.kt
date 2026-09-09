@@ -493,19 +493,25 @@ class ClientModel(
         state.selectedId?.let { reconcile(it) }
     }
 
-    fun navigate(page: ToolPage) {
-        state.page?.let { pages.addLast(it) }
-        state = state.copy(page = page, pageData = null, error = null)
-        viewModelScope.launch { try { loadPage() } catch (reason: Exception) { error(reason) } }
+    fun navigate(page: ToolPage, replace: Boolean = false) {
+        // replace 用于“同一页面的筛选条件变化”（如 Review 范围/基准分支）：不压栈，返回时直接回到上一层
+        if (!replace) state.page?.let { pages.addLast(it) }
+        state = state.copy(page = page, pageData = null, pageError = null, error = null)
+        viewModelScope.launch { loadPage() }
     }
 
     private suspend fun loadPage() {
         val page = state.page ?: return
         val generation = ++pageGeneration
-        state = state.copy(pageLoading = true)
+        state = state.copy(pageLoading = true, pageError = null)
         try {
             val result = if (page.path.isEmpty()) JSONObject() else get(page.path)
             if (generation == pageGeneration && state.page == page) state = state.copy(pageData = result)
+        } catch (reason: Exception) {
+            if (reason is CancellationException) throw reason
+            // 401 表示登录整体失效，交给全局会话处理；其余页面读取失败在页内呈现，避免误当空数据。
+            if (reason is ApiFailure && reason.status == 401) error(reason)
+            else if (generation == pageGeneration) state = state.copy(pageError = reason.message ?: "读取失败，请检查网络后重试。")
         } finally { if (generation == pageGeneration) state = state.copy(pageLoading = false) }
     }
 
@@ -514,8 +520,8 @@ class ClientModel(
         if (state.page != null) {
             pageGeneration++
             val previous = pages.removeLastOrNull()
-            state = state.copy(page = previous, pageData = null, pageLoading = false)
-            if (previous != null) viewModelScope.launch { try { loadPage() } catch (reason: Exception) { error(reason) } }
+            state = state.copy(page = previous, pageData = null, pageError = null, pageLoading = false)
+            if (previous != null) viewModelScope.launch { loadPage() }
             return true
         }
         if (state.selectedId != null) {
