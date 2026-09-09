@@ -103,6 +103,8 @@
 
 ## 构建与验证
 
+每次版本发布还必须同步固定下载页、APK、校验文件和更新说明，见 [标准发布流程](ANDROID_RELEASES.md)。仅在对话中提供附件不算完成发布。
+
 依赖：JDK 17、Android SDK platform 36、Build Tools、Gradle Wrapper 下载网络。首次 Compose 构建会下载 Maven 依赖。可在未提交的 `android/local.properties` 配置 `sdk.dir`。
 
 ```sh
