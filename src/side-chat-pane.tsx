@@ -21,7 +21,7 @@ import {
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { formatSourceLocation } from "./message-source";
 import { copyText } from "./copy-path";
-import { VoiceInput } from "./voice-input";
+import { useVoiceInput, VoiceControls, VoiceStatus } from "./voice-input";
 import { appendVoiceTranscript } from "./voice-input-state";
 import type { VoiceModelOption } from "./api";
 
@@ -109,7 +109,6 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
   const [history, setHistory] = useState<SideChatSummary[]>([]);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [input, setInput] = useState("");
-  const [voiceBusy, setVoiceBusy] = useState(false);
   const [reference, setReference] = useState<MessageSourceReference | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -125,6 +124,18 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
   inputRef.current = input;
   detailRef.current = detail;
   historyRef.current = history;
+
+  const voice = useVoiceInput({
+    scopeKey: `${detail?.conversation.id ?? currentConversation.id}:${voicePreferenceKey}`,
+    models: voiceModels, preferenceKey: voicePreferenceKey, conversationId: detail?.conversation.id ?? currentConversation.id,
+    disabled: submitting || loading || (!detail && Boolean(currentConversation.archived_at)), draftText: input,
+    onTranscript: (text, send) => {
+      const combined = appendVoiceTranscript(inputRef.current, text);
+      inputRef.current = combined;
+      setInput(combined);
+      if (send) void sendInput(combined);
+    },
+  });
 
   async function refresh(conversationId: string, hydrateDraft = false) {
     const next = await api.conversation(conversationId);
@@ -368,14 +379,20 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
     void saveSelection({ model: model.id, reasoningEffort: effort, sandbox: detail.agentSelection.sandbox, ...(model.provider ? { provider: model.provider } : {}) });
   }
 
-  async function submit(event: FormEvent) {
+  function submit(event: FormEvent) {
     event.preventDefault();
-    if (submitting || voiceBusy || (!input.trim() && !reference)) return;
+    if (submitting || loading) return;
+    if (voice.phase === "recording") voice.stop(true);
+    else if (voice.phase === "idle") void sendInput(inputRef.current);
+  }
+
+  async function sendInput(content: string) {
+    if (submitting || (!content.trim() && !reference)) return;
     setSubmitting(true);
     try {
       const target = await ensureActiveSideConversation(currentConversation);
-      await api.saveConversationDraft(target.conversation.id, input, reference?.excerpt ?? "", reference);
-      await api.sendMessage(target.conversation.id, input, [], reference?.excerpt ?? "", true);
+      await api.saveConversationDraft(target.conversation.id, content, reference?.excerpt ?? "", reference);
+      await api.sendMessage(target.conversation.id, content, [], reference?.excerpt ?? "", true);
       setInput(""); setReference(null);
       await refresh(target.conversation.id, false);
       await refreshHistory();
@@ -421,7 +438,7 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
       </select></label>
       <button type="button" onClick={() => void createSideConversation(currentConversation).catch((reason) => onError(reason instanceof Error ? reason.message : "新建侧边聊天失败"))} disabled={!canCreateForCurrent || loading} title="为当前任务新建侧边对话"><Plus size={14} />新建</button>
     </div>
-    <div className="side-chat-settings">
+    <div className={`side-chat-settings${voice.models.length ? " with-voice" : ""}`}>
       <label><span>模型</span><select value={selectedModel} disabled={!detail || selectionSaving || !agentOptions} onChange={(event) => changeModel(event.target.value)}>
         {modelGroups.map((provider) => <optgroup key={provider.id} label={provider.name}>
           {provider.models.map((model) => <option key={`${model.provider ?? "default"}:${model.id}`} value={model.id}>{modelLabel(model)}</option>)}
@@ -433,6 +450,9 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
       }}>
         {effortOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
       </select></label>
+      {voice.models.length > 0 && <label><span>语音</span><select aria-label="语音识别模型" value={voice.model} disabled={voice.disabled || voice.phase !== "idle"} onChange={(event) => voice.selectModel(event.target.value)}>
+        {voice.models.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+      </select></label>}
     </div>
     {detail?.conversation.fork_source_message_id && <div className="side-chat-fork-banner"><GitFork size={13} /><span>已从主对话指定位置 Fork；首次发送时创建独立线程。</span></div>}
     <div ref={messagesRef} className="side-chat-messages">
@@ -450,14 +470,14 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
       <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={reference ? "基于这段引用继续提问…" : "在侧边线程中提问…"} rows={3} disabled={submitting || (!detail && !canCreateForCurrent)} onKeyDown={(event) => {
         if (shouldSubmitOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, mobile: window.matchMedia(MOBILE_MEDIA_QUERY).matches })) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
       }} />
-      <VoiceInput key={`${detail?.conversation.id ?? currentConversation.id}:${voicePreferenceKey}`} models={voiceModels} preferenceKey={voicePreferenceKey}
-        conversationId={detail?.conversation.id ?? currentConversation.id} disabled={submitting || loading || (!detail && !canCreateForCurrent)}
-        draftText={input} onBusyChange={setVoiceBusy} onTranscript={(text) => setInput((draft) => appendVoiceTranscript(draft, text))} />
+      <VoiceStatus voice={voice} />
       <div className="side-chat-composer-footer">
         <span>{busy ? `${detail?.pendingPrompts.length ?? 0} 条等待中` : detail ? "独立线程，不随主任务切换" : "发送时自动创建侧边对话"}</span>
-        {detail?.activeJob
+        <div className="composer-submit-actions"><VoiceControls voice={voice} />
+        {detail?.activeJob && voice.phase === "idle"
           ? <button type="button" className="side-chat-send stop" onClick={() => void api.cancelConversation(detail.conversation.id).then(() => refresh(detail.conversation.id, false))} title="停止"><Square size={14} /></button>
-          : <button type="submit" className="side-chat-send" disabled={submitting || voiceBusy || (!detail && !canCreateForCurrent) || (!input.trim() && !reference)} title="发送">{submitting ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={16} />}</button>}
+          : <button type="submit" className="side-chat-send" disabled={submitting || loading || voice.phase === "requesting" || voice.phase === "transcribing" || (!detail && !canCreateForCurrent) || (voice.phase !== "recording" && !input.trim() && !reference)} title={voice.phase === "recording" ? "结束录音、识别并发送" : "发送"} aria-label="发送">{submitting || voice.phase === "transcribing" ? <LoaderCircle className="spin" size={15} /> : <ArrowUp size={16} />}</button>}
+        </div>
       </div>
     </form>
   </aside>;
