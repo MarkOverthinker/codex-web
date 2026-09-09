@@ -17,6 +17,8 @@ workspaces/
 .idea/
 .vscode/
 coverage/
+playwright-report/
+test-results/
 tmp/
 *.bak
 *.backup

@@ -575,7 +575,7 @@ test("offline bundle packaging ships the in-place upgrade script", () => {
 });
 test("closed mobile sidebar is not painted as an offscreen shadow layer", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
-  const mobileBlock = styles.match(/@media \(max-width: 720px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const mobileBlock = styles.match(/@media \(max-width: 900px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.match(mobileBlock, /\.sidebar \{[^}]*visibility: hidden;[^}]*pointer-events: none;[^}]*box-shadow: none;/);
   assert.match(mobileBlock, /\.sidebar\.open \{[^}]*visibility: visible;[^}]*pointer-events: auto;[^}]*box-shadow:/);
   assert.match(styles, /:root\[data-theme="dark"\] \.sidebar:not\(\.open\) \{ box-shadow: none; \}/);
@@ -593,7 +593,7 @@ test("desktop sidebar can be collapsed and restored from the desktop header", ()
   assert.match(desktopHeader, /aria-label=\{sidebarCollapsed \? "展开侧栏" : "隐藏侧栏"\}/);
   assert.match(desktopHeader, /aria-controls="primary-sidebar"/);
   assert.match(desktopHeader, /PanelLeftOpen[\s\S]*PanelLeftClose/);
-  assert.match(styles, /@media \(min-width: 721px\) \{[\s\S]*?\.shell\.sidebar-collapsed \.sidebar \{[\s\S]*?width: 0 !important;[\s\S]*?flex-basis: 0 !important;[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;/);
+  assert.match(styles, /@media \(min-width: 901px\) \{[\s\S]*?\.shell\.sidebar-collapsed \.sidebar \{[\s\S]*?width: 0 !important;[\s\S]*?flex-basis: 0 !important;[\s\S]*?visibility: hidden;[\s\S]*?pointer-events: none;/);
 });
 
 test("sidebar task actions collapse into a stable overflow menu", () => {
@@ -633,7 +633,7 @@ test("mobile Safari keeps the app shell fixed while only inner regions scroll", 
 
 test("provider management stays vertically scrollable on mobile web", () => {
   const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
-  const providerMobileBlock = styles.slice(styles.lastIndexOf("@media (max-width: 720px)"));
+  const providerMobileBlock = styles.slice(styles.lastIndexOf("@media (max-width: 900px)"));
   assert.match(styles, /\.provider-manager-list \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*touch-action: pan-y;[^}]*-webkit-overflow-scrolling: touch;/);
   assert.match(styles, /\.provider-form-fields \{[^}]*overflow-y: auto;[^}]*overscroll-behavior-y: contain;[^}]*touch-action: pan-y;[^}]*-webkit-overflow-scrolling: touch;/);
   assert.match(providerMobileBlock, /\.provider-manager-backdrop,[\s\S]*?\.provider-form-backdrop[^{]*\{[^}]*align-items: stretch;[^}]*padding: 0;/);

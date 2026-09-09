@@ -1027,7 +1027,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .toast button { border: 0; background: transparent; cursor: pointer; }
 .sidebar-backdrop { display: none; }
 
-@media (min-width: 721px) {
+@media (min-width: 901px) {
   .shell.sidebar-collapsed .sidebar {
     width: 0 !important;
     min-width: 0;
@@ -1054,7 +1054,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .task-category-actions { opacity: 1; pointer-events: auto; }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .sidebar { width: min(288px, 86vw) !important; position: fixed; inset: 0 auto 0 0; z-index: 40; visibility: hidden; transform: translateX(-102%); pointer-events: none; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: none; }
   .sidebar-resizer { display: none; }
   .chat-width-setting { display: none; }
@@ -1405,7 +1405,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 :root[data-theme="dark"] .toast.info { border-color: #42604b; color: #bce4c7; background: #223329; box-shadow: 0 9px 25px rgba(0, 0, 0, .28); }
 :root[data-theme="dark"] .sidebar-backdrop { background: rgba(0, 0, 0, .62); }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   :root[data-theme="dark"] .sidebar:not(.open) { box-shadow: none; }
   :root[data-theme="dark"] .sidebar.open { box-shadow: 12px 0 34px rgba(0, 0, 0, .42); }
 }
@@ -1833,13 +1833,13 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .side-chat-resizer { display: none; }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .side-chat-toggle span { display: none; }
   .side-chat-toggle { width: 34px; justify-content: center; padding: 0; }
   .side-chat-pane { width: 100vw !important; }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .provider-manager-backdrop,
   .preset-manager-backdrop,
   .path-browser-backdrop,
@@ -2036,7 +2036,7 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
   .file-explorer-resizer { display: none; }
 }
 
-@media screen and (max-width: 720px) {
+@media screen and (max-width: 900px) {
   .file-explorer-pane { width: 100vw !important; }
 }
 
