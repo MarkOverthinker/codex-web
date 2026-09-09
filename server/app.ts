@@ -658,7 +658,7 @@ export function createApp(overrides: AppOverrides = {}) {
 
   const runner = new CodexRunner(config, db, publish);
   const transcription = new TranscriptionService(config);
-  const voiceEnabled = Boolean(config.dashscopeApiKey && config.publicBaseUrl.startsWith("https://"));
+  const voiceEnabled = transcription.models.length > 0;
   const deletingConversations = new Set<string>();
   let queuePumpBusy = false;
   let shuttingDown = false;
@@ -672,6 +672,7 @@ export function createApp(overrides: AppOverrides = {}) {
       chatFontSize: db.getChatFontSize(session.user_id),
       chatColumnWidth: db.getChatColumnWidth(session.user_id),
       voiceEnabled,
+      voiceModels: transcription.models,
       canChangeUsername: !config.hostMode,
       providerManagementEnabled: db.getProviderManagementEnabled(session.user_id),
     };
@@ -2573,7 +2574,7 @@ export function createApp(overrides: AppOverrides = {}) {
         callback(null, `${crypto.randomUUID()}${AUDIO_MIME_EXTENSIONS[mime] ?? ""}`);
       },
     }),
-    limits: { files: 1, fileSize: 15 * 1024 * 1024, fields: 3, fieldSize: 10 * 1024 },
+    limits: { files: 1, fileSize: 15 * 1024 * 1024, fields: 4, fieldSize: 10 * 1024 },
     fileFilter(_req, file, callback) {
       const mime = file.mimetype.toLowerCase().split(";", 1)[0];
       callback(null, Boolean(AUDIO_MIME_EXTENSIONS[mime]));
@@ -2597,6 +2598,11 @@ export function createApp(overrides: AppOverrides = {}) {
       const conversationId = typeof req.body?.conversationId === "string" ? req.body.conversationId.trim() : "";
       const conversation = conversationId ? db.getConversationForUser(conversationId, session.user_id) : undefined;
       if (conversationId && !conversation) return res.status(404).json({ error: "会话不存在。" });
+      const model = typeof req.body?.model === "string" ? req.body.model : undefined;
+      if (config.transcriptionProvider === "local") {
+        const text = await transcription.transcribe(file.filename, {}, model);
+        return res.json({ text });
+      }
       let attachmentNames: string[] = [];
       try {
         const parsed = JSON.parse(typeof req.body?.attachmentNames === "string" ? req.body.attachmentNames : "[]");
@@ -2625,7 +2631,7 @@ export function createApp(overrides: AppOverrides = {}) {
         attachmentNames,
         attachments,
         recentMessages,
-      });
+      }, model);
       return res.json({ text });
     } catch (error) {
       const status = error instanceof TranscriptionError ? error.status : 502;

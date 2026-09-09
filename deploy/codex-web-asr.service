@@ -1,0 +1,20 @@
+[Unit]
+Description=Codex Web offline speech recognition
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_ROOT__
+ExecStart=/usr/bin/unshare --user --map-root-user --net "__ASR_ROOT__/runtime/bin/python" "__PROJECT_ROOT__/services/local-asr/service.py" "__CONFIG_PATH__"
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=4
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+MemoryMax=6G
+CPUQuota=400%
+
+[Install]
+WantedBy=default.target

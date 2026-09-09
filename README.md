@@ -42,7 +42,7 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 - Light, dark, and system-following appearance modes
 - Select message text and attach it as a removable, server-persisted reference to a new Agent question
 - Load only the latest 30 messages initially, then fetch older pages at the top without moving the reader's position
-- Optional Alibaba Cloud DashScope voice transcription
+- Optional offline voice transcription with user-selectable SenseVoiceSmall INT8 and Qwen3-ASR-0.6B, or opt-in DashScope transcription
 - Bounded transcription context from drafts, attachment names, text-file heads, recent messages, and a small number of images
 - A fixed mobile app shell with inner scrolling for more reliable iPhone/iPad Safari behavior
 - A dedicated Unix identity for the Codex worker inside the container
@@ -284,11 +284,17 @@ the isolated tenant deployment.
 
 ## Optional voice transcription
 
+For offline recognition, deploy the independent CPU sidecar and set `TRANSCRIPTION_PROVIDER=local`. Users can select **SenseVoiceSmall INT8** or **Qwen3-ASR-0.6B** in the main composer and side chat; the browser remembers the last selection per username. Stop recording to append editable text to the current draft; transcription never automatically sends a message. See [Local voice deployment](docs/LOCAL_VOICE.md) for installation, model preparation, offline migration, limits, and systemd supervision.
+
+Local mode sends only the recording and selected model to a permission-restricted Unix socket. It has no cloud fallback and does not require `PUBLIC_BASE_URL` or a paid API key. Browser microphone access still requires HTTPS or localhost. Use `TRANSCRIPTION_PROVIDER=disabled` to disable all voice input.
+
+The existing cloud path remains available with `TRANSCRIPTION_PROVIDER=dashscope` (also the compatibility default when the variable is absent):
+
 Set `DASHSCOPE_API_KEY` and an HTTPS `PUBLIC_BASE_URL` in `.env` to enable the microphone button. The default model is `qwen3.5-omni-plus`; you can override it with `DASHSCOPE_ASR_MODEL`. Microphone access requires a secure browser context.
 
 Audio is uploaded to your server first and then sent to the DashScope endpoint configured by `DASHSCOPE_BASE_URL`. Leave the key empty to disable the feature completely.
 
-The optional spelling/topic context is bounded to about 500 tokens by default and shared across the draft, attachment names, the first 16 KiB of text attachments, recent messages, fixed technical terms, and up to two small images. Large unsent files are never copied wholesale into the transcription request. Tune the limits with `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`, `TRANSCRIPTION_CONTEXT_MAX_IMAGES`, and `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES`.
+In cloud mode only, the optional spelling/topic context is bounded to about 500 tokens by default and shared across the draft, attachment names, the first 16 KiB of text attachments, recent messages, fixed technical terms, and up to two small images. Large unsent files are never copied wholesale into the transcription request. Tune the limits with `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`, `TRANSCRIPTION_CONTEXT_MAX_IMAGES`, and `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES`.
 
 ## Reverse proxy
 

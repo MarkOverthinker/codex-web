@@ -1,0 +1,5 @@
+root = "../../data/local-asr"
+threads = 4
+request_timeout_seconds = 110
+maximum_audio_seconds = 300
+offline = false
