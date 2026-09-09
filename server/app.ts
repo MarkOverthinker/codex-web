@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { requestIsolatedGitReview, runGitReviewWorker } from "./git-review-client.js";
+import type { GitReviewRequest } from "../src/git-review.js";
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
@@ -2100,6 +2102,32 @@ export function createApp(overrides: AppOverrides = {}) {
     const conversation = db.createConversation(id, "新任务", agentSelection, session.user_id, workingDir);
     db.applyDefaultPresetPrompts(conversation.id, session.user_id);
     res.status(201).json({ conversation, agentSelection });
+  });
+
+  api.get("/conversations/:id/review", async (req, res) => {
+    const session = res.locals.session as SessionRow;
+    const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
+    if (!conversation) return res.status(404).json({ error: "会话不存在。" });
+    const scope = req.query.scope ?? "working";
+    if (scope !== "working" && scope !== "staged" && scope !== "branch") return res.status(400).json({ error: "无效的变更范围。" });
+    if ((req.query.base !== undefined && (typeof req.query.base !== "string" || req.query.base.length > 1024))
+      || (req.query.file !== undefined && (typeof req.query.file !== "string" || req.query.file.length > 4096))) return res.status(400).json({ error: "无效的基准分支或文件路径。" });
+    try {
+      const host = config.hostMode ? hostTenantFor(config, db, session.user_id) : null;
+      if (config.hostMode && !host) return res.status(403).json({ error: "用户没有映射系统账户。" });
+      const reviewRequest: GitReviewRequest = {
+        workingDir: config.hostMode && conversation.working_dir ? resolveSubmittedWorkingDir(conversation.working_dir) : path.join(tenantPaths(config.tenantRoot, session.user_id).conversations, conversation.id),
+        restrictRoot: !config.hostMode || !conversation.working_dir,
+        scope, base: req.query.base as string | undefined, file: req.query.file as string | undefined,
+      };
+      const review = config.tenantWorkerIsolation
+        ? await requestIsolatedGitReview(session.user_id, reviewRequest)
+        : await runGitReviewWorker(reviewRequest, host ?? undefined);
+      res.setHeader("Cache-Control", "no-store");
+      return res.json(review);
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "读取变更失败。" });
+    }
   });
 
   api.put("/conversations/:id/working-dir", (req, res) => {

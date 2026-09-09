@@ -56,11 +56,13 @@ export type TenantWorkerEvent =
   | { type: "failed"; message: string; cancelled?: boolean };
 
 export type WebToSupervisorMessage =
+  | { kind: "git_review"; requestId: string; userId: string; request: import("../src/git-review.js").GitReviewRequest }
   | { kind: "tenant_run"; jobId: string; userId: string; request: TenantWorkerRunRequest }
   | { kind: "tenant_steer"; jobId: string; requestId: string; prompt: string; imagePaths: string[] }
   | { kind: "tenant_cancel"; jobId: string };
 
 export type SupervisorToWebMessage =
+  | { kind: "git_review_result"; requestId: string; result?: import("../src/git-review.js").GitReview; error?: string }
   | { kind: "tenant_event"; jobId: string; event: TenantWorkerEvent }
   | { kind: "tenant_worker_exit"; jobId: string; message: string };
 

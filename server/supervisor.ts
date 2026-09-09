@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import readline from "node:readline";
+import { runGitReviewWorker } from "./git-review-client.js";
 import { WEB_IDENTITY, tenantIdentityForUser } from "./tenant-identities.js";
 import type { SupervisorToWebMessage, TenantWorkerEvent, TenantWorkerInput, WebToSupervisorMessage } from "./tenant-worker-protocol.js";
 
@@ -19,6 +20,15 @@ const web = spawn(process.execPath, [path.join(projectRoot, "dist-server", "serv
 
 web.on("message", (message: WebToSupervisorMessage) => {
   if (!message || typeof message !== "object") return;
+  if (message.kind === "git_review") {
+    const identity = tenantIdentityForUser(message.userId);
+    if (!identity) return sendToWeb({ kind: "git_review_result", requestId: message.requestId, error: "该用户没有配置 Unix 身份。" });
+    void runGitReviewWorker(message.request, identity).then(
+      (result) => sendToWeb({ kind: "git_review_result", requestId: message.requestId, result }),
+      (error: unknown) => sendToWeb({ kind: "git_review_result", requestId: message.requestId, error: error instanceof Error ? error.message : "无法以租户身份读取 Git 变更。" }),
+    );
+    return;
+  }
   if (message.kind === "tenant_steer") {
     const worker = workers.get(message.jobId);
     if (worker?.stdin?.writable) {

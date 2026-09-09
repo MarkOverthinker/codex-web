@@ -10,6 +10,10 @@ Codex Web 是一个非官方、自托管的 OpenAI Codex CLI 网页工作台。�
 
 在主对话中，标题栏的“Fork 最新回答”会始终以最新已完成 turn 创建侧边分支；浏览历史时，也可以在任意已完成回答旁点击“Fork 到这里”。系统会复制该 turn 及之前的可见历史，先保存源 thread/turn，侧边聊天首次发送时再通过 `thread/fork` 和 `lastTurnId` 创建独立 Codex thread；主会话原有内容不变。Fork 位置以完成的 turn 为边界，不能切入同一回答内部的字符或工具项。
 
+## Git Review
+
+会话标题区域的 **Review** 可查看当前工作目录所在仓库的分支、变更文件和逐行 diff。支持全部未提交变更（含暂存与未跟踪）、仅已暂存、相对所选基准分支共同祖先的已提交变更；支持手动刷新、增删行高亮与行号。此功能只读，不执行 fetch、暂存、撤销、提交或 AI 自动审查。使用范围、大小限制和租户隔离说明见 [Git Review](docs/GIT_REVIEW.md)。
+
 ## 快速开始
 
 环境要求：Docker Engine、Docker Compose v2，以及可登录 Codex CLI 的账号。

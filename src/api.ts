@@ -1,4 +1,5 @@
 import type { TaskListCategorySettings } from "./task-categories.js";
+import type { GitReview, ReviewScope } from "./git-review.js";
 import type { MessageSourceReference } from "./message-source.js";
 
 export type { MessageSourceReference } from "./message-source.js";
@@ -319,6 +320,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  review: (id: string, scope: ReviewScope, base?: string, file?: string) => {
+    const query = new URLSearchParams({ scope });
+    if (base) query.set("base", base);
+    if (file !== undefined) query.set("file", file);
+    return request<GitReview>(`/conversations/${id}/review?${query}`);
+  },
   session: () => request<Session>("/auth/session"),
   login: (username: string, password: string) => request<Session>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
