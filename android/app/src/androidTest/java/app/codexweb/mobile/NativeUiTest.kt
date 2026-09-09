@@ -1,8 +1,12 @@
 package app.codexweb.mobile
 
+import android.graphics.Rect
+import android.os.SystemClock
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.ViewModelStore
@@ -22,6 +26,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.Closeable
 import java.io.File
+import kotlin.math.roundToInt
 
 private const val longFileName = "设计方案-最终版-请以这一份为准-不要重复导出-版本V20260910.md"
 
@@ -35,9 +40,11 @@ private class UiGateway : Gateway {
     override var csrf = ""
     var sends = 0
     var creates = 0
+    var mutations = mutableListOf<String>()
     var draft: JSONObject? = null
     var failSend = false
     var failReview = false
+    var reviewErrorText = "读取变更失败：Git 无法读取变更，请检查仓库权限、冲突状态或输出大小。"
     var listingError: String? = null
     var outputsEmpty = false
     var voiceGate: CompletableDeferred<Unit>? = null
@@ -103,6 +110,7 @@ private class UiGateway : Gateway {
     }
 
     override suspend fun call(path: String, method: String, payload: JSONObject?, body: RequestBody?): JSONObject {
+        if (method != "GET") mutations += "$method $path"
         delay(20)
         return when {
             path == "/auth/login" -> json("authenticated" to true, "username" to "test-account", "csrfToken" to "token", "providerManagementEnabled" to true, "voiceEnabled" to true)
@@ -128,6 +136,11 @@ private class UiGateway : Gateway {
                 draft = null
                 json("queued" to true)
             }
+            path.endsWith("/pending-prompts/order") && method == "PUT" -> {
+                val ids = payload?.optJSONArray("ids") ?: org.json.JSONArray()
+                pending = (0 until ids.length()).mapNotNull { index -> pending.find { it.text("id") == ids.optString(index) } }
+                json("ok" to true)
+            }
             path.endsWith("/agent-selection") && method == "PUT" -> { selection = payload ?: selection; json("ok" to true) }
             path == "/conversations/sample-task" -> json("conversation" to conversation, "composerDraft" to draft, "agentSelection" to selection,
                 "messages" to listOf(
@@ -147,7 +160,7 @@ private class UiGateway : Gateway {
                 else json("roots" to roots(), "listing" to listing(root, query["path"].orEmpty()))
             }
             path.contains("/review") -> {
-                if (failReview) throw ApiFailure(500, "读取变更失败：Git 无法读取变更，请检查仓库权限、冲突状态或输出大小。")
+                if (failReview) throw ApiFailure(500, reviewErrorText)
                 val query = params(path)
                 val file = query["file"]
                 if (file != null) json("root" to "/workspace/codex-web", "branch" to "main", "bases" to listOf("refs/heads/main").jsonArray(),
@@ -210,6 +223,34 @@ class NativeUiTest {
         val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "native-screenshots").apply { mkdirs() }
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         File(directory, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    /** 节点在屏幕上的真实像素 bounds（跨窗口：popup/bottom sheet/dialog 节点同样有效）。 */
+    private fun screenRect(node: SemanticsNode): Rect {
+        val origin = node.positionOnScreen
+        val size = node.boundsInRoot.size
+        return Rect(origin.x.roundToInt(), origin.y.roundToInt(), (origin.x + size.width).roundToInt(), (origin.y + size.height).roundToInt())
+    }
+
+    private fun screenRect(selector: SemanticsNodeInteraction): Rect = screenRect(selector.fetchSemanticsNode())
+
+    private fun grow(rect: Rect, margin: Int): Rect = Rect(rect.left - margin, rect.top - margin, rect.right + margin, rect.bottom + margin)
+
+    /**
+     * 通过 UiAutomation 注入真实系统级触摸（与 Compose 测试的语义级 performClick 不同，
+     * 会真实地被 popup / dialog / scrim 窗口拦截），用于核验菜单对窗外点击的拦截行为。
+     */
+    private fun realTap(rect: Rect) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val x = rect.exactCenterX()
+        val y = rect.exactCenterY()
+        val downTime = SystemClock.uptimeMillis()
+        assertTrue(instrumentation.uiAutomation.injectInputEvent(
+            MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0), true))
+        Thread.sleep(80)
+        assertTrue(instrumentation.uiAutomation.injectInputEvent(
+            MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0), true))
+        compose.waitForIdle()
     }
 
     private fun assertTaskStatus(tag: String, expected: String) {
@@ -493,6 +534,131 @@ class NativeUiTest {
         assertEquals(0, gateway.sends)
     }
 
+    @Test fun queueMenuRealOutsideTapDismissesWithoutTouchingUnderlyingControls() {
+        login()
+        gateway.pending = listOf(json("id" to "p1", "content" to "第一条队列指令", "status" to "queued"),
+            json("id" to "p2", "content" to "第二条队列指令", "status" to "queued"))
+        compose.runOnUiThread { model.changeText("菜单外部点击必须保留这份草稿"); model.refresh() }
+        compose.waitUntil(5000) { !model.state.busy && model.state.detail?.rows("pendingPrompts")?.size == 2 }
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        val editRect = screenRect(compose.onAllNodesWithText("编辑")[0])
+        // 对照组：菜单关闭时，真实系统触摸确实命中「编辑」——证明注入事件与坐标有效
+        realTap(editRect)
+        compose.waitUntil(5000) { compose.onAllNodesWithText("编辑队列指令").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("编辑队列指令").assertIsDisplayed()
+        screenshot("menu-control-real-tap-opens-edit")
+        compose.onNodeWithContentDescription("取消").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithText("编辑队列指令").fetchSemanticsNodes().isEmpty() }
+        compose.waitForIdle()
+        gateway.mutations.clear()
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        compose.onNodeWithTag("queue-more-0").performClick()
+        compose.onNodeWithText("上移").assertIsDisplayed()
+        val menuRect = grow(screenRect(compose.onNodeWithText("上移"))
+            .apply { union(screenRect(compose.onNodeWithText("下移"))) }
+            .apply { union(screenRect(compose.onNodeWithText("删除"))) }, 48)
+        assertFalse("断言前提：菜单不应覆盖「编辑」按钮", menuRect.contains(editRect.centerX(), editRect.centerY()))
+        screenshot("menu-outside-tap-before")
+        realTap(editRect)
+        compose.onNodeWithText("上移").assertDoesNotExist()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        compose.onNodeWithText("编辑队列指令").assertDoesNotExist()
+        assertEquals("菜单外真实点击不得触发任何变更请求", emptyList<String>(), gateway.mutations)
+        assertEquals(0, gateway.sends)
+        assertEquals(0, gateway.creates)
+        assertEquals(2, model.state.detail?.rows("pendingPrompts")?.size)
+        assertEquals("菜单外真实点击不得丢失草稿", "菜单外部点击必须保留这份草稿", model.state.composer.content)
+        screenshot("menu-outside-tap-after")
+    }
+
+    @Test fun queueMenuClosesOnSystemBackKeepingSheetDraftAndQueue() {
+        login()
+        gateway.pending = listOf(json("id" to "p1", "content" to "第一条队列指令", "status" to "queued"),
+            json("id" to "p2", "content" to "第二条队列指令", "status" to "queued"))
+        compose.runOnUiThread { model.changeText("返回键关闭菜单后这份草稿仍在"); model.refresh() }
+        compose.waitUntil(5000) { !model.state.busy && model.state.detail?.rows("pendingPrompts")?.size == 2 }
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        compose.onNodeWithTag("queue-more-0").performClick()
+        compose.onNodeWithText("上移").assertIsDisplayed()
+        gateway.mutations.clear()
+        screenshot("menu-back-before")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitForIdle()
+        compose.onNodeWithText("上移").assertDoesNotExist()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭队列").assertIsDisplayed()
+        assertEquals("返回键只关闭菜单，不得触发变更", emptyList<String>(), gateway.mutations)
+        assertEquals(0, gateway.sends)
+        assertEquals(0, gateway.creates)
+        assertEquals(2, model.state.detail?.rows("pendingPrompts")?.size)
+        assertEquals("返回键关闭菜单不得丢失草稿", "返回键关闭菜单后这份草稿仍在", model.state.composer.content)
+        screenshot("menu-back-after")
+    }
+
+    @Test fun queueMenuItemRealTapReordersExactlyOnce() {
+        login()
+        gateway.pending = listOf(json("id" to "p1", "content" to "第一条队列指令", "status" to "queued"),
+            json("id" to "p2", "content" to "第二条队列指令", "status" to "queued"))
+        compose.runOnUiThread { model.changeText("菜单项真实点击后草稿仍在"); model.refresh() }
+        compose.waitUntil(5000) { !model.state.busy && model.state.detail?.rows("pendingPrompts")?.size == 2 }
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        compose.onNodeWithTag("queue-more-0").performClick()
+        compose.onNodeWithText("上移").assertIsNotEnabled()
+        compose.onNodeWithText("下移").assertIsEnabled()
+        val downRect = screenRect(compose.onNodeWithText("下移"))
+        gateway.mutations.clear()
+        realTap(downRect)
+        compose.onNodeWithText("上移").assertDoesNotExist()
+        compose.onNodeWithTag("queue-sheet").assertIsDisplayed()
+        assertEquals(listOf("PUT /conversations/sample-task/pending-prompts/order"), gateway.mutations)
+        compose.waitUntil(5000) { model.state.detail?.rows("pendingPrompts")?.firstOrNull()?.text("id") == "p2" }
+        assertEquals(0, gateway.sends)
+        assertEquals(0, gateway.creates)
+        assertEquals("菜单项真实点击不得丢失草稿", "菜单项真实点击后草稿仍在", model.state.composer.content)
+        screenshot("menu-item-real-tap-reordered")
+    }
+
+    @Test fun optionsSheetRealInputSelectsChoiceAndScrimTapDismissesCleanly() {
+        login()
+        compose.runOnUiThread { model.changeText("选项菜单操作后这份草稿仍在") }
+        compose.waitForIdle()
+        compose.onNodeWithText("测试模型").performClick()
+        compose.onNodeWithText("任务选项").assertIsDisplayed()
+        compose.onNodeWithTag("choice-思考强度").performClick()
+        compose.onNodeWithTag("choice-option-high").assertIsDisplayed()
+        realTap(screenRect(compose.onNodeWithTag("choice-option-high")))
+        compose.waitUntil(5000) { gateway.mutations.any { it.endsWith("/agent-selection") } }
+        assertEquals(1, gateway.mutations.count { it.endsWith("/agent-selection") })
+        compose.onNodeWithTag("choice-option-high").assertDoesNotExist()
+        compose.onNodeWithText("任务选项").assertIsDisplayed()
+        assertEquals(0, gateway.sends)
+        assertEquals(0, gateway.creates)
+        assertEquals("选项菜单真实选择不得丢失草稿", "选项菜单操作后这份草稿仍在", model.state.composer.content)
+        // 对话框内「关闭」按钮的真实点击：对话框关闭、无误触
+        compose.waitForIdle()
+        compose.onNodeWithTag("choice-思考强度").performClick()
+        compose.onNodeWithTag("choice-option-high").assertIsDisplayed()
+        realTap(screenRect(compose.onNodeWithText("关闭")))
+        compose.onNodeWithTag("choice-option-high").assertDoesNotExist()
+        // 选项表 scrim 的真实点击：关闭整表、不触发任何变更
+        gateway.mutations.clear()
+        val screen = compose.activity.resources.displayMetrics
+        realTap(Rect((screen.widthPixels * 0.5f).roundToInt(), 200, (screen.widthPixels * 0.5f).roundToInt() + 1, 201))
+        compose.onNodeWithText("任务选项").assertDoesNotExist()
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        assertEquals("选项表外真实点击不得触发变更", emptyList<String>(), gateway.mutations)
+        assertEquals(0, gateway.sends)
+        assertEquals(0, gateway.creates)
+        assertEquals("选项菜单操作后这份草稿仍在", model.state.composer.content)
+        assertEquals("high", model.state.detail?.objectValue("agentSelection")?.text("reasoningEffort")
+            ?: model.state.options.objectValue("selection").text("reasoningEffort"))
+        screenshot("options-sheet-real-input-after")
+    }
+
     @Test fun voiceLoadingStaysOnItsButtonAndKeepsTypingAvailable() {
         login()
         gateway.voiceGate = CompletableDeferred()
@@ -543,7 +709,19 @@ class NativeUiTest {
         compose.onNodeWithText("读取变更失败").assertIsDisplayed()
         compose.onNodeWithText("当前范围内没有变更").assertDoesNotExist()
         compose.onNodeWithText("没有变更").assertDoesNotExist()
+        // 标题与正文去重：服务端原文里的同义前缀不再重复显示，诊断信息保留
+        compose.onNodeWithText("读取变更失败：Git 无法读取变更，请检查仓库权限、冲突状态或输出大小。").assertDoesNotExist()
+        compose.onNodeWithText("Git 无法读取变更，请检查仓库权限、冲突状态或输出大小。").assertIsDisplayed()
         screenshot("native-review-failed")
+        // 回退文案「读取变更失败。」与标题完全同义：正文整体隐藏，只留标题
+        gateway.reviewErrorText = "读取变更失败。"
+        compose.onNodeWithText("重试").performClick()
+        compose.waitUntil(5000) { model.state.pageError != null && model.state.pageError == "读取变更失败。" && !model.state.pageLoading }
+        compose.waitForIdle()
+        Thread.sleep(700)
+        compose.onNodeWithText("读取变更失败").assertIsDisplayed()
+        compose.onNodeWithText("读取变更失败。").assertDoesNotExist()
+        screenshot("native-review-failed-fallback")
         // 恢复后重试成功：文件列表出现，错误不残留
         gateway.failReview = false
         compose.onNodeWithText("重试").performClick()
