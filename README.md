@@ -8,6 +8,8 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 
 ## What it includes
 
+- Read-only Git Review from the conversation header: inspect all uncommitted changes, staged changes, or committed branch changes against a selectable local/remote-tracking merge base, with file statistics and unified diffs. No fetch, staging, revert, commit, or AI review is performed. See [Git Review](docs/GIT_REVIEW.md) for limits and isolation details.
+
 - A responsive React chat interface for Codex CLI
 - Persistent side-chat history with multiple independent threads per primary conversation, cross-task pinning, task-aware reopening, an independently resizable desktop pane, one-click primary-context snapshots, promotion of a side thread into the primary task list without copying its durable state, completed-turn Fork into a side chat, per-thread model/reasoning selection, and source quotes resolved to rollout JSONL path, line, byte offset, JSON Pointer, item ID, and character range
 - Server-persistent queued prompts with reorder, edit, delete, and steer actions; queued jobs can also be promoted to start immediately
