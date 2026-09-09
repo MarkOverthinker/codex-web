@@ -323,3 +323,7 @@ Codex runs as a dedicated non-root Unix user. The web process can coordinate tha
 ## License
 
 [MIT](LICENSE)
+
+## Offline portable upgrades
+
+See [Offline upgrade guide](docs/OFFLINE_UPGRADE.md) for packaging, in-place upgrades, full backups, and deployment boundaries.

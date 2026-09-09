@@ -71,31 +71,17 @@ if [[ ! -d "$REPO_ROOT/server" || ! -d "$REPO_ROOT/scripts" ]]; then
   exit 1
 fi
 
-rm -rf "$STAGING_ROOT"
+mkdir -p "$STAGING_ROOT" "$REPO_ROOT/tmp"
+STAGING_ROOT="$(mktemp -d "$STAGING_ROOT/build.XXXXXX")"
 mkdir -p "$STAGING_ROOT/$PACKAGE_DIR/app" "$STAGING_ROOT/$PACKAGE_DIR/node"
 STAGING="$STAGING_ROOT/$PACKAGE_DIR"
 WORK="$(mktemp -d "$REPO_ROOT/tmp/offline-work.XXXXXX")"
 trap 'if [[ "$KEEP_STAGING" -ne 1 ]]; then rm -rf "$STAGING_ROOT"; fi; rm -rf "$WORK"' EXIT
 
-echo "==> copying source tree (without git/data/tenants/node_modules)"
-tar -C "$REPO_ROOT" \
-  --exclude='.git' \
-  --exclude='.github' \
-  --exclude='.env' \
-  --exclude='node_modules' \
-  --exclude='dist' \
-  --exclude='dist-server' \
-  --exclude='dist-unusable-*' \
-  --exclude='bin' \
-  --exclude='data' \
-  --exclude='tenants' \
-  --exclude='workspaces' \
-  --exclude='tmp' \
-  --exclude='*.sqlite*' \
-  --exclude='*.log' \
-  --exclude='*.orig' \
-  --exclude='coverage' \
-  -cf - . | tar -C "$STAGING/app" -xf -
+SOURCE_REVISION="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+echo "==> copying committed source snapshot $SOURCE_REVISION (excluding local configuration and artifacts)"
+git -C "$REPO_ROOT" archive "$SOURCE_REVISION" | tar -C "$STAGING/app" -xf -
+printf '%s\n' "$SOURCE_REVISION" > "$STAGING/REVISION"
 
 echo "==> copying node_modules and pruning dev dependencies"
 cp -a "$REPO_ROOT/node_modules" "$STAGING/app/node_modules"
@@ -120,6 +106,13 @@ fi
 echo "==> copying shared Python runtime (uv + pythons + wheels cache)"
 mkdir -p "$STAGING/app/data"
 cp -a "$REPO_ROOT/data/python" "$STAGING/app/data/python"
+find "$STAGING/app/data/python/pythons" -maxdepth 1 -type l -delete
+rm -rf "$STAGING/app/data/python/shared"
+(cd "$STAGING/app" && PYTHON_RUNTIME_ROOT="$STAGING/app/data/python" ./scripts/setup-python.sh)
+rm -rf "$STAGING/app/data/python/shared"
+(cd "$STAGING/app" && UV_OFFLINE=1 PYTHON_RUNTIME_ROOT="$STAGING/app/data/python" ./scripts/setup-python.sh)
+rm -rf "$STAGING/app/data/python/shared"
+find "$STAGING/app/data/python/pythons" -maxdepth 1 -type l -delete
 
 if [[ "$SKIP_NODE" -ne 1 ]]; then
   echo "==> bundling Node.js $NODE_VERSION ($PLATFORM)"
@@ -356,9 +349,9 @@ systemd --user 服务只会在用户登录后启动。
 
 ## 目标机器前置条件
 
-- Linux x86_64，glibc 2.17+（Node.js 官方二进制的要求；Codex CLI 本身是
+- Linux x86_64，glibc 2.28+（Node.js 官方二进制的要求；Codex CLI 本身是
   musl 静态构建）；
-- `bash`、`tar`、`zstd`（解压）、`git`（任务工作区初始化）、`openssl` 或
+- `bash`、`tar`、`zstd`（解压）、`sha256sum`、`git`（任务工作区初始化）、`openssl` 或
   `od`（首次生成随机 SESSION_SECRET）；
 - 不需要预装 Node.js、npm 或系统 Python。
 
@@ -367,6 +360,9 @@ systemd --user 服务只会在用户登录后启动。
 - `ffmpeg`：语音转写（还需在 `.env` 配置 `DASHSCOPE_API_KEY` 和网络）；
 - `setpriv`：宿主模式任务进程恢复用户的完整补充组；
 - 若省略 `--skip-node`，包内已带 Node.js，目标机无需安装。
+
+本包不含独立 ASR 模型、ASR 专用环境或 Android APK。已有 ASR 服务保持不变；
+新装参见 `app/docs/LOCAL_VOICE.md`。
 
 ## 使用 Codex 任务的前提
 
@@ -410,13 +406,14 @@ PyPI wheel 下载 `0.5.8`，许可与 SBOM 一并捆绑在 `licenses/codex-relay
 ./upgrade.sh codex-web-offline-linux-x64-node-*.tar.zst
 ```
 
-脚本会依次：校验包 SHA256（旁边有 `.sha256` 时）、自动停止服务（autostart
+脚本会依次：校验包 SHA256（旁边有 `.sha256` 时）、解压校验程序结构、自动停止服务（autostart
 守护 / systemd --user / 系统服务均可识别，前台运行且健康检查可达时提示先
-停止）、把 `app/.env`、`app/data`（不含 `data/python`）、`app/tenants`、
-`app/workspaces` 备份为部署根同级的 `codex-web-backups/codex-web-backup-<时间戳>.tar.zst`，
-然后解压新包并只同步程序文件，完整保留目标机数据与配置，最后按原方式重新
+停止）、把整个旧部署（程序、Python、配置与数据）备份为部署根同级的 `codex-web-backups/codex-web-backup-<时间戳>.tar.zst`，
+然后只同步程序文件，完整保留目标机数据与配置，最后按原方式重新
 启动并等待健康检查就绪。部署根不是当前目录时可作为第二个参数传入；只想
 同步文件、由你手动启动时加 `--no-start`。升级完成后会输出备份路径与回滚命令。
+包管理的 `app/data/python` 会更新，其他数据保留。仅适用于含 `start.sh` 和
+`app/` 的便携部署，不用于源码或 Docker 部署转换；外部数据目录需单独备份。
 EOF
 
 echo "==> checking bundled codex-relay"
@@ -433,7 +430,9 @@ mkdir -p "$OUTPUT_DIR"
 archive="$OUTPUT_DIR/codex-web-offline-$PLATFORM-node$([[ "$SKIP_NODE" -eq 1 ]] && echo "-noembeddednode" || echo "")-$(date +%Y%m%d).tar.zst"
 echo "==> compressing to $archive"
 tar --zstd -C "$STAGING_ROOT" -cf "$archive" "$PACKAGE_DIR"
-sha256sum "$archive" | tee "$archive.sha256"
+(cd "$OUTPUT_DIR" && sha256sum "$(basename "$archive")") | tee "$archive.sha256"
+cp "$STAGING/upgrade.sh" "$OUTPUT_DIR/upgrade.sh"
+cp "$STAGING/README-OFFLINE.md" "$OUTPUT_DIR/README-OFFLINE.md"
 du -h "$archive"
 
 if [[ "$KEEP_STAGING" -eq 1 ]]; then

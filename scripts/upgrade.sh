@@ -2,7 +2,7 @@
 # codex-web 离线便携包增量升级脚本
 #
 # 只更新程序文件，完整保留目标机已有的运行数据：
-#   app/.env、app/data（SQLite / deliverables / logs / voice-input / python）、
+#   app/.env、app/data（SQLite / deliverables / logs / voice-input，python 由包更新）、
 #   app/tenants、app/workspaces
 #
 # 用法:
@@ -60,7 +60,7 @@ if [[ -z "$DEPLOY_ROOT" ]]; then
 fi
 DEPLOY_ROOT="$(readlink -f "$DEPLOY_ROOT")"
 
-for tool in tar zstd; do
+for tool in tar zstd sha256sum; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "错误: 目标机缺少 $tool" >&2
     exit 1
@@ -108,6 +108,30 @@ echo "==> 部署根: $DEPLOY_ROOT"
 echo "==> 升级包: $ARCHIVE"
 echo "==> 健康检查: $HEALTH_URL"
 
+# 解压新包到临时目录，定位包根
+TMP_ROOT="$(mktemp -d "$(dirname "$DEPLOY_ROOT")/.upgrade-tmp.XXXXXX")"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+echo "==> 解压新离线包"
+tar --zstd --no-same-owner -C "$TMP_ROOT" -xf "$ARCHIVE"
+NEW_ROOT=""
+for candidate in "$TMP_ROOT"/*; do
+  if [[ -d "$candidate" && -f "$candidate/start.sh" ]]; then
+    NEW_ROOT="$candidate"
+    break
+  fi
+done
+if [[ -z "$NEW_ROOT" ]]; then
+  echo "错误: 离线包内未找到含 start.sh 的包根。" >&2
+  exit 1
+fi
+
+for required in app/dist/index.html app/dist-server/server/index.js app/node_modules app/data/python/bin/uv; do
+  if [[ ! -e "$NEW_ROOT/$required" ]]; then
+    echo "错误: 升级包缺少 $required" >&2
+    exit 1
+  fi
+done
+
 # 停止服务
 STOP_METHOD=none
 if [[ -x "$DEPLOY_ROOT/autostart.sh" ]] && "$DEPLOY_ROOT/autostart.sh" status >/dev/null 2>&1; then
@@ -117,14 +141,14 @@ if [[ -x "$DEPLOY_ROOT/autostart.sh" ]] && "$DEPLOY_ROOT/autostart.sh" status >/
     exit 1
   fi
   STOP_METHOD=autostart
-elif command -v systemctl >/dev/null 2>&1 && systemctl --user is-active codex-web >/dev/null 2>&1; then
+elif command -v systemctl >/dev/null 2>&1 && systemctl --user is-active codex-web >/dev/null 2>&1 && [[ "$(systemctl --user show codex-web -p WorkingDirectory --value)" == "$APP_ROOT" ]]; then
   echo "==> 停止 systemd --user 服务 codex-web"
   if ! systemctl --user stop codex-web; then
     echo "错误: 无法停止 systemd --user 服务 codex-web，请先手动执行 systemctl --user stop codex-web。" >&2
     exit 1
   fi
   STOP_METHOD=systemd-user
-elif command -v systemctl >/dev/null 2>&1 && systemctl is-active codex-web >/dev/null 2>&1; then
+elif command -v systemctl >/dev/null 2>&1 && systemctl is-active codex-web >/dev/null 2>&1 && [[ "$(systemctl show codex-web -p WorkingDirectory --value)" == "$APP_ROOT" ]]; then
   echo "==> 停止系统服务 codex-web"
   if ! systemctl stop codex-web; then
     echo "错误: 无法停止系统服务 codex-web（可能需要 root）。请先手动停止后再运行升级。" >&2
@@ -149,43 +173,20 @@ if health_ok; then
   fi
 fi
 
-# 备份运行数据（data/python 由包内共享运行时管理，体积大且可离线重建，不纳入备份）
 BACKUP_DIR="$(dirname "$DEPLOY_ROOT")/codex-web-backups"
 mkdir -p "$BACKUP_DIR"
-STAMP="$(date +%Y%m%d-%H%M%S)"
+chmod 700 "$BACKUP_DIR"
+STAMP="$(date +%Y%m%d-%H%M%S)-$$"
 BACKUP_FILE="$BACKUP_DIR/codex-web-backup-$STAMP.tar.zst"
-echo "==> 备份运行数据到: $BACKUP_FILE"
+echo "==> 备份运行数据到: $BACKUP_FILE（含旧程序与 Python，可完整回滚）"
+(umask 077; tar --zstd -C "$DEPLOY_ROOT" -cf "$BACKUP_FILE" .)
 
-backup_entries=()
-for entry in app/.env app/data app/tenants app/workspaces; do
-  [[ -e "$DEPLOY_ROOT/$entry" ]] && backup_entries+=("$entry")
-done
-if [[ ${#backup_entries[@]} -eq 0 ]]; then
-  echo "    (未发现 .env / data / tenants / workspaces，跳过备份)"
-  : >"$BACKUP_FILE"
-else
-  (
-    cd "$DEPLOY_ROOT"
-    tar --zstd --exclude='app/data/python' -cf "$BACKUP_FILE" "${backup_entries[@]}"
-  )
-fi
-
-# 解压新包到临时目录，定位包根
-TMP_ROOT="$(mktemp -d "$(dirname "$DEPLOY_ROOT")/.upgrade-tmp.XXXXXX")"
-trap 'rm -rf "$TMP_ROOT"' EXIT
-echo "==> 解压新离线包"
-tar --zstd -C "$TMP_ROOT" -xf "$ARCHIVE"
-NEW_ROOT=""
-for candidate in "$TMP_ROOT"/*; do
-  if [[ -d "$candidate" && -f "$candidate/start.sh" ]]; then
-    NEW_ROOT="$candidate"
-    break
+for entry in app/node_modules app/dist app/dist-server app/data/python; do
+  if [[ -e "$DEPLOY_ROOT/$entry" ]]; then
+    mkdir -p "$TMP_ROOT/previous/$(dirname "$entry")"
+    mv "$DEPLOY_ROOT/$entry" "$TMP_ROOT/previous/$entry"
   fi
 done
-if [[ -z "$NEW_ROOT" ]]; then
-  echo "错误: 离线包内未找到含 start.sh 的包根。" >&2
-  exit 1
-fi
 
 # 只同步程序文件；.env / data / tenants / workspaces 全部保留目标机现状
 echo "==> 同步程序文件到部署根（保留 .env / data / tenants / workspaces）"
@@ -194,7 +195,9 @@ tar -C "$NEW_ROOT" \
   --exclude='./app/data' \
   --exclude='./app/tenants' \
   --exclude='./app/workspaces' \
-  -cf - . | tar -C "$DEPLOY_ROOT" -xf -
+  -cf - . | tar --no-same-owner -C "$DEPLOY_ROOT" -xf -
+mkdir -p "$APP_ROOT/data"
+cp -a "$NEW_ROOT/app/data/python" "$APP_ROOT/data/python"
 
 # 校验并报告内置 codex-relay（较旧包可能不含该二进制，属正常情况）
 RELAY_VERSION="未捆绑"
@@ -244,5 +247,7 @@ echo "==> 升级完成"
 echo "    包 SHA256: $(sha256sum "$ARCHIVE" | awk '{print $1}')"
 echo "    codex-relay: $RELAY_VERSION"
 echo "    数据备份: $BACKUP_FILE"
-echo "    回滚命令: $DEPLOY_ROOT/autostart.sh stop && tar --zstd -xf '$BACKUP_FILE' -C '$DEPLOY_ROOT' && $DEPLOY_ROOT/autostart.sh"
+echo "    回滚命令: 先按原方式停止服务，再执行："
+echo "    mv '$DEPLOY_ROOT' '$DEPLOY_ROOT.failed-$STAMP' && mkdir '$DEPLOY_ROOT' && tar --zstd -xf '$BACKUP_FILE' -C '$DEPLOY_ROOT'"
+echo "    然后按原方式启动服务。外置 DATA_ROOT / TENANT_ROOT / WORKSPACE_ROOT 需单独备份与恢复。"
 echo "    提示: 若新版本 .env.example 新增了配置项，请对比后手动补充到 $APP_ROOT/.env"
