@@ -23,7 +23,8 @@ import { CodeSnippetPane } from "./code-snippet-pane";
 import { sanitizeAgentMarkdown } from "./agent-content";
 import { normalizeMathDelimiters } from "./markdown-math";
 import { chooseComposerPrimaryAction } from "./composer-action";
-import { VoiceInput } from "./voice-input";
+import { useVoiceInput, VoiceControls, VoiceStatus } from "./voice-input";
+import { SettingMenu } from "./setting-menu";
 import { appendVoiceTranscript } from "./voice-input-state";
 import { chooseSelectedConversation, mergeJobEvents } from "./recovery";
 import { resolveAccountIdentity } from "./account-identity";
@@ -4001,7 +4002,6 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   const pasteTimer = useRef<number | undefined>(undefined);
   const [pasteNotice, setPasteNotice] = useState("");
   const [composerTextHeight, setComposerTextHeight] = useState<number | null>(null);
-  const [voiceBusy, setVoiceBusy] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const handledFocusRequestRef = useRef(focusRequest);
   const inputRef = useRef(input);
@@ -4009,6 +4009,26 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
   const [hasText, setHasText] = useState(() => Boolean(input.trim()));
   const onTextChangeRef = useRef(onTextChange);
   onTextChangeRef.current = onTextChange;
+
+  const voice = useVoiceInput({
+    scopeKey: `${conversationId}:${editingPending?.id ?? ""}:${editingMessage?.id ?? ""}:${voicePreferenceKey}`,
+    models: voiceEnabled ? voiceModels : [], preferenceKey: voicePreferenceKey, conversationId: conversationId ?? undefined,
+    disabled: submitting || selectionSaving, draftText: inputRef.current,
+    attachmentNames: [...(editingMessage?.files ?? editingPending?.files ?? []).filter((file) => !removedEditingFileIds.includes(file.id)).map((file) => file.original_name), ...draftFiles.map((file) => file.original_name), ...draftUploads.map((file) => file.name), ...files.map((file) => file.name)].slice(0, 12),
+    onTranscript: (text, send) => {
+      const combined = appendVoiceTranscript(inputRef.current, text);
+      handleTextChange(combined);
+      if (send) onSend(combined);
+      else textareaRef.current?.focus();
+    },
+  });
+  const voiceBusy = voice.phase !== "idle";
+
+  function submitInput() {
+    if (submitting || selectionSaving || draftUploads.length > 0) return;
+    if (voice.phase === "recording") voice.stop(true);
+    else if (voice.phase === "idle") onSend(inputRef.current);
+  }
 
 
   useLayoutEffect(() => {
@@ -4073,7 +4093,7 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     window.clearTimeout(pasteTimer.current);
     pasteTimer.current = window.setTimeout(() => setPasteNotice(""), 2600);
   }
-  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (shouldSubmitOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, mobile: window.matchMedia(MOBILE_MEDIA_QUERY).matches })) { event.preventDefault(); if (!voiceBusy && !submitting && !selectionSaving) onSend(inputRef.current); } }
+  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) { if (shouldSubmitOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, mobile: window.matchMedia(MOBILE_MEDIA_QUERY).matches })) { event.preventDefault(); submitInput(); } }
   const selectedModelOption = agentOptions?.models.find((model) => model.id === selectedModel);
   const effortOptions = agentOptions?.reasoningEfforts.filter((effort) => selectedModelOption?.reasoningEfforts.includes(effort.id)) ?? [];
   const sandboxOptions = agentOptions?.sandboxModes.map((mode) => ({
@@ -4141,27 +4161,23 @@ function Composer({ conversationId, input, inputRevision, onTextChange, askAgent
     {!editingPending && !editingMessage && draftUploads.length > 0 && <div className="pending-files">{draftUploads.map((file) => <span key={file.id} className="uploading"><LoaderCircle className="spin" size={14} /><span className="pending-file-name">{file.name}</span></span>)}</div>}
     {files.length > 0 && <div className="pending-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={14} /><span className="pending-file-name">{file.name}</span><button onClick={() => setFiles(files.filter((_, i) => i !== index))}><X size={13} /></button></span>)}</div>}
     {pasteNotice && <div className="paste-notice" role="status" aria-live="polite"><Check size={14} />{pasteNotice}</div>}
-    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceBusy ? "可以继续编辑草稿；识别完成后不会自动发送…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : editingMessage ? "修改这条历史消息并重发…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
-    {voiceEnabled && <VoiceInput
-      key={`${conversationId}:${editingPending?.id ?? ""}:${editingMessage?.id ?? ""}:${voicePreferenceKey}`}
-      models={voiceModels} preferenceKey={voicePreferenceKey} conversationId={conversationId ?? undefined}
-      disabled={submitting || selectionSaving} draftText={inputRef.current}
-      attachmentNames={[...(editingMessage?.files ?? editingPending?.files ?? []).filter((file) => !removedEditingFileIds.includes(file.id)).map((file) => file.original_name), ...draftFiles.map((file) => file.original_name), ...draftUploads.map((file) => file.name), ...files.map((file) => file.name)].slice(0, 12)}
-      onBusyChange={setVoiceBusy} onTranscript={(text) => { handleTextChange(appendVoiceTranscript(inputRef.current, text)); textareaRef.current?.focus(); }}
-    />}
+    <textarea ref={textareaRef} defaultValue={input} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={keyDown} onPaste={pasted} placeholder={voiceBusy ? "可以继续编辑草稿；录音中可点击发送以转写并发送…" : awaitingInstruction ? "请输入要如何处理刚才上传的文件…" : editingPending ? "修改这条待发送任务…" : editingMessage ? "修改这条历史消息并重发…" : sourceReference ? "请输入要基于引用执行的具体指令…" : askAgentQuote ? "输入你想询问的问题…" : sending ? "继续输入，新任务会先进入待发送队列…" : "给 Agent 发送任务，或粘贴、拖入文件…"} rows={1} disabled={submitting} style={composerTextHeight === null ? undefined : { height: `${composerTextHeight}px`, maxHeight: "min(560px, 55vh)" }} />
+    <VoiceStatus voice={voice} />
     <div className="composer-actions"><div className="composer-primary-actions"><button type="button" className="attach-button" aria-label="添加文件" onClick={() => fileInput.current?.click()} disabled={submitting}><Plus size={21} /><span>添加文件</span></button><input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.currentTarget.value = ""; }} />
       <MobileTools label="任务选项" summary={`${selectedModelOption?.label ?? "模型与选项"}${sandboxMode === "danger-full-access" ? " · 完全访问" : ""}`}>
       {hostFilesAvailable && <button type="button" className="attach-button host-attach" onClick={onBrowseHostFiles} disabled={submitting || !conversationId || Boolean(editingPending || editingMessage)} title="从服务器文件系统选择文件"><FolderOpen size={16} /><span>服务器文件</span></button>}
       <PresetMenu conversationId={conversationId} presetPrompts={presetPrompts} enabledPresetPromptIds={enabledPresetPromptIds} disabled={submitting || selectionSaving || !conversationId} saving={presetSaving} onToggle={onTogglePresetPrompt} onOpenManager={onOpenPresetManager} />
       <ProviderModelMenu agentOptions={agentOptions} selectedModel={selectedModel} disabled={submitting || selectionSaving || !agentOptions} onChange={onModelChange} />
       <SettingMenu className="effort" label="思考" value={reasoningEffort} options={effortOptions} placeholder="加载中" title="选择模型的思考深度" disabled={submitting || selectionSaving || effortOptions.length === 0} onChange={(value) => onReasoningChange(value as ReasoningEffort)} />
+      {voice.models.length > 0 && <SettingMenu className="voice-model" label="语音" value={voice.model} options={voice.models} placeholder="选择模型" title="选择语音识别模型" disabled={voice.disabled || voiceBusy} onChange={voice.selectModel} />}
       {sandboxOptions.length > 1 && <SettingMenu className={`permission ${sandboxMode === "danger-full-access" ? "danger-selected" : ""}`} label="权限" value={sandboxMode} options={sandboxOptions} placeholder="工作区写入" title="选择 Codex 的运行权限；完全访问会跳过沙箱" disabled={submitting || selectionSaving} onChange={(value) => onSandboxChange(value as SandboxMode)} />}
       </MobileTools>
     </div>
       <div className="composer-submit-actions">
+        <VoiceControls voice={voice} />
         {primaryAction === "stop" && onCancel
           ? <button type="button" className="send-button stop" onClick={onCancel} title="停止当前显示的任务" aria-label="停止当前显示的任务"><Square size={15} fill="currentColor" /></button>
-          : <button type="button" className="send-button" onClick={() => onSend(inputRef.current)} disabled={submitting || selectionSaving || draftUploads.length > 0 || voiceBusy || (!hasText && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title="发送" aria-label="发送">{submitting || voiceBusy ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
+          : <button type="button" className="send-button" onClick={submitInput} disabled={submitting || selectionSaving || draftUploads.length > 0 || voice.phase === "requesting" || voice.phase === "transcribing" || (voice.phase !== "recording" && !hasText && !askAgentQuote && files.length === 0 && draftFiles.length === 0 && !hasRetainedEditingFile)} title={voice.phase === "recording" ? "结束录音、识别并发送" : "发送"} aria-label="发送">{submitting || voice.phase === "transcribing" ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}</button>}
       </div>
     </div>
   </div><p className="composer-note"><span>{draftStatusLabel || "任务运行中，新内容会先进入待发送队列；也可选择“引导”立即调整当前任务。"}</span>{hasUnsentDraft && conversationId && <button type="button" onClick={onClearDraft} disabled={submitting || draftUploads.length > 0}>清空草稿</button>}</p></div>;
@@ -4301,81 +4317,7 @@ function ProviderModelMenu({ agentOptions, selectedModel, disabled, onChange }: 
   </div>;
 }
 
-type SettingMenuOption = { id: string; label: string; description?: string };
 
-function SettingMenu({ className, label, value, options, placeholder, title, disabled, onChange, direction = "up" }: {
-  className: string;
-  label: string;
-  value: string;
-  options: SettingMenuOption[];
-  placeholder: string;
-  title: string;
-  disabled: boolean;
-  onChange: (value: string) => void;
-  direction?: "up" | "down";
-}) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.id === value));
-  const [activeIndex, setActiveIndex] = useState(selectedIndex);
-  const selected = options.find((option) => option.id === value);
-  const menuId = `setting-menu-${className}`;
-
-  useEffect(() => {
-    if (disabled || options.length === 0) setOpen(false);
-  }, [disabled, options.length]);
-  useEffect(() => {
-    if (open) setActiveIndex(selectedIndex);
-  }, [open, selectedIndex]);
-  useEffect(() => {
-    if (!open) return;
-    function closeFromOutside(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    window.addEventListener("pointerdown", closeFromOutside);
-    return () => window.removeEventListener("pointerdown", closeFromOutside);
-  }, [open]);
-
-  function choose(option: SettingMenuOption) {
-    if (option.id !== value) onChange(option.id);
-    setOpen(false);
-  }
-
-  function moveActive(step: number) {
-    setActiveIndex((current) => (current + step + options.length) % options.length);
-  }
-
-  function keyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (disabled || options.length === 0) return;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!open) setOpen(true);
-      else moveActive(event.key === "ArrowDown" ? 1 : -1);
-      return;
-    }
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      if (open && options[activeIndex]) choose(options[activeIndex]);
-      else setOpen(true);
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setOpen(false);
-    }
-  }
-
-  return <div ref={rootRef} className={`setting-menu ${className}`}>
-    <button type="button" className="setting-select" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={menuId} disabled={disabled} title={title} onClick={() => setOpen((current) => !current)} onKeyDown={keyDown}>
-      <span>{label}</span><strong className="setting-value">{(selected?.label ?? value) || placeholder}</strong><ChevronDown size={13} />
-    </button>
-    {open && <div id={menuId} className={`setting-menu-panel ${direction === "down" ? "open-down" : ""}`} role="listbox" aria-label={label}>
-      {options.map((option, index) => <button key={option.id} type="button" role="option" aria-selected={option.id === value} className={`${option.id === value ? "selected" : ""} ${index === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(option)}>
-        <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>{option.id === value && <Check size={14} />}
-      </button>)}
-    </div>}
-  </div>;
-}
 
 function clipboardTimestamp(date: Date): string {
   const two = (value: number) => String(value).padStart(2, "0");

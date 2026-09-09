@@ -286,7 +286,7 @@ the isolated tenant deployment.
 
 ## Optional voice transcription
 
-For offline recognition, deploy the independent CPU sidecar and set `TRANSCRIPTION_PROVIDER=local`. Users can select **SenseVoiceSmall INT8** or **Qwen3-ASR-0.6B** in the main composer and side chat; the browser remembers the last selection per username. Stop recording to append editable text to the current draft; transcription never automatically sends a message. See [Local voice deployment](docs/LOCAL_VOICE.md) for installation, model preparation, offline migration, limits, and systemd supervision.
+For offline recognition, deploy the independent CPU sidecar and set `TRANSCRIPTION_PROVIDER=local`. Users can select **SenseVoiceSmall INT8** or **Qwen3-ASR-0.6B** in the main composer and side chat; the browser remembers the last selection per username. The desktop voice selector shares the settings row; on mobile/App it lives in Task Options, leaving one microphone button beside Send. Stop recording to append editable text, or press Send while recording to transcribe and then submit once. Failed, empty or canceled recognition never sends. See [Local voice deployment](docs/LOCAL_VOICE.md) for installation, model preparation, offline migration, limits, and systemd supervision.
 
 Local mode sends only the recording and selected model to a permission-restricted Unix socket. It has no cloud fallback and does not require `PUBLIC_BASE_URL` or a paid API key. Browser microphone access still requires HTTPS or localhost. Use `TRANSCRIPTION_PROVIDER=disabled` to disable all voice input.
 
