@@ -10,14 +10,18 @@
 
 ## 安装与连接
 
-1. 安装 `codex-native-android-0.2.0-preview.apk`，启动 **Codex Native**。
+1. 安装 `codex-native-android-0.2.1-preview.apk`，启动 **Codex Native**。
 2. 输入现有服务的 HTTPS 地址，例如 `https://example.org/codex-web/`。仅输入主机会补上 `/codex-web/`；自定义反向代理路径应明确填写。
 3. 使用现有账号密码登录。新版不读取旧 WebView 或浏览器的登录 Cookie，必须重新登录。
 4. 设置页支持退出、更换服务器、外观和字号。退出前尝试保存草稿，服务器上的任务不会因为 App 退出而停止。
 
 要求 Android 8.0 / API 26 或以上，以及受系统信任的 HTTPS 证书。无需安装 WebView 作为客户端运行依赖；不提供明文 HTTP、自签证书绕过或内嵌密码地址。需要 VPN 时先连接 VPN。
 
-预览 application ID 仍为 `app.codexweb.mobile.debug`，正式 ID 为 `app.codexweb.mobile`。若旧预览版与新包签名不同，需先卸载旧包。**卸载会清除手机本地登录和未同步草稿**，请先确认网页版/服务器已经保存需要的内容。不要为更新客户端而删除服务器数据。仓库不含签名私钥；debug APK 不用于商店发布。
+从 0.2.1 开始，用户安装包使用独立的 `app.codexweb.mobile.preview` application ID、非调试构建及持久保存的预览签名。开发构建继续使用 `app.codexweb.mobile.debug`，正式 ID 为 `app.codexweb.mobile`。新版可与 0.1/0.2 开发包共存，**无需先卸载旧包**；本机 Cookie、未同步草稿不跨包名迁移，请保留旧包直到确认重要内容已同步。服务器任务无需迁移。后续预览版必须沿用同一签名，不得每次构建生成新密钥。
+
+旧 0.1 与 0.2 交付包的包名相同但签名不同，已在模拟器安装记录中确认 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。这是一项已证实的交付缺陷，但不能仅凭 Flyme 的“无效或不兼容”概括提示认定用户手机也是此原因。原 0.2 包已包含 ARM64，APK 签名、16KB ZIP 对齐与 ARM64 ELF 对齐检查通过；本次没有盲目降低 target SDK 或绕过系统安全校验。未在 MEIZU 21 / Flyme 真机上验收。
+
+若仍提示无效：先确认下载的是完整 `.apk`（不是网页或零字节文件），在系统文件管理器中打开；记录文件大小、错误原文和是否安装过旧版。需要进一步定位时，可从自己的电脑运行 `adb install -r codex-native-android-0.2.1-preview.apk` 获取 `INSTALL_FAILED_*` 原因。不要使用 `-t`、降级参数或先卸载来掩盖安装问题，也无需发送账号密码或完整系统日志。
 
 ## 手机交互与功能矩阵
 
@@ -86,9 +90,27 @@ cd android
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-第二条命令需要已启动的设备/模拟器。预览 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`，仅用于测试。正式发布需自行维护签名与发布流程。
+第二条命令需要已启动的设备/模拟器。开发 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`，仅用于开发测试，不作为稳定升级渠道。
 
-CI 的 Android preview 工作流默认执行构建、单元测试和 lint，并保存报告；手动触发时勾选 `emulator_tests` 可额外运行 API 36 原生界面测试。
+用户预览构建需先准备持久保存并安全备份的签名密钥，在被 Git 忽略的 `android/preview-signing.properties` 设置以下四个属性（Java Properties 格式，不要提交真实值）：
+
+```properties
+storeFile=.signing/preview.jks
+storePassword=REPLACE_WITH_PRIVATE_STORE_PASSWORD
+keyAlias=preview
+keyPassword=REPLACE_WITH_PRIVATE_KEY_PASSWORD
+```
+
+`storeFile` 相对 `android/` 解析。可用 `CODEX_ANDROID_SIGNING_PROPERTIES` 指定其他私有配置文件。未配置签名时预览构建必须失败，不回退到临时 debug 签名。此密钥与配置不随源码归档交付；丢失密钥会失去对既有安装的覆盖升级能力。正式发布仍需独立的签名与发行管理。
+
+```sh
+./android/gradlew -p android :app:testDebugUnitTest :app:lintPreview :app:assemblePreview
+bash scripts/verify-android-preview.sh android/app/build/outputs/apk/preview/app-preview.apk "$EXPECTED_SIGNER_SHA256"
+```
+
+校验脚本需要 JDK、`ANDROID_HOME`、Build Tools 35.0.0（可用 `ANDROID_BUILD_TOOLS_VERSION` 修改）以及 unzip；证书 SHA-256 必须来自事先保存的可信签名证书记录，而不是从待验证 APK 临时取值。检查包名、固定签名、SDK、ARM64、非调试/非测试/非拆分标记及 ZIP 完整性和 16KB 对齐。用户预览与旧版共存、同签名覆盖安装应使用不带 `-t` 的 `adb install` 验证；模拟器通过不等于 Flyme 真机通过。
+
+CI 的 Android development checks 工作流默认执行开发构建、单元测试和 lint，并保存报告；手动触发时勾选 `emulator_tests` 可额外运行 API 36 原生界面测试。CI 的临时 debug 签名产物明确标记为 development，不得作为可覆盖升级的用户预览包发放。
 
 ```sh
 npm run lint

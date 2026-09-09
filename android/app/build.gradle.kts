@@ -1,7 +1,16 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+val previewSigningFile = rootProject.file(
+    providers.environmentVariable("CODEX_ANDROID_SIGNING_PROPERTIES").orElse("preview-signing.properties").get()
+)
+val previewSigningProperties = Properties().apply {
+    if (previewSigningFile.isFile) previewSigningFile.inputStream().use { load(it) }
 }
 
 android {
@@ -11,9 +20,17 @@ android {
         applicationId = "app.codexweb.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        create("preview") {
+            previewSigningProperties.getProperty("storeFile")?.let { storeFile = rootProject.file(it) }
+            storePassword = previewSigningProperties.getProperty("storePassword")
+            keyAlias = previewSigningProperties.getProperty("keyAlias")
+            keyPassword = previewSigningProperties.getProperty("keyPassword")
+        }
     }
     buildTypes {
         debug {
@@ -23,6 +40,13 @@ android {
         release {
             isMinifyEnabled = false
         }
+        create("preview") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".preview"
+            versionNameSuffix = "-preview"
+            signingConfig = signingConfigs.getByName("preview")
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -31,6 +55,17 @@ android {
     buildFeatures { compose = true }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+
+tasks.matching { it.name == "prePreviewBuild" }.configureEach {
+    doFirst {
+        check(previewSigningFile.isFile) {
+            "Preview requires a persistent signing key: see docs/ANDROID.md; debug signing is not a fallback."
+        }
+        check(listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all {
+            !previewSigningProperties.getProperty(it).isNullOrBlank()
+        }) { "Preview signing properties are incomplete." }
+    }
 }
 
 dependencies {
