@@ -88,6 +88,8 @@ cd android
 
 第二条命令需要已启动的设备/模拟器。预览 APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`，仅用于测试。正式发布需自行维护签名与发布流程。
 
+CI 的 Android preview 工作流默认执行构建、单元测试和 lint，并保存报告；手动触发时勾选 `emulator_tests` 可额外运行 API 36 原生界面测试。
+
 ```sh
 npm run lint
 npm test
