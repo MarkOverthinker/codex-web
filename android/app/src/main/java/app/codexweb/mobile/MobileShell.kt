@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 val BrandAmber = Color(0xfff0aa3c)
 
@@ -102,19 +103,8 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
                     if (!child && state.homeTab == HomeTab.Chat) composer()
                     if (!child && !keyboardVisible) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
-                        Row(Modifier.fillMaxWidth().height(62.dp).padding(horizontal = 18.dp).testTag("bottom-navigation"), verticalAlignment = Alignment.CenterVertically) {
-                            HomeTab.entries.forEach { tab ->
-                                val selected = state.homeTab == tab
-                                val icon = when (tab) { HomeTab.Chat -> Icons.Outlined.ChatBubbleOutline; HomeTab.Workspace -> Icons.Outlined.GridView; HomeTab.Profile -> Icons.Outlined.PersonOutline }
-                                Surface(onClick = { keyboard?.hide(); focus.clearFocus(); model.selectTab(tab) },
-                                    modifier = Modifier.weight(1f).padding(horizontal = 5.dp).height(46.dp).testTag("tab-${tab.name}"),
-                                    shape = RoundedCornerShape(16.dp), color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent) {
-                                    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(icon, tab.title, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                                        if (selected) Text(tab.title, Modifier.padding(start = 8.dp), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                }
-                            }
+                        Row(Modifier.fillMaxWidth().height(66.dp).testTag("bottom-navigation"), verticalAlignment = Alignment.CenterVertically) {
+                            HomeTab.entries.forEach { tab -> BottomNavItem(tab, state.homeTab == tab, Modifier.weight(1f)) { keyboard?.hide(); focus.clearFocus(); model.selectTab(tab) } }
                         }
                     }
                 }
@@ -131,6 +121,39 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BottomNavItem(tab: HomeTab, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val icon = when (tab) { HomeTab.Chat -> Icons.Outlined.ChatBubbleOutline; HomeTab.Workspace -> Icons.Outlined.GridView; HomeTab.Profile -> Icons.Outlined.PersonOutline }
+    Surface(onClick = onClick, modifier = modifier.fillMaxHeight().testTag("tab-${tab.name}"), color = Color.Transparent) {
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.width(52.dp).height(30.dp)
+                .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, RoundedCornerShape(15.dp))) {
+                Icon(icon, null, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(tab.title, Modifier.padding(top = 2.dp), fontSize = 11.sp, maxLines = 1,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun TaskStatusBadge(task: JSONObject) {
+    val label = taskStatus(task)
+    Row(Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        when (label) {
+            "进行中" -> CircularProgressIndicator(Modifier.size(18.dp).testTag("task-progress"), strokeWidth = 2.dp)
+            "排队中" -> Icon(Icons.Outlined.Schedule, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+            "需关注" -> Icon(Icons.Outlined.Warning, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.error)
+            "已完成" -> Icon(Icons.Outlined.CheckCircle, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> Icon(Icons.Outlined.RadioButtonUnchecked, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(label, Modifier.padding(start = 5.dp), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = if (label == "需关注") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (label == "需关注") FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 
@@ -187,15 +210,12 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
                     Surface(onClick = { model.openConversation(task.text("id")); close() }, enabled = !state.busy,
                         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
                         shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().testTag("task-${task.text("id")}")) {
-                        Row(Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(task.text("title", "新任务"), maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-                                if (task.text("status") == "running" || task.optInt("has_pending_work") > 0 || byStatus) Text(
-                                    if (byStatus) task.text("working_dir").trimEnd('/').substringAfterLast('/').ifBlank { "独立工作区" } else taskStatus(task),
-                                    fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                TaskStatusBadge(task)
                             }
                             if (task.optInt("has_unread_result") > 0) Box(Modifier.padding(start = 8.dp).size(7.dp).background(BrandAmber, CircleShape))
-                            else if (task.text("status") == "running") CircularProgressIndicator(Modifier.padding(start = 8.dp).size(12.dp), strokeWidth = 1.5.dp)
                         }
                     }
                 }

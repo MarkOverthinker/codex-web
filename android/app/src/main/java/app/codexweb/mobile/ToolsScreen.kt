@@ -7,7 +7,9 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -18,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -92,10 +95,12 @@ fun ToolColumn(content: @Composable ColumnScope.() -> Unit) {
 private fun QueueScreen(model: ClientModel, edit: (JSONObject) -> Unit, confirm: (String, () -> Unit) -> Unit) {
     val state = model.state
     val queue = state.detail?.rows("pendingPrompts").orEmpty()
+    val running = state.activeJob?.text("status") == "running"
+    val events = state.detail?.rows("jobEvents").orEmpty().takeLast(200).reversed()
     LazyColumn(contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("运行状态", style = MaterialTheme.typography.titleMedium)
-            Text(if (state.activeJob == null) "当前没有运行任务" else "状态：${state.activeJob?.text("status")} · 前方 ${state.activeJob?.optInt("queuePosition") ?: 0}")
+            Text(if (state.activeJob == null) "当前没有运行任务" else "状态：${jobStatusLabel(state.activeJob?.text("status").orEmpty())} · 前方 ${state.activeJob?.optInt("queuePosition") ?: 0}")
             state.detail?.optJSONObject("contextUsage")?.let { Text("上下文 ${it.optLong("usedTokens")} / ${it.text("contextWindow", "未知")}", fontSize = 12.sp) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.activeJob != null) OutlinedButton(onClick = { confirm("停止当前任务？已产生的文件不会自动回滚。") {
@@ -119,27 +124,14 @@ private fun QueueScreen(model: ClientModel, edit: (JSONObject) -> Unit, confirm:
             }
         } }
         item { Text("待发送 · ${queue.size}", style = MaterialTheme.typography.titleMedium) }
-        items(queue, key = { it.text("id") }) { prompt ->
-            OutlinedCard {
-                Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                    Text(prompt.text("content").ifBlank { "附件任务" })
-                    prompt.rows("files").forEach { file -> FileChip(file) { model.previewFile(file) } }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { model.beginPendingEdit(prompt, edit) }, enabled = !state.busy) { Text("编辑") }
-                        TextButton(onClick = { model.reorder(prompt.text("id"), -1) }, enabled = !state.busy) { Text("上移") }
-                        TextButton(onClick = { model.reorder(prompt.text("id"), 1) }, enabled = !state.busy) { Text("下移") }
-                        TextButton(onClick = { confirm("把这条指令作为当前运行任务的引导？") {
-                            model.mutate("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}/steer")
-                        } }, enabled = !state.busy) { Text("引导") }
-                        TextButton(onClick = { confirm("删除这条待发送指令及其附件？") {
-                            model.mutate("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}", "DELETE")
-                        } }, enabled = !state.busy) { Text("删除") }
-                    }
-                }
-            }
+        itemsIndexed(queue, key = { _, prompt -> prompt.text("id") }) { index, prompt ->
+            QueueCard(model, prompt, index, queue.size, running, edit, confirm)
         }
         item { Text("执行过程 · 最近 200 条实时事件", style = MaterialTheme.typography.titleMedium) }
-        items(state.detail?.rows("jobEvents").orEmpty().takeLast(200).reversed()) { event ->
+        if (events.isEmpty()) item {
+            Text("任务还没有执行事件。开始运行后，这里会显示实时进度与结果摘要。", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        items(events) { event ->
             var expanded by remember(event.toString()) { mutableStateOf(false) }
             OutlinedCard(onClick = { expanded = !expanded }) {
                 Column(Modifier.fillMaxWidth().padding(14.dp)) {
@@ -154,6 +146,47 @@ private fun QueueScreen(model: ClientModel, edit: (JSONObject) -> Unit, confirm:
                             if (event.text(key).isNotBlank()) Text("$key · ${event.text(key)}", fontSize = 12.sp)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueCard(model: ClientModel, prompt: JSONObject, index: Int, total: Int, running: Boolean,
+                      edit: (JSONObject) -> Unit, confirm: (String, () -> Unit) -> Unit) {
+    val state = model.state
+    var menu by remember { mutableStateOf(false) }
+    OutlinedCard {
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 2.dp)) {
+            Text(prompt.text("content").ifBlank { "附件任务" })
+            prompt.rows("files").forEach { file -> FileChip(file) { model.previewFile(file) } }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { model.beginPendingEdit(prompt, edit) }, enabled = !state.busy) {
+                    Icon(Icons.Outlined.Edit, null, Modifier.size(16.dp))
+                    Text("编辑", Modifier.padding(start = 6.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { menu = true }, enabled = !state.busy, modifier = Modifier.size(48.dp).testTag("queue-more-$index")) {
+                    Icon(Icons.Outlined.MoreVert, "更多队列操作")
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("上移") }, leadingIcon = { Icon(Icons.Outlined.ArrowUpward, null, Modifier.size(18.dp)) },
+                        enabled = index > 0 && !state.busy, onClick = { menu = false; model.reorder(prompt.text("id"), -1) })
+                    DropdownMenuItem(text = { Text("下移") }, leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null, Modifier.size(18.dp)) },
+                        enabled = index < total - 1 && !state.busy, onClick = { menu = false; model.reorder(prompt.text("id"), 1) })
+                    if (running) DropdownMenuItem(text = { Text("引导") }, leadingIcon = { Icon(Icons.Outlined.Podcasts, null, Modifier.size(18.dp)) },
+                        enabled = !state.busy, onClick = { menu = false
+                            confirm("把这条指令作为当前运行任务的引导？") {
+                                model.mutate("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}/steer")
+                            } })
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+                    DropdownMenuItem(text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
+                        enabled = !state.busy, onClick = { menu = false
+                            confirm("删除这条待发送指令及其附件？") {
+                                model.mutate("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}", "DELETE")
+                            } })
                 }
             }
         }
@@ -290,41 +323,79 @@ private fun HostScreen(model: ClientModel, data: JSONObject, confirm: (String, (
 @Composable
 private fun SettingsScreen(model: ClientModel, form: (FormRequest) -> Unit, confirm: (String, () -> Unit) -> Unit) {
     val state = model.state
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty() }
     ToolColumn {
-        Column(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            BrandMark(Modifier.size(56.dp))
-            Text(state.session?.text("displayName").orEmpty().ifBlank { state.session?.text("username").orEmpty() },
-                Modifier.padding(top = 14.dp), style = MaterialTheme.typography.headlineSmall)
-            Text(runCatching { java.net.URI(state.server).host }.getOrNull().orEmpty(), Modifier.padding(top = 6.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(Modifier.padding(16.dp)) {
-                ChoiceField("外观", state.theme, listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")) { model.appearance(theme = it) }
-                Text("聊天字号 · ${state.fontSize}", Modifier.padding(top = 14.dp), fontSize = 13.sp)
-                Slider(value = state.fontSize.toFloat(), onValueChange = { model.appearance(font = it.toInt()) }, valueRange = 12f..24f, steps = 11)
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.testTag("account-header")) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp).heightIn(min = 72.dp), verticalAlignment = Alignment.CenterVertically) {
+                BrandMark(Modifier.size(44.dp))
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(state.session?.text("displayName").orEmpty().ifBlank { state.session?.text("username").orEmpty() },
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    Text(runCatching { java.net.URI(state.server).host }.getOrNull().orEmpty().ifBlank { state.server },
+                        Modifier.padding(top = 2.dp), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
+        Text("外观与阅读", Modifier.padding(start = 4.dp, top = 8.dp), fontSize = 13.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        listOf(Triple("预设指令", "presets", "/preset-prompts"), Triple("工作目录", "directories", "/working-dirs"),
-            Triple("任务分类", "categories", "/task-categories"), Triple("API 统计与费率", "billing", "/billing?days=30"),
-            Triple("已归档任务", "archived", "/conversations/archived"), Triple("导入历史会话", "import", "/conversations/importable-sessions")
-        ).forEach { (title, kind, path) -> ToolRow(title) { model.navigate(ToolPage(title, kind, path)) } }
-        if (state.session?.optBoolean("providerManagementEnabled") == true) ToolRow("API 源与模型") { model.navigate(ToolPage("API 源与模型", "providers", "/providers")) }
-        else ToolRow("启用 API 源管理", "遵守服务器能力与权限检查") { model.mutate("/user-settings/provider-management", "PUT", json("enabled" to true)) }
+            Column {
+                ChoiceField("外观", state.theme, listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色")) { model.appearance(theme = it) }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp).testTag("font-size-row")) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("聊天字号", Modifier.weight(1f), fontSize = 15.sp)
+                        Text("${state.fontSize}", fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Text("范围 12–24 · 应用于聊天正文与样文", Modifier.padding(top = 2.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Slider(value = state.fontSize.toFloat(), onValueChange = { model.appearance(font = it.toInt()) }, valueRange = 12f..24f, steps = 11,
+                        modifier = Modifier.padding(top = 6.dp).testTag("font-size-slider"))
+                    Text("样文预览：任务交给 Codex，进度随时可查。", Modifier.padding(top = 6.dp), fontSize = state.fontSize.sp, maxLines = 2)
+                }
+            }
         }
+        Text("任务与数据", Modifier.padding(start = 4.dp, top = 8.dp), fontSize = 13.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        ToolRow("本地浏览缓存", "加密保存近期任务，打开时先展示缓存再更新") {
-            confirm("清理当前账号的任务浏览缓存？未发送草稿、登录状态和服务器数据不会删除。") { model.clearCache() }
+            Column {
+                listOf(Triple("预设指令", "presets", "/preset-prompts"), Triple("工作目录", "directories", "/working-dirs"),
+                    Triple("任务分类", "categories", "/task-categories"), Triple("API 统计与费率", "billing", "/billing?days=30"),
+                    Triple("已归档任务", "archived", "/conversations/archived"), Triple("导入历史会话", "import", "/conversations/importable-sessions")
+                ).forEachIndexed { index, (title, kind, path) ->
+                    if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
+                    ToolRow(title) { model.navigate(ToolPage(title, kind, path)) }
+                }
+                if (state.session?.optBoolean("providerManagementEnabled") == true) {
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
+                    ToolRow("API 源与模型") { model.navigate(ToolPage("API 源与模型", "providers", "/providers")) }
+                } else {
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
+                    ToolRow("启用 API 源管理", "遵守服务器能力与权限检查") { model.mutate("/user-settings/provider-management", "PUT", json("enabled" to true)) }
+                }
+            }
         }
-        ToolRow("账户与密码") {
-            val fields = mutableListOf(FormField("currentPassword", "当前密码", kind = "secret", required = true), FormField("newPassword", "新密码（不修改则留空）", kind = "secret"))
-            if (state.session?.optBoolean("canChangeUsername") == true) fields.add(FormField("newUsername", "用户名", state.session.text("username")))
-            form(FormRequest("更新账户", fields, "密码只用于此请求，不保存在客户端。") { model.mutate("/auth/account", "PUT", it) })
+        Text("账户与安全", Modifier.padding(start = 4.dp, top = 8.dp), fontSize = 13.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column {
+                ToolRow("本地浏览缓存", "加密保存近期任务，打开时先展示缓存再更新") {
+                    confirm("清理当前账号的任务浏览缓存？未发送草稿、登录状态和服务器数据不会删除。") { model.clearCache() }
+                }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
+                ToolRow("账户与密码") {
+                    val fields = mutableListOf(FormField("currentPassword", "当前密码", kind = "secret", required = true), FormField("newPassword", "新密码（不修改则留空）", kind = "secret"))
+                    if (state.session?.optBoolean("canChangeUsername") == true) fields.add(FormField("newUsername", "用户名", state.session.text("username")))
+                    form(FormRequest("更新账户", fields, "密码只用于此请求，不保存在客户端。") { model.mutate("/auth/account", "PUT", it) })
+                }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
+                ToolRow("退出登录") { confirm("退出当前账号？未同步草稿会先尝试保存；任务继续在服务器执行。") { model.logout() } }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
+                ToolRow("更换服务器") { confirm("注销并更换服务器？服务器上的任务与数据不会删除。") { model.changeServer() } }
+            }
         }
-        ToolRow("退出登录") { confirm("退出当前账号？未同步草稿会先尝试保存；任务继续在服务器执行。") { model.logout() } }
-        ToolRow("更换服务器") { confirm("注销并更换服务器？服务器上的任务与数据不会删除。") { model.changeServer() } }
-        }
-        Text("Codex Native · 0.3.0-preview\n原生对话 · 项目任务 · 本地缓存", Modifier.fillMaxWidth().padding(vertical = 12.dp), style = MaterialTheme.typography.bodySmall,
+        Text("Codex Native${if (version.isNotBlank()) " · $version" else ""}\n原生对话 · 项目任务 · 本地缓存", Modifier.fillMaxWidth().padding(vertical = 12.dp), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }

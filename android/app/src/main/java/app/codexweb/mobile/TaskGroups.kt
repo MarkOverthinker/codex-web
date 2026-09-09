@@ -12,6 +12,23 @@ fun taskStatus(task: JSONObject): String = when {
     else -> "未运行 / 状态未知"
 }
 
+fun jobStatusLabel(status: String): String = when (status) {
+    "running" -> "运行中"
+    "queued" -> "排队中"
+    "completed" -> "已完成"
+    "failed", "cancelled", "interrupted" -> "需关注"
+    else -> status.ifBlank { "未知" }
+}
+
+fun reasoningLabel(value: String): String = when (value) {
+    "minimal" -> "极简"
+    "low" -> "低"
+    "medium" -> "中"
+    "high" -> "高"
+    "xhigh" -> "超高"
+    else -> value.ifBlank { "默认" }
+}
+
 fun taskGroups(state: NativeState, byStatus: Boolean, query: String): List<TaskGroup> {
     val custom = state.categorySettings.rows("customCategories")
     val favorites = state.workingDirs.rows("favorites")

@@ -2,20 +2,24 @@
 
 package app.codexweb.mobile
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.json.JSONObject
@@ -88,8 +92,15 @@ fun NativeForm(title: String, fields: List<FormField>, explanation: String = "",
 fun ChoiceField(label: String, value: String, options: List<Pair<String, String>>, choose: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
-    OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-        Text("$label · ${options.find { it.first == value }?.second ?: value.ifBlank { "默认" }}", Modifier.fillMaxWidth())
+    val current = options.find { it.first == value }?.second ?: value.ifBlank { "默认" }
+    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+        .clickable { expanded = true }
+        .testTag("choice-$label"), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(current, Modifier.padding(top = 2.dp), fontSize = 15.sp, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        }
+        Icon(Icons.Outlined.ChevronRight, contentDescription = "选择$label", tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (expanded) AlertDialog(onDismissRequest = { expanded = false }, title = { Text(label) },
         text = {
@@ -97,8 +108,11 @@ fun ChoiceField(label: String, value: String, options: List<Pair<String, String>
                 if (options.size > 8) OutlinedTextField(search, { search = it }, label = { Text("搜索") }, singleLine = true)
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     options.filter { it.second.contains(search, true) }.forEach { (id, title) ->
-                        TextButton(onClick = { expanded = false; choose(id) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                            Text((if (id == value) "✓  " else "") + title, Modifier.fillMaxWidth())
+                        Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .clickable { expanded = false; choose(id) }
+                            .testTag("choice-option-$id"), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = id == value, onClick = null)
+                            Text(title, Modifier.padding(start = 10.dp), maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         }
                     }
                     if (options.isEmpty()) Text("服务器未提供可选项")
