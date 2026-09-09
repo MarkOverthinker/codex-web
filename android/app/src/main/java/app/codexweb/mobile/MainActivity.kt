@@ -171,7 +171,7 @@ class MainActivity : ComponentActivity() {
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("audio", "voice.m4a", file.asRequestBody("audio/mp4".toMediaTypeOrNull()))
                     .addFormDataPart("conversationId", id)
-                    .addFormDataPart("draftText", model.state.composer.content.take(5000))
+                    .addFormDataPart("draftText", model.state.composer.content.take(2000))
                     .addFormDataPart("attachmentNames", model.state.composer.files.map { it.text("original_name") }.jsonArray().toString())
                     .apply { if (model.state.voiceModel.isNotEmpty()) addFormDataPart("model", model.state.voiceModel) }.build()
                 model.transcribe(body, id, cleanup = { file.delete() })
