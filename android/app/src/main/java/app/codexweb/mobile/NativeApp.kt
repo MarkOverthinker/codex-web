@@ -437,9 +437,8 @@ private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> U
 private fun OptionsSheet(model: ClientModel) {
     val state = model.state
     val selection = state.detail?.objectValue("agentSelection") ?: state.options.objectValue("selection")
-    Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("任务选项", style = MaterialTheme.typography.titleLarge)
-        Text("仅在需要时展开。执行逻辑仍由服务器决定。", style = MaterialTheme.typography.bodySmall)
+    Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("任务选项", Modifier.padding(bottom = 8.dp), style = MaterialTheme.typography.titleLarge)
         ChoiceField("模型 / API 源", selection.text("model"), state.options.rows("models").map { it.text("id") to "${it.text("providerName")} · ${it.text("label")}" }) { id ->
             val modelOption = state.options.rows("models").find { it.text("id") == id } ?: return@ChoiceField
             val efforts = modelOption.strings("reasoningEfforts")
@@ -448,7 +447,7 @@ private fun OptionsSheet(model: ClientModel) {
         }
         val efforts = state.options.rows("models").find { it.text("id") == selection.text("model") }?.strings("reasoningEfforts")
             ?: state.options.rows("reasoningEfforts").map { it.text("id") }
-        ChoiceField("思考强度", selection.text("reasoningEffort"), efforts.map { it to it }) { model.updateSelection(selection.changed("reasoningEffort" to it)) }
+        ChoiceField("思考强度", selection.text("reasoningEffort"), efforts.map { it to reasoningLabel(it) }) { model.updateSelection(selection.changed("reasoningEffort" to it)) }
         var permission by remember { mutableStateOf<String?>(null) }
         ChoiceField("文件与执行权限", selection.text("sandbox", "workspace-write"), state.options.rows("sandboxModes").map { it.text("id") to it.text("label") }) {
             if (it == "danger-full-access") permission = it else model.updateSelection(selection.changed("sandbox" to it))
@@ -459,10 +458,11 @@ private fun OptionsSheet(model: ClientModel) {
             dismissButton = { TextButton(onClick = { permission = null }) { Text("取消") } })
         if (state.session?.optBoolean("voiceEnabled") == true) ChoiceField("语音转写模型", state.voiceModel,
             state.session.rows("voiceModels").map { it.text("id") to it.text("label") }) { model.voiceModel(it) }
-        Text("预设指令", style = MaterialTheme.typography.titleMedium)
+        HorizontalDivider(Modifier.padding(top = 10.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
+        Text("预设指令", Modifier.padding(top = 14.dp), style = MaterialTheme.typography.titleMedium)
         val enabled = state.detail?.strings("enabledPresetPromptIds").orEmpty()
         state.presets.forEach { preset ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = preset.text("id") in enabled, enabled = !state.busy, onCheckedChange = { checked ->
                     val ids = if (checked) enabled + preset.text("id") else enabled - preset.text("id")
                     model.mutate("${state.conversationPath}/preset-prompts", "PUT", json("presetPromptIds" to ids.jsonArray()))
