@@ -119,10 +119,18 @@ private fun PageLoadingView(hint: String) {
 /** 页内读取失败：只提供只读的重试（刷新）与返回，不重放任何发送/上传请求。 */
 @Composable
 private fun PageErrorView(model: ClientModel, title: String = "读取失败") {
+    val raw = friendlyIoMessage(model.state.pageError.orEmpty())
+    // 服务端错误原文可能与标题同义（如回退文案「读取变更失败。」），去掉与标题重复的前缀，保留其余诊断
+    val body = when {
+        raw.startsWith("$title：") -> raw.removePrefix("$title：")
+        raw.startsWith("$title:") -> raw.removePrefix("$title:").trimStart()
+        raw == "$title。" || raw == title -> ""
+        else -> raw
+    }
     Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.error)
         Text(title, Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
-        Text(friendlyIoMessage(model.state.pageError.orEmpty()), Modifier.padding(top = 8.dp),
+        if (body.isNotBlank()) Text(body, Modifier.padding(top = 8.dp),
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         Row(Modifier.padding(top = 22.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
