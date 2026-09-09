@@ -5,3 +5,4 @@
 - Maintain the separation between the web UID and the tenant worker UID.
 - Run `npm test` before submitting changes.
 - In host-mode deployments with `codex-web-reloader` installed, run `npm run reload` after finishing code changes so the root service rebuilds and restarts `codex-web.service`.
+- Android version releases must also update the maintained download page using `scripts/publish-android.mjs`: verify the persistent signing certificate, publish immutable versioned APKs/checksums and release notes, verify the served page and downloaded APK, and retain historical versions. Follow `docs/ANDROID_RELEASES.md`; an APK attachment alone is not a completed release.
