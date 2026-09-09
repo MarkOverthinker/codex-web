@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -48,16 +49,19 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.MarkwonConfiguration
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-private val LightColors = lightColorScheme(primary = Color(0xff087e68), onPrimary = Color.White,
-    background = Color(0xfffafaf9), surface = Color(0xfffafaf9), surfaceContainer = Color(0xfff0f1ee),
-    surfaceContainerLow = Color(0xfff4f6f3), surfaceContainerHigh = Color(0xffe9ede8), outlineVariant = Color(0xffc4cbc5),
-    secondaryContainer = Color(0xffe2eee8), onSecondaryContainer = Color(0xff163d33))
-private val DarkColors = darkColorScheme(primary = Color(0xff77d8bd), onPrimary = Color(0xff04382d),
-    background = Color(0xff181b1a), surface = Color(0xff181b1a), surfaceContainer = Color(0xff252a28),
-    surfaceContainerLow = Color(0xff202522), surfaceContainerHigh = Color(0xff2c332f), outlineVariant = Color(0xff424b44),
-    secondaryContainer = Color(0xff243e35), onSecondaryContainer = Color(0xffc8ecdc))
+private val LightColors = lightColorScheme(primary = Color(0xff354381), onPrimary = Color.White,
+    secondary = Color(0xff48569d), background = Color(0xfffafbff), surface = Color.White,
+    onSurface = Color(0xff0f1120), onBackground = Color(0xff0f1120), onSurfaceVariant = Color(0xff575760),
+    surfaceContainer = Color(0xffeef0f8), surfaceContainerLow = Color(0xfff6f7fb), surfaceContainerHigh = Color(0xffe9ecf5),
+    outlineVariant = Color(0xffdfe2ec), secondaryContainer = Color(0xffeef0f8), onSecondaryContainer = Color(0xff354381))
+private val DarkColors = darkColorScheme(primary = Color(0xffaeb9f5), onPrimary = Color(0xff181c34),
+    secondary = Color(0xffb4bde6), background = Color(0xff17181c), surface = Color(0xff1d1e25),
+    onSurface = Color(0xffe2e3e8), onBackground = Color(0xffe2e3e8), onSurfaceVariant = Color(0xffa4a7b5),
+    surfaceContainer = Color(0xff272b40), surfaceContainerLow = Color(0xff1d1e25), surfaceContainerHigh = Color(0xff303448),
+    outlineVariant = Color(0xff40434d), secondaryContainer = Color(0xff2c324d), onSecondaryContainer = Color(0xffd8defb))
 
 data class FileRequest(val path: String, val name: String, val mime: String = "application/octet-stream")
 
@@ -88,55 +92,38 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
                     editSubmitting = false
                 }
             }
-            BackHandler(enabled = state.authenticated && (state.selectedId != null || state.page != null)) {
-                if (sheet != null) sheet = null else model.back()
-            }
+            val chatStates = rememberSaveableStateHolder()
+            val profilePage = remember { ToolPage("我的", "settings", "") }
+            val queuePage = remember { ToolPage("任务与队列", "queue", "") }
             if (!state.authenticated) {
                 LoginScreen(state, model::connect)
             } else {
-                Scaffold(
-                    modifier = Modifier.imePadding(),
-                    topBar = {
-                        TopAppBar(title = {
-                            Column {
-                                Text(state.page?.title ?: if (state.selectedId == null) "任务" else state.conversation.text("title", "新任务"),
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-                                if (state.page == null && state.selectedId != null) Text(state.connection, fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }, navigationIcon = {
-                            if (state.selectedId != null || state.page != null) IconButton(onClick = { model.back() }, enabled = !state.busy) {
-                                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回")
-                            }
-                        }, actions = {
-                            if (state.page != null) IconButton(onClick = model::refresh, enabled = !state.busy) { Icon(Icons.Outlined.Refresh, "刷新") }
-                            else if (state.selectedId == null) {
-                                IconButton(onClick = { model.createConversation() }, enabled = !state.busy) { Icon(Icons.Outlined.Add, "新建任务") }
-                                IconButton(onClick = { model.navigate(ToolPage("设置", "settings", "")) }) { Icon(Icons.Outlined.Settings, "设置") }
-                            } else IconButton(onClick = { sheet = "tools" }) { Icon(Icons.Outlined.MoreHoriz, "任务工具") }
-                        })
-                    },
-                    bottomBar = {
-                        if (state.selectedId != null && state.page == null) ComposerBar(state, model, { sheet = "options" },
-                            pickFiles, voice, recording)
-                    },
-                ) { padding ->
-                    Column(Modifier.padding(padding).fillMaxSize()) {
-                        if (state.busy || state.pageLoading) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("request-progress"))
-                        Box(Modifier.weight(1f)) {
-                            if (state.page != null) ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
-                            else if (state.selectedId == null) TaskList(state, model)
-                            else ChatScreen(state, model, download, openLink, { prompt -> edit = prompt to false },
-                                { message, action -> confirm = message to action })
+                ChatFirstShell(model, sheet != null || edit != null || confirm != null, tools = { sheet = "tools" }, composer = {
+                    ComposerBar(state, model, { model.withConversation { sheet = "options" } },
+                        { model.withConversation(pickFiles) }, { if (recording) voice() else model.withConversation(voice) }, recording, { sheet = "queue" })
+                }) {
+                    when {
+                        state.page != null -> {
+                            if (state.pageLoading && state.pageData == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
+                            } else ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
                         }
-                        state.notice?.let { notice ->
-                            Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
-                                Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(notice, Modifier.weight(1f), fontSize = 13.sp)
-                                    IconButton(onClick = model::dismissError) { Icon(Icons.Outlined.Close, "关闭提示") }
-                                }
-                            }
+                        state.homeTab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
+                        state.homeTab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
+                        state.selectedId == null -> WelcomeChat(model)
+                        else -> chatStates.SaveableStateProvider("chat:${state.server}:${state.session?.text("username")}:${state.selectedId}") {
+                            ChatScreen(state, model, download, openLink, { prompt -> edit = prompt to false },
+                                { message, action -> confirm = message to action }, { sheet = "queue" })
                         }
+                    }
+                }
+                if (sheet == "queue") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+                    Column(Modifier.fillMaxWidth().fillMaxHeight(.85f).testTag("queue-sheet")) {
+                        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("任务与队列", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                            IconButton(onClick = { sheet = null }) { Icon(Icons.Outlined.Close, "关闭队列") }
+                        }
+                        ToolsScreen(model, download, { prompt -> sheet = null; edit = prompt to true }, { message, action -> confirm = message to action }, queuePage)
                     }
                 }
                 if (sheet == "tools" || sheet == "options") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -149,7 +136,7 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
                             Triple("侧边线程", "side", "${state.conversationPath}/side-chats"),
                             Triple("工作目录", "directories", "/working-dirs"), Triple("API 统计", "billing", "/billing?days=30"),
                         ).forEach { (title, kind, path) ->
-                            ToolRow(title, onClick = { sheet = null; model.navigate(ToolPage(title, kind, path)) })
+                            ToolRow(title, onClick = { if (kind == "queue") sheet = "queue" else { sheet = null; model.navigate(ToolPage(title, kind, path)) } })
                         }
                         ToolRow("重命名", onClick = { sheet = "rename" })
                         ToolRow("归档任务", onClick = { sheet = null; confirm = "归档这个任务？服务器会保留历史，可在设置中恢复。" to { model.archiveOrDelete(false) } })
@@ -209,7 +196,7 @@ private fun LoginScreen(state: NativeState, connect: (String, String?, String?) 
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp),
         verticalArrangement = Arrangement.Center) {
         Spacer(Modifier.height(40.dp))
-        Icon(Icons.Outlined.Terminal, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
+        BrandMark(Modifier.size(48.dp))
         Spacer(Modifier.height(24.dp))
         Text("把专注留给任务", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Text("Codex · 独立安卓客户端", Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -224,8 +211,10 @@ private fun LoginScreen(state: NativeState, connect: (String, String?, String?) 
         Spacer(Modifier.height(24.dp))
         Button(onClick = { val secret = password; password = ""; connect(server, username.trim(), secret) },
             enabled = server.isNotBlank() && username.isNotBlank() && password.isNotBlank() && !state.connecting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("login")) { Text(if (state.connecting) "连接中…" else "连接并登录") }
-        if (state.connecting) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("login")) {
+            if (state.connecting) CircularProgressIndicator(Modifier.padding(end = 10.dp).size(18.dp), strokeWidth = 2.dp)
+            Text(if (state.connecting) "连接中…" else "连接并登录")
+        }
         Text("复用你的 codex-web 服务与账户。任务在服务器执行，客户端不内置 Codex CLI，也不是 OpenAI 官方产品。",
             Modifier.padding(vertical = 24.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(24.dp))
@@ -233,81 +222,46 @@ private fun LoginScreen(state: NativeState, connect: (String, String?, String?) 
 }
 
 @Composable
-private fun TaskList(state: NativeState, model: ClientModel) {
-    var search by rememberSaveable { mutableStateOf("") }
-    var runningOnly by rememberSaveable { mutableStateOf(false) }
-    var category by rememberSaveable { mutableStateOf("") }
-    val custom = state.categorySettings.rows("customCategories")
-    val available = listOf("auto:standalone" to "独立任务") + custom.map { "custom:${it.text("id")}" to it.text("name") } +
-        state.conversations.map { it.text("working_dir") }.filter { it.isNotBlank() }.distinct()
-            .filter { dir -> custom.none { dir in it.strings("assignedDirs") } }.map { "auto:dir:${it.segment()}" to it.substringAfterLast('/') }
-    Column(Modifier.fillMaxSize()) {
-        OutlinedTextField(search, { search = it }, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp),
-            leadingIcon = { Icon(Icons.Outlined.Search, null) }, placeholder = { Text("搜索任务或工作目录") }, singleLine = true, shape = RoundedCornerShape(24.dp))
-        Row(Modifier.padding(horizontal = 18.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !runningOnly && category.isEmpty(), onClick = { runningOnly = false; category = "" }, label = { Text("全部") })
-            FilterChip(selected = runningOnly, onClick = { runningOnly = true; category = "" }, label = { Text("进行中") })
-            available.filter { it.first !in state.categorySettings.strings("hidden") }.sortedBy {
-                state.categorySettings.strings("pinned").indexOf(it.first).let { position -> if (position == -1) Int.MAX_VALUE else position }
-            }.forEach { (key, name) ->
-                FilterChip(selected = category == key, onClick = { category = key; runningOnly = false }, label = { Text(name) })
-            }
-            AssistChip(onClick = { model.navigate(ToolPage("分类", "categories", "/task-categories")) }, label = { Text("分类") })
-        }
-        val filtered = state.conversations.filter {
-            (it.text("title").contains(search, true) || it.text("working_dir").contains(search, true)) &&
-                (!runningOnly || it.text("status") == "running" || it.optInt("has_pending_work") == 1) && when {
-                category.isEmpty() -> true
-                category == "auto:standalone" -> it.text("working_dir").isEmpty()
-                category.startsWith("custom:") -> it.text("working_dir") in custom.find { group -> "custom:${group.text("id")}" == category }?.strings("assignedDirs").orEmpty()
-                else -> category == "auto:dir:${it.text("working_dir").segment()}"
-            }
-        }.let { tasks ->
-            val order = state.categorySettings.objectValue("conversationOrders").strings(category)
-            if (category.isEmpty()) tasks else tasks.sortedBy { order.indexOf(it.text("id")) }
-        }
-        if (filtered.isEmpty()) EmptyState(if (search.isEmpty() && !runningOnly) "开始一个新任务" else "没有匹配的任务",
-            "聊天保持简洁，文件和高级工具按需打开。", "新建任务") { model.createConversation() }
-        else LazyColumn(Modifier.fillMaxSize().testTag("task-list"), contentPadding = PaddingValues(8.dp, 8.dp, 8.dp, 32.dp)) {
-            items(filtered, key = { it.text("id") }) { conversation ->
-                ListItem(modifier = Modifier.clickable(enabled = !state.busy) { model.openConversation(conversation.text("id")) },
-                    headlineContent = { Text(conversation.text("title"), maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium) },
-                    supportingContent = { Text(conversation.text("working_dir").ifBlank { "独立任务" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingContent = { Icon(if (conversation.text("status") == "running") Icons.Outlined.PlayCircle else Icons.Outlined.ChatBubbleOutline,
-                        null, tint = if (conversation.text("status") == "running") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = { if (conversation.optInt("has_unread_result") == 1) Badge { Text("新") } })
-            }
-        }
-    }
-}
-
-@Composable
 private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRequest) -> Unit, openLink: (String) -> Unit,
-                       edit: (JSONObject) -> Unit, confirm: (String, () -> Unit) -> Unit) {
+                       edit: (JSONObject) -> Unit, confirm: (String, () -> Unit) -> Unit, queue: () -> Unit) {
     val messages = state.detail?.rows("messages").orEmpty()
     val scroll = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
-    val nearBottom by remember { derivedStateOf { !scroll.canScrollForward || scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= scroll.layoutInfo.totalItemsCount - 3 } == true } }
+    var positioned by rememberSaveable { mutableStateOf(false) }
+    var previousMessage by rememberSaveable { mutableStateOf(messages.lastOrNull()?.text("id")) }
+    val scope = rememberCoroutineScope()
+    val nearBottom by remember { derivedStateOf { !scroll.canScrollForward || scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.let {
+        it.index == scroll.layoutInfo.totalItemsCount - 1 && it.offset + it.size <= scroll.layoutInfo.viewportEndOffset + 120
+    } == true } }
     LaunchedEffect(state.selectedId) {
+        if (positioned) return@LaunchedEffect
         val count = snapshotFlow { scroll.layoutInfo.totalItemsCount }.first { it > 0 }
         scroll.scrollToItem(count - 1)
+        positioned = true
     }
-    LaunchedEffect(messages.lastOrNull()?.text("id")) { if (nearBottom && scroll.layoutInfo.totalItemsCount > 0) scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1) }
+    LaunchedEffect(messages.lastOrNull()?.text("id")) {
+        val latest = messages.lastOrNull()?.text("id")
+        if (previousMessage != latest && nearBottom && scroll.layoutInfo.totalItemsCount > 0) scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1)
+        previousMessage = latest
+    }
+    Box(Modifier.fillMaxSize()) {
     if (messages.isEmpty() && state.activeJob == null) {
         EmptyState("有什么需要一起完成？", "描述目标、补充文件，然后开始。\n运行过程与队列不会挤占聊天。")
     } else LazyColumn(state = scroll, modifier = Modifier.fillMaxSize().testTag("messages"), contentPadding = PaddingValues(18.dp, 12.dp, 18.dp, 20.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (state.detail?.objectValue("messagePage")?.optBoolean("hasMore") == true) item {
             TextButton(onClick = model::loadOlder, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("加载更早消息") }
         }
         items(messages, key = { it.text("id") }) { message ->
             val user = message.text("role") == "user"
             var menu by remember { mutableStateOf(false) }
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
-                Surface(color = if (user) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent, shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.fillMaxWidth().testTag("message-${message.text("id")}"), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
+                Surface(color = if (user) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    contentColor = if (user) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.fillMaxWidth(if (user) .9f else 1f), shape = RoundedCornerShape(18.dp)) {
                     Column(Modifier.padding(if (user) 14.dp else 0.dp).widthIn(max = 680.dp)) {
                         if (message.text("quote_excerpt").isNotBlank()) Text("引用 · ${message.text("quote_excerpt")}", maxLines = 3,
-                            overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
+                            overflow = TextOverflow.Ellipsis, color = LocalContentColor.current.copy(alpha = .75f), fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
                         message.optJSONObject("source_reference")?.let { source -> Text("关联上下文 · ${source.text("sourceConversationTitle", "来源任务")}", fontSize = 12.sp) }
                         MarkdownText(message.text("content"), state.fontSize, openLink,
                             quote = { excerpt -> model.quote(message, excerpt) }, side = { excerpt ->
@@ -343,7 +297,7 @@ private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRe
             }
         }
         if (state.activeJob != null) item {
-            OutlinedCard(onClick = { model.navigate(ToolPage("任务与队列", "queue", "")) }) {
+            OutlinedCard(onClick = queue) {
                 Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     Column { Text("任务${if (state.activeJob?.text("status") == "queued") "排队中" else "运行中"}")
@@ -353,12 +307,17 @@ private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRe
             }
         }
     }
+    if (!nearBottom && messages.isNotEmpty()) SmallFloatingActionButton(onClick = { scope.launch { scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1) } },
+        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp), containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary) {
+        Icon(Icons.Outlined.ArrowDownward, "回到最新消息")
+    }
+    }
 }
 
 @Composable
 fun MarkdownText(content: String, size: Int, openLink: (String) -> Unit = {}, quote: ((String) -> Unit)? = null, side: ((String) -> Unit)? = null) {
     val context = LocalContext.current
-    val color = MaterialTheme.colorScheme.onSurface.toArgb()
+    val color = LocalContentColor.current.toArgb()
     val link = rememberUpdatedState(openLink)
     val onQuote = rememberUpdatedState(quote)
     val onSide = rememberUpdatedState(side)
@@ -407,9 +366,9 @@ fun MarkdownText(content: String, size: Int, openLink: (String) -> Unit = {}, qu
 }
 
 @Composable
-private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> Unit, pickFiles: () -> Unit, voice: () -> Unit, recording: Boolean) {
-    Surface(shadowElevation = 3.dp) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp)) {
+private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> Unit, pickFiles: () -> Unit, voice: () -> Unit, recording: Boolean, queue: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
             if (state.sendUncertain) {
                 var resolve by remember { mutableStateOf(false) }
                 TextButton(onClick = { resolve = true }, modifier = Modifier.fillMaxWidth()) { Text("上次发送待核对 · 点击处理") }
@@ -428,31 +387,48 @@ private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> U
                         trailingIcon = { IconButton(onClick = { model.removeAttachment(file.text("id")) }, modifier = Modifier.size(48.dp), enabled = !state.busy) { Icon(Icons.Outlined.Close, "移除附件") } })
                 }
             }
-            OutlinedTextField(value = state.composer.content, onValueChange = model::changeText,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp).testTag("composer"), enabled = !state.busy && !state.sendUncertain,
-                placeholder = { Text(if (recording) "录音中，点击麦克风结束并转写…" else "发送消息…") }, maxLines = 6,
-                shape = RoundedCornerShape(22.dp), colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant))
+            val pending = state.detail?.rows("pendingPrompts").orEmpty().size
+            if (pending > 0 || state.editingPrompt != null || state.activeJob != null) TextButton(
+                onClick = queue, modifier = Modifier.fillMaxWidth().testTag("queue-hint"), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                Icon(Icons.Outlined.Queue, null, Modifier.size(16.dp))
+                Text("${if (state.activeJob != null) "执行中 · " else ""}队列 $pending${if (state.editingPrompt != null) " · 暂停编辑" else ""}",
+                    Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Start)
+                Icon(Icons.Outlined.ExpandLess, "展开队列", Modifier.size(18.dp))
+            }
+            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+            Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+            TextField(value = state.composer.content, onValueChange = model::changeText,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composer"), enabled = !state.connecting && (!state.busy || state.operation == "voice") && !state.sendUncertain,
+                placeholder = { Text(if (recording) "正在聆听…" else "给 Agent 发消息…", fontSize = 15.sp) }, maxLines = 5,
+                colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = pickFiles, enabled = !state.busy && !recording) { Icon(Icons.Outlined.Add, "添加附件") }
+                IconButton(onClick = pickFiles, enabled = !state.busy && !recording && !state.detailFromCache) {
+                    if (state.operation == "upload") CircularProgressIndicator(Modifier.size(22.dp).testTag("upload-progress"), strokeWidth = 2.dp)
+                    else Icon(Icons.Outlined.Add, "添加附件")
+                }
                 TextButton(onClick = options, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
                     val selected = state.detail?.objectValue("agentSelection") ?: state.options.objectValue("selection")
                     val label = state.options.rows("models").find { it.text("id") == selected.text("model") }?.text("label") ?: selected.text("model")
                     Text(label.ifBlank { "模型与选项" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                     Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
                 }
-                if (state.session?.optBoolean("voiceEnabled") == true) IconButton(onClick = voice, enabled = !state.busy) {
-                    Icon(if (recording) Icons.Outlined.StopCircle else Icons.Outlined.Mic, if (recording) "结束录音并转写" else "语音输入",
+                if (state.session?.optBoolean("voiceEnabled") == true) IconButton(onClick = voice, enabled = !state.busy && !state.detailFromCache) {
+                    if (state.operation == "voice") CircularProgressIndicator(Modifier.size(22.dp).testTag("voice-progress"), strokeWidth = 2.dp)
+                    else Icon(if (recording) Icons.Outlined.StopCircle else Icons.Outlined.Mic, if (recording) "结束录音并转写" else "语音输入",
                         tint = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
                 }
-                FilledIconButton(onClick = model::send, enabled = !state.busy && !recording && !state.sendUncertain && (state.composer.content.isNotBlank() || state.composer.files.isNotEmpty()),
-                    modifier = Modifier.size(48.dp).testTag("send")) { Icon(Icons.AutoMirrored.Outlined.Send, "发送") }
+                FilledIconButton(onClick = model::send, enabled = !state.busy && !recording && !state.sendUncertain && !state.detailFromCache && (state.composer.content.isNotBlank() || state.composer.files.isNotEmpty()),
+                    modifier = Modifier.size(48.dp).testTag("send")) {
+                    if (state.operation == "send") CircularProgressIndicator(Modifier.size(20.dp).testTag("send-progress"), strokeWidth = 2.dp)
+                    else Icon(Icons.Outlined.ArrowUpward, "发送")
+                }
             }
-            val pending = state.detail?.rows("pendingPrompts").orEmpty().size
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(state.draftStatus, fontSize = 10.sp, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (pending > 0 || state.editingPrompt != null) Text("队列 $pending${if (state.editingPrompt != null) " · 有暂停编辑" else ""}", fontSize = 11.sp,
-                    modifier = Modifier.clickable { model.navigate(ToolPage("任务与队列", "queue", "")) }.padding(8.dp), color = MaterialTheme.colorScheme.primary)
             }
+            }
+            if (state.draftStatus.isNotBlank()) Text(state.draftStatus, fontSize = 10.sp,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

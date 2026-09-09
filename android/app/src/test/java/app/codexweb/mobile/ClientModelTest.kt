@@ -24,6 +24,8 @@ class ModelGateway : Gateway {
     var acceptBeforeFailure = false
     var failDraft = false
     var draftGate: CompletableDeferred<Unit>? = null
+    var detailGate: CompletableDeferred<Unit>? = null
+    var detailFailure: Exception? = null
     var messages = emptyList<JSONObject>()
     var sequenceCallback: ((JSONObject, Long) -> Unit)? = null
     var eventFailures: ((String) -> Unit)? = null
@@ -55,9 +57,13 @@ class ModelGateway : Gateway {
                 if (failSend) throw IOException("response lost")
                 json("queued" to true)
             }
-            path == "/conversations/one" -> json("conversation" to json("id" to "one", "title" to "Test task"), "composerDraft" to draft,
+            path == "/conversations/one" -> {
+                detailGate?.await()
+                detailFailure?.let { throw it }
+                json("conversation" to json("id" to "one", "title" to "Test task"), "composerDraft" to draft,
                 "messages" to messages.jsonArray(), "messagePage" to json("hasMore" to false), "activeJob" to active,
                 "jobEvents" to emptyList<JSONObject>().jsonArray())
+            }
             else -> json()
         }
     }
@@ -175,5 +181,97 @@ class ClientModelTest {
         assertEquals(1, model.state.detail!!.rows("jobEvents").size)
         assertEquals("run", model.state.detail!!.rows("jobEvents").single().text("label"))
         withContext(dispatcher) { model.foreground(false) }
+    }
+
+    @Test fun cachedConversationIsVisibleBeforeSlowNetworkReturns() = runBlocking {
+        api.detailGate = CompletableDeferred()
+        withContext(dispatcher) { model.openConversation("one") }
+        await { model.state.detailFromCache }
+        assertEquals("Test task", model.state.conversation.text("title"))
+        assertTrue(model.state.busy)
+        api.detailGate!!.complete(Unit)
+        await { !model.state.busy }
+        assertFalse(model.state.detailFromCache)
+    }
+
+    @Test fun offlineCacheAllowsLocalDraftButNotUnverifiedSending() = runBlocking {
+        api.detailFailure = IOException("offline")
+        withContext(dispatcher) { model.openConversation("one") }
+        await { !model.state.busy }
+        assertTrue(model.state.detailFromCache)
+        assertNull(model.state.error)
+        withContext(dispatcher) { model.changeText("离线补充内容"); model.send() }
+        assertEquals(0, api.calls.count { it.first.endsWith("/messages") })
+        api.detailFailure = null
+        withContext(dispatcher) { model.refresh() }
+        await { !model.state.busy }
+        assertEquals("离线补充内容", model.state.composer.content)
+        assertFalse(model.state.detailFromCache)
+    }
+
+    @Test fun revokedConversationDoesNotRemainVisibleFromCache() = runBlocking {
+        api.detailFailure = ApiFailure(403, "permission revoked")
+        withContext(dispatcher) { model.openConversation("one") }
+        await { !model.state.busy }
+        assertNull(model.state.selectedId)
+        assertNull(model.state.detail)
+        assertNotNull(model.state.error)
+    }
+
+    @Test fun newChatDraftSurvivesRecreationWithoutCreatingServerTask() = runBlocking {
+        withContext(dispatcher) { model.startNewChat() }
+        await { !model.state.busy }
+        withContext(dispatcher) { model.changeText("尚未建立会话的草稿") }
+        await { storage.read("draft:https://example.org/codex-web/:test-user:_new") != null }
+        withContext(dispatcher) { owner.clear(); model = ClientModel(storage) { api }; owner.put("new-home", model) }
+        await { model.state.authenticated && !model.state.connecting }
+        assertNull(model.state.selectedId)
+        assertEquals("尚未建立会话的草稿", model.state.composer.content)
+        assertEquals(0, api.calls.count { it.first.endsWith("/messages") })
+        withContext(dispatcher) { model.selectTab(HomeTab.Profile); model.selectTab(HomeTab.Chat) }
+        assertEquals("尚未建立会话的草稿", model.state.composer.content)
+        withContext(dispatcher) { model.send() }
+        await { !model.state.busy }
+        assertEquals("尚未建立会话的草稿", api.messages.last().text("content"))
+        assertNull(storage.read("draft:https://example.org/codex-web/:test-user:_new"))
+    }
+
+    @Test fun offlineDraftDoesNotBlockLeavingAndReopeningCachedChat() = runBlocking {
+        api.detailFailure = IOException("offline")
+        api.failDraft = true
+        withContext(dispatcher) { model.openConversation("one") }
+        await { !model.state.busy }
+        withContext(dispatcher) { model.changeText("离线草稿保留"); model.startNewChat() }
+        await { !model.state.busy }
+        assertNull(model.state.selectedId)
+        assertNull(model.state.error)
+        withContext(dispatcher) { model.openConversation("one") }
+        await { !model.state.busy }
+        assertEquals("离线草稿保留", model.state.composer.content)
+        assertTrue(model.state.detailFromCache)
+        assertEquals(0, api.calls.count { it.first.endsWith("/draft") })
+    }
+
+    @Test fun refreshRevocationClearsVisibleAndPersistedSnapshot() = runBlocking {
+        api.detailFailure = ApiFailure(403, "permission revoked")
+        withContext(dispatcher) { model.refresh() }
+        await { !model.state.busy }
+        assertNull(model.state.selectedId)
+        assertNull(model.state.detail)
+        val snapshots = SnapshotCache(storage)
+        assertNull(snapshots.get("https://example.org/codex-web/:test-user", "detail:one"))
+    }
+
+    @Test fun offlineSnapshotRetainsServerDraftAndAttachmentReferences() = runBlocking {
+        api.draft = json("content" to "已经同步的草稿", "quote_excerpt" to "引用内容", "files" to listOf(json("id" to "attachment-one")).jsonArray())
+        withContext(dispatcher) { model.refresh() }
+        await { !model.state.busy }
+        api.detailFailure = IOException("offline")
+        withContext(dispatcher) { model.openConversation("one") }
+        await { !model.state.busy }
+        assertTrue(model.state.detailFromCache)
+        assertEquals("已经同步的草稿", model.state.composer.content)
+        assertEquals("引用内容", model.state.composer.quote)
+        assertEquals("attachment-one", model.state.composer.files.single().text("id"))
     }
 }
