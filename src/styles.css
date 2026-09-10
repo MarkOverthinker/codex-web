@@ -1932,7 +1932,13 @@ body.resizing-composer * { cursor: ns-resize !important; user-select: none !impo
 .billing-header > div { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; align-items: center; }
 .billing-header strong { font-size: 17px; }
 .billing-header small { grid-column: 2; color: var(--muted); }
-.billing-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px; }
+.billing-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px; }
+.billing-date-range { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0 24px 16px; }
+.billing-date-range label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.billing-date-range input { min-width: 0; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px; background: var(--surface-raised); color: var(--text); }
+.billing-date-range small { flex-basis: 100%; color: var(--muted); }
+.billing-range-caption { padding: 0 24px; color: var(--muted); font-size: 12px; }
+details.billing-section > summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
 .billing-toolbar label { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
 .billing-toolbar select, .billing-rules-table input { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-raised); color: var(--text); }
 .billing-toolbar select { padding: 7px 28px 7px 9px; }

@@ -10,6 +10,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import multer from "multer";
 import pino, { type Logger } from "pino";
+import { z } from "zod";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
@@ -1175,10 +1176,24 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json({ providers: listProvidersPublic(db, session.user_id), models: listProviderModelsPublic(db, session.user_id) });
   });
 
-  api.get("/billing", (req, res) => {
+  api.use("/billing", (req, res, next) => {
+    const parsed = z.object({
+      days: z.coerce.number().int().min(0).max(3650).default(30),
+      from: z.string().datetime({ offset: true }).optional(),
+      to: z.string().datetime({ offset: true }).optional(),
+    }).safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: "统计范围无效，请提供有效的天数或 ISO 起止时间。" });
+    const { from, to } = parsed.data;
+    if (Boolean(from) !== Boolean(to) || (from && to && Date.parse(from) >= Date.parse(to))) {
+      return res.status(400).json({ error: "请同时提供起止时间，且结束时间必须晚于开始时间。" });
+    }
+    res.locals.billingRange = parsed.data;
+    next();
+  });
+
+  api.get("/billing", (_req, res) => {
     const session = res.locals.session as SessionRow;
-    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
-    return res.json(buildBillingState(db, session.user_id, rawDays));
+    return res.json(buildBillingState(db, session.user_id, res.locals.billingRange.days, res.locals.billingRange));
   });
 
   api.put("/billing/pricing-rules/:providerId/:modelId", (req, res) => {
@@ -1227,19 +1242,17 @@ export function createApp(overrides: AppOverrides = {}) {
       peak_weekdays: weekdays.join(","),
       timezone,
     });
-    return res.json(buildBillingState(db, session.user_id, Number(req.query.days) || 30));
+    return res.json(buildBillingState(db, session.user_id, res.locals.billingRange.days, res.locals.billingRange));
   });
 
   api.post("/billing/recalculate", (req, res) => {
     const session = res.locals.session as SessionRow;
     db.clearPricingRuleHistory(session.user_id);
-    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
-    return res.json(buildBillingState(db, session.user_id, rawDays, { useCurrentPricing: true }));
+    return res.json(buildBillingState(db, session.user_id, res.locals.billingRange.days, { ...res.locals.billingRange, useCurrentPricing: true }));
   });
 
   api.post("/billing/sync-pricing", async (req, res) => {
     const session = res.locals.session as SessionRow;
-    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
     const results: Array<{ providerId: string; imported: number; error?: string }> = [];
     for (const provider of db.listProviders(session.user_id).filter((candidate) => candidate.enabled)) {
       try {
@@ -1249,17 +1262,16 @@ export function createApp(overrides: AppOverrides = {}) {
         results.push({ providerId: provider.id, imported: 0, error: error instanceof Error ? error.message : "同步失败" });
       }
     }
-    return res.json({ results, imported: results.reduce((sum, result) => sum + result.imported, 0), billing: buildBillingState(db, session.user_id, rawDays) });
+    return res.json({ results, imported: results.reduce((sum, result) => sum + result.imported, 0), billing: buildBillingState(db, session.user_id, res.locals.billingRange.days, res.locals.billingRange) });
   });
 
   api.post("/billing/providers/:id/sync-pricing", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const provider = db.getProvider(session.user_id, String(req.params.id));
     if (!provider) return res.status(404).json({ error: "API 源不存在。" });
-    const rawDays = typeof req.query.days === "string" ? Number(req.query.days) : 30;
     try {
       const result = await syncProviderPricing(db, session.user_id, provider, typeof req.body?.pricingUrl === "string" ? req.body.pricingUrl : undefined);
-      return res.json({ ...result, billing: buildBillingState(db, session.user_id, rawDays) });
+      return res.json({ ...result, billing: buildBillingState(db, session.user_id, res.locals.billingRange.days, res.locals.billingRange) });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "同步计费标准失败。" });
     }

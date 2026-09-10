@@ -1951,7 +1951,8 @@ export class AppDatabase {
     );
   }
 
-  listApiUsage(userId: string, since: string): ApiUsageRow[] {
+  listApiUsage(userId: string, since: string, until?: string): ApiUsageRow[] {
+    if (until) return this.sqlite.prepare("SELECT * FROM api_usage WHERE user_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC,id DESC").all(userId, since, until) as ApiUsageRow[];
     return this.sqlite.prepare("SELECT * FROM api_usage WHERE user_id=? AND created_at>=? ORDER BY created_at DESC,id DESC").all(userId, since) as ApiUsageRow[];
   }
 
