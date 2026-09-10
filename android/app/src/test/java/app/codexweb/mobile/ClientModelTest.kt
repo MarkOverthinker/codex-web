@@ -16,6 +16,28 @@ import org.junit.Before
 import org.junit.Test
 import java.io.Closeable
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+
+private class DraftFailureStore : NativeStore {
+    private val values = java.util.concurrent.ConcurrentHashMap<String, String>()
+    val draftWriteFailures = AtomicInteger()
+    var failDraftWrites = false
+    var draftWriteGate: CountDownLatch? = null
+
+    override fun read(key: String): String? = values[key]
+
+    override fun write(key: String, value: String?) {
+        if (key.startsWith("draft:")) {
+            draftWriteGate?.await()
+            if (failDraftWrites) {
+                draftWriteFailures.incrementAndGet()
+                throw IOException("draft storage full")
+            }
+        }
+        if (value == null) values.remove(key) else values[key] = value
+    }
+}
 
 class ModelGateway : Gateway {
     override var csrf = ""
@@ -128,13 +150,13 @@ class ClientModelTest {
     private val dispatcher = newSingleThreadContext("native-model-test")
     private lateinit var model: ClientModel
     private lateinit var api: ModelGateway
-    private lateinit var storage: MemoryStore
+    private lateinit var storage: DraftFailureStore
     private val owner = ViewModelStore()
 
     @Before fun setup() = runBlocking {
         Dispatchers.setMain(dispatcher)
         api = ModelGateway()
-        storage = MemoryStore()
+        storage = DraftFailureStore()
         withContext(dispatcher) { model = ClientModel(storage) { api }; owner.put("client", model) }
         delay(50)
         withContext(dispatcher) { model.connect("https://example.org", "test-user", "test-password") }
@@ -336,6 +358,38 @@ class ClientModelTest {
         assertEquals(1, api.clearCredentialsCalls)
         assertEquals(1, api.logoutCalls)
         assertTrue(model.state.error.orEmpty().contains("未确认"))
+    }
+
+    @Test fun logoutDraftWriteFailureIsReportedInsteadOfClaimingLocalRetention() = runBlocking {
+        storage.failDraftWrites = true
+        withContext(dispatcher) { model.changeText("退出时无法保存") ; model.logout() }
+        await { !model.state.busy }
+        await { storage.draftWriteFailures.get() > 0 }
+        assertTrue(model.state.error.orEmpty().contains("草稿保存失败"))
+        assertFalse(model.state.error.orEmpty().contains("草稿已保留"))
+    }
+
+    @Test fun expiredSessionSuccessfulDraftWriteReportsRetentionAfterWrite() = runBlocking {
+        api.draftFailure = ApiFailure(401, "expired")
+        withContext(dispatcher) { model.changeText("失效前成功保存") }
+        await { !model.state.authenticated }
+        await { storage.read("draft:https://example.org/codex-web/:test-user:one") != null }
+        assertEquals("失效前成功保存", JSONObject(storage.read("draft:https://example.org/codex-web/:test-user:one")!!).text("content"))
+        assertEquals("本机草稿已保留", model.state.draftStatus)
+    }
+
+    @Test fun expiredSessionDelayedDraftWriteFailureIsNotReportedAsRetention() = runBlocking {
+        storage.failDraftWrites = true
+        storage.draftWriteGate = CountDownLatch(1)
+        api.draftFailure = ApiFailure(401, "expired")
+        withContext(dispatcher) { model.changeText("失效时延迟保存") }
+        await { !model.state.authenticated }
+        assertNotEquals("本机草稿已保留", model.state.draftStatus)
+        storage.draftWriteGate!!.countDown()
+        await { storage.draftWriteFailures.get() > 0 }
+        delay(100)
+        assertTrue(model.state.error.orEmpty().contains("草稿保存失败"))
+        assertFalse(model.state.draftStatus == "本机草稿已保留")
     }
 
     @Test fun serverChangeOnUnauthorizedLogoutClearsCredentialsAndForgetsServer() = runBlocking {
