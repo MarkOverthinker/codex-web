@@ -2461,8 +2461,12 @@ export class AppDatabase {
     const boundedLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
     const boundedAfter = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
     const events = this.sqlite.prepare(
-      "SELECT seq,event_type,payload,created_at FROM job_events WHERE job_id=? AND seq>? ORDER BY seq DESC LIMIT ?",
-    ).all(jobId, boundedAfter, boundedLimit) as JobEventRow[];
+      `SELECT seq,event_type,payload,created_at FROM (
+        SELECT seq,event_type,payload,created_at FROM job_events WHERE job_id=? AND seq>? ORDER BY seq DESC LIMIT ?
+      ) UNION SELECT seq,event_type,payload,created_at FROM job_events
+        WHERE job_id=? AND seq>? AND json_extract(payload, '$.kind')='subagent'
+      ORDER BY seq DESC`,
+    ).all(jobId, boundedAfter, boundedLimit, jobId, boundedAfter) as JobEventRow[];
     return events.reverse();
   }
 
