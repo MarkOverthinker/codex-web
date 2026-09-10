@@ -16,7 +16,7 @@ import { describeUpstreamError, isRetryableUpstreamError, runWithTransientRetrie
 import { buildAgentSteerPrompt, buildAgentTurnPrompt, type AgentAttachmentContext } from "./agent-context.js";
 import { detectOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { latestUserCancellationContext } from "./cancellation-summary.js";
-import { hostTenantFor } from "./host-mode.js";
+import { prepareHostTenant as hostTenantFor } from "./host-mode.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 import { mimeTypeForPath } from "./mime.js";
 import { resolveModelAdapter } from "./provider-manager.js";
@@ -393,7 +393,7 @@ export class CodexRunner {
 
   private codexHomeFor(userId: string): string {
     if (this.config.hostMode) {
-      return hostTenantFor(this.config, this.db, userId)?.codexHome ?? this.config.codexHome;
+      return hostTenantFor(this.config, this.db, userId)?.codexHome ?? ensureTenant(this.config.tenantRoot, userId).codexHome;
     }
     return ensureTenant(this.config.tenantRoot, userId).codexHome;
   }

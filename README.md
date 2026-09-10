@@ -232,10 +232,12 @@ additional access are reviewed automatically and fail closed when no automatic
 decision is available. When the operator sets `ALLOW_DANGER_FULL_ACCESS=true`,
 each conversation can also opt into Codex's `danger-full-access` sandbox from
 the composer: sandboxing is then skipped entirely and the agent gets the tenant
-user's full filesystem and shell access, with no approval review. `CODEX_HOME` points at the user's real `~/.codex`, so
-their global skills and reviewed host tools remain available. `add-tenant.mjs` creates missing
+user's full filesystem and shell access, with no approval review. `CODEX_HOME` points at
+`TENANT_ROOT/<user-id>/host-codex-home`, initialized once from the user's `~/.codex`.
+Web provider settings, credentials and runtime state then evolve independently of the desktop.
+Skills are copied at initialization and reviewed host tools remain available. `add-tenant.mjs` creates missing
 system users (copying a `.codex` template) and reuses existing users' own
-`~/.codex`. Task processes load the user's full supplementary groups via
+`~/.codex` as a read-only initialization source. Task processes load the user's full supplementary groups via
 `setpriv --init-groups` (util-linux), so group-owned host tools work as in a
 normal login. See [Host mode](docs/DEPLOYMENT.md#host-mode-machine-users-as-tenants)
 for setup and the security trade-offs.

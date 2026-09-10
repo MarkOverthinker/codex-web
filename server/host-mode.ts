@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import type { AppConfig } from "./config.js";
 import type { AppDatabase } from "./db.js";
 import { tenantPaths } from "./paths.js";
+import { prepareHostCodexHome } from "./host-codex-home.js";
 
 export type SystemUser = {
   username: string;
@@ -20,12 +21,13 @@ export type HostTenant = {
   gid: number;
   home: string;
   codexHome: string;
+  sourceCodexHome: string;
   root: string;
   library: string;
   conversations: string;
 };
 
-export const CODEX_CONFIG_HINT = "你的 Codex 尚未配置：该系统用户的主目录缺少可用的 ~/.codex（需要 config.toml 和登录凭据）。请先以该系统用户身份完成 codex 登录，或联系管理员。";
+export const CODEX_CONFIG_HINT = "Web Codex 尚未配置：请先完成该系统用户的 Codex 登录以初始化 Web 环境；初始化后请在 Web 专用 CODEX_HOME 中管理配置与登录，或联系管理员。";
 
 /**
  * Resolve a machine user from the local passwd database. getent is preferred
@@ -63,7 +65,7 @@ function parsePasswdLine(line: string, expectedUsername: string): SystemUser | u
 }
 
 /**
- * A tenant is usable when its real ~/.codex has config.toml plus either a
+ * A tenant is usable when its Codex Home has config.toml plus either a
  * credential file or an inline bearer token. When an owner is supplied, the
  * check also models the permissions of the UID that will run Codex; a root
  * process must not report a root-only config as usable by that tenant.
@@ -108,8 +110,8 @@ export function isCodexConfigured(codexHome: string | undefined | null, owner?: 
 
 /**
  * Host mode maps every web user to the machine user with the same username.
- * Storage (conversations, library) stays under TENANT_ROOT while CODEX_HOME
- * points at the machine user's real ~/.codex.
+ * Both Web runtime state and storage stay under TENANT_ROOT. The machine
+ * user's ~/.codex is only a read-only bootstrap and explicit import source.
  */
 export function hostTenantFor(config: AppConfig, db: AppDatabase, userId: string): HostTenant | null {
   const user = db.getUser(userId);
@@ -124,9 +126,16 @@ export function hostTenantFor(config: AppConfig, db: AppDatabase, userId: string
     uid: system.uid,
     gid: system.gid,
     home: system.home,
-    codexHome: path.join(system.home, ".codex"),
+    codexHome: path.join(paths.root, "host-codex-home"),
+    sourceCodexHome: path.join(system.home, ".codex"),
     root: paths.root,
     library: paths.library,
     conversations: paths.conversations,
   };
+}
+
+export function prepareHostTenant(config: AppConfig, db: AppDatabase, userId: string): HostTenant | null {
+  const host = hostTenantFor(config, db, userId);
+  if (host) prepareHostCodexHome(host, db.listCodexThreadIds(userId).length > 0);
+  return host;
 }

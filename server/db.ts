@@ -1111,12 +1111,12 @@ export class AppDatabase {
     `).get(conversationId, userId) as ConversationRow | undefined;
   }
 
-  listCodexThreadIds(): string[] {
+  listCodexThreadIds(userId?: string): string[] {
     return (this.sqlite.prepare(`
-      SELECT codex_thread_id AS thread_id FROM conversations WHERE codex_thread_id IS NOT NULL
+      SELECT codex_thread_id AS thread_id FROM conversations WHERE codex_thread_id IS NOT NULL AND (? IS NULL OR user_id=?)
       UNION
-      SELECT fork_source_thread_id AS thread_id FROM conversations WHERE fork_source_thread_id IS NOT NULL
-    `).all() as Array<{ thread_id: string }>).map((row) => row.thread_id);
+      SELECT fork_source_thread_id AS thread_id FROM conversations WHERE fork_source_thread_id IS NOT NULL AND (? IS NULL OR user_id=?)
+    `).all(userId ?? null, userId ?? null, userId ?? null, userId ?? null) as Array<{ thread_id: string }>).map((row) => row.thread_id);
   }
 
   createImportedConversation(input: {
