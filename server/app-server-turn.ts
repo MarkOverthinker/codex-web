@@ -162,6 +162,7 @@ class AppServerTurnClient {
     const appServerArgs = [
       "app-server",
       "--listen", "stdio://",
+      "-c", 'cli_auth_credentials_store="file"',
       "-c", `approval_policy="${APPROVAL_POLICY}"`,
       "-c", `approvals_reviewer="${APPROVALS_REVIEWER}"`,
       "-c", `sandbox_mode="${options.sandboxMode}"`,

@@ -22,6 +22,12 @@ Structured message references are stored in `messages.source_reference`, `compos
 
 In host mode (`HOST_MODE=true`), a conversation may instead run Codex with its
 working directory pointed at a host path the tenant machine user can access:
+the runtime's `CODEX_HOME` and `CODEX_SQLITE_HOME` are isolated under
+`TENANT_ROOT/<user-id>/host-codex-home`. The desktop `~/.codex` is only read
+for initial configuration/history migration and explicit history import.
+Provider generation, credential refresh, SQLite state and rollout deletion
+operate on independent Web copies. This separates application state; it does
+not change the host-mode Unix identity or grant a new filesystem security boundary.
 per-user favorites and a default directory are persisted in `user_settings`,
 and each conversation stores its own `working_dir`. Uploads, outputs, and the
 temporary runtime area remain in the conversation's own workspace, and

@@ -17,7 +17,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "../dist-server/server/config.js";
 import { AppDatabase } from "../dist-server/server/db.js";
-import { hostTenantFor } from "../dist-server/server/host-mode.js";
+import { prepareHostTenant as hostTenantFor } from "../dist-server/server/host-mode.js";
 import {
   importCatalogModels,
   importProvidersFromConfig,

@@ -2,7 +2,9 @@
 
 ## 默认行为
 
-API 源管理按 Web 用户独立保存，默认关闭。关闭时，codex-web 不读取数据库中的 provider 记录，也不会写入或生成 `~/.codex/config.toml`、`models_cache.json`；模型菜单直接读取该用户 Codex Home 中由用户自行维护的 `models_cache.json` 或 `models.json`，任务执行沿用用户自己的 `config.toml`。
+宿主模式使用独立的 `TENANT_ROOT/<user-id>/host-codex-home`。首次初始化复制系统用户的配置、认证、技能和必要的历史快照；后续启动、源管理、登录刷新只更新 Web 目录。桌面端的默认源和认证文件保持独立。需要重新登录 Web 时，以该系统用户身份设置这个专用 `CODEX_HOME` 后运行 `codex login`；桌面端登录变化不会自动覆盖 Web 的登录。
+
+API 源管理按 Web 用户独立保存，默认关闭。关闭时，codex-web 不读取数据库中的 provider 记录，也不会写入或生成 Web 专用 `config.toml`、`models_cache.json`；模型菜单直接读取该用户 Codex Home 中由用户自行维护的 `models_cache.json` 或 `models.json`，任务执行沿用用户自己的 `config.toml`。
 
 在个人设置中打开“API 源管理”后，才会启用本文后续的数据库源、模型目录和配置生成流程。关闭管理不会删除数据库记录或改写现有文件；再次打开时，已有管理记录可能重新生成受管理的配置，请确认记录内容与本地文件一致。
 
@@ -31,7 +33,7 @@ Codex Web 可以把多个 Codex provider（API 源）统一管理起来，并在
 
 从旧版全局 provider 表升级时，数据库会把已有记录复制到升级时已存在的每个 Web 用户名下，再转为用户级复合主键。旧数据无法可靠判断最初由哪个用户创建，因此迁移优先保持各用户升级前可用的配置；迁移完成后，每份记录独立演进，新建用户不会继承这些源。
 
-生成 `models_cache.json` 时，codex-web 只使用仓库内置的完整模板库，不再把用户 `~/.codex/models_cache.json` 当作模板。模板库包含标准 fallback、当前 Codex 内置模型模板和 DeepSeek 模型模板；先按上游 `model_id` 精确匹配，再按最长前缀匹配，未知模型才使用标准 fallback。数据库字段覆盖 slug、显示信息、优先级、输入模态、思考深度以及模型级上下文参数；每次启动 app-server 时，选中模型的 `model_context_window` 和 `model_auto_compact_token_limit` 会通过命令行配置覆盖传入。未主动配置时默认使用 512,000 和 435,000 tokens。host 模式下，写入宿主用户 `~/.codex` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
+生成 `models_cache.json` 时，codex-web 只使用仓库内置的完整模板库，不再把用户 `~/.codex/models_cache.json` 当作模板。模板库包含标准 fallback、当前 Codex 内置模型模板和 DeepSeek 模型模板；先按上游 `model_id` 精确匹配，再按最长前缀匹配，未知模型才使用标准 fallback。数据库字段覆盖 slug、显示信息、优先级、输入模态、思考深度以及模型级上下文参数；每次启动 app-server 时，选中模型的 `model_context_window` 和 `model_auto_compact_token_limit` 会通过命令行配置覆盖传入。未主动配置时默认使用 512,000 和 435,000 tokens。host 模式下，写入 `TENANT_ROOT/<user-id>/host-codex-home` 的目录和两个文件会自动修复为宿主用户可访问的权限（目录 0700、`config.toml` 0600、`models_cache.json` 0644），任务降权运行后仍可读写；启动修复和初始化脚本都会执行同样的属主处理。
 数据库会把旧版本遗留的 `272000/250000` 固定组合一次性升级为上述默认值，但不会覆盖其他明确配置的模型窗口。
 
 源级 `auto_review_model_override` 会写入该源下所有可见模型的目录条目，使该源上的自动审批审查使用指定模型；留空时保留每个模型模板自带的默认值（通常为 `null`，即 Codex 默认行为），因此不会因为某个源不支持默认审核模型而无法工作。
@@ -78,7 +80,7 @@ sudo node scripts/init-provider-sources.mjs \
   --models-file sssaicodeapi=sssaicodeapi-models.json
 ```
 
-脚本会逐个读取映射用户的 `~/.codex/config.toml`，把 provider 定义（含 `models_file` 键）导入该 Web 用户自己的数据库范围，按参数或 `<providerId>-models.json` 约定导入模型，最后生成各自的聚合配置，并把生成文件的属主归还给对应宿主用户。脚本必须在构建后的 `dist-server` 上运行；代码更新后先运行 `npm run build`，再运行脚本和 `npm run reload`。
+脚本会逐个初始化映射用户的 Web 专用目录（仅首次读取 `~/.codex`），再读取其中的 `config.toml`，把 provider 定义（含 `models_file` 键）导入该 Web 用户自己的数据库范围，按参数或 `<providerId>-models.json` 约定导入模型，最后生成各自的聚合配置，并把生成文件的属主归还给对应宿主用户。脚本必须在构建后的 `dist-server` 上运行；代码更新后先运行 `npm run build`，再运行脚本和 `npm run reload`。
 
 如果之前曾用 root 或 `chmod 777` 处理过权限，可直接以仓库属主的普通用户运行一键修复脚本。脚本会按需调用 `sudo` 修复精确的 Codex 文件、修复旧构建产物、构建服务端、导入两个默认模型文件并 reload 服务：
 

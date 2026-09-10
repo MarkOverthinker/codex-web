@@ -32,7 +32,6 @@ fi
 
 sudo -v
 
-codex_home="$target_home/.codex"
 service_unit="${CODEX_WEB_SERVICE_UNIT:-codex-web.service}"
 reloader_token_file="${CODEX_WEB_RELOADER_TOKEN_FILE:-/etc/codex-web-reloader/token}"
 node_bin="$(command -v node)"
@@ -63,24 +62,8 @@ restart_after_failure() {
 }
 trap restart_after_failure ERR
 
-echo "修复 $codex_home 的目录和 Codex 文件权限 ..."
-sudo install -d -m 700 -o "$target_uid" -g "$target_gid" "$codex_home"
-
-for codex_file in config.toml auth.json rightcode_auth.json; do
-  target="$codex_home/$codex_file"
-  if [[ -e "$target" ]]; then
-    sudo chown "$target_uid:$target_gid" "$target"
-    sudo chmod 600 "$target"
-  fi
-done
-
-for codex_file in models_cache.json models.json sssaicodeapi-models.json; do
-  target="$codex_home/$codex_file"
-  if [[ -e "$target" ]]; then
-    sudo chown "$target_uid:$target_gid" "$target"
-    sudo chmod 644 "$target"
-  fi
-done
+# init-provider-sources prepares and repairs only each tenant's Web home.
+# The desktop ~/.codex is a read-only source, including its file permissions.
 
 # Older root-mode builds can leave generated artifacts undeletable by the
 # checkout owner. They are disposable build outputs, so repair only these
@@ -109,4 +92,4 @@ else
 fi
 
 trap - ERR
-echo "修复完成。可用 stat 检查 $codex_home、config.toml 和 models_cache.json 的属主及权限。"
+echo "修复完成。生成配置仅保存在各租户的 host-codex-home；桌面端 ~/.codex 未修改。"

@@ -2465,7 +2465,9 @@ test("host mode restore derives a missing working directory from the rollout and
   const project = path.join(root, "projects", "restored-project");
   fs.mkdirSync(project, { recursive: true });
   const canonicalProject = fs.realpathSync(project);
-  const codexHome = path.join(root, "codex-home");
+  // An unmapped host user must also stay within Web storage, never fall back
+  // to the service account's global Codex Home.
+  const codexHome = path.join(root, "tenants", LEGACY_USER_ID, "codex-home");
   const instance = createApp({
     projectRoot: process.cwd(),
     dataRoot: path.join(root, "data"),
@@ -4030,6 +4032,8 @@ test("file-only submissions persist on the server and wait for a real instructio
   assert.equal(instance.db.listMessages(conversationId).length, 0);
 
   let executed: { prompt: string; files: string[] } | undefined;
+  // Scheduler tests must not start real background model requests.
+  instance.runner.generateTitle = async () => undefined;
   instance.runner.run = async (jobId, id, prompt, uploads) => {
     executed = { prompt, files: uploads.map((file) => file.original_name) };
     instance.db.finishJob(jobId, id, "completed");
@@ -4074,6 +4078,8 @@ test("later submissions stay out of chat as drafts and materialize one at a time
 
   const processed: string[] = [];
   const release = new Map<string, () => void>();
+  // Scheduler tests must not start real background model requests.
+  instance.runner.generateTitle = async () => undefined;
   instance.runner.run = async (jobId, id) => {
     processed.push(jobId);
     await new Promise<void>((resolve) => release.set(jobId, resolve));
@@ -4144,6 +4150,8 @@ test("pending drafts support reorder, steer, edit with attachments, and delete",
   assert.deepEqual(instance.db.listPendingPrompts(conversationId).map((prompt) => prompt.id), [gammaId, alphaId, betaId]);
 
   const releases = new Map<string, () => void>();
+  // Scheduler tests must not start real background model requests.
+  instance.runner.generateTitle = async () => undefined;
   instance.runner.run = async (jobId, id) => {
     await new Promise<void>((resolve) => releases.set(jobId, resolve));
     instance.db.finishJob(jobId, id, "completed");
@@ -4252,6 +4260,8 @@ test("different conversations start concurrently without global or per-user limi
 
   const started: string[] = [];
   const release = new Map<string, () => void>();
+  // Scheduler tests must not start real background model requests.
+  instance.runner.generateTitle = async () => undefined;
   instance.runner.run = async (jobId, conversationId) => {
     started.push(jobId);
     await new Promise<void>((resolve) => release.set(jobId, resolve));
@@ -4297,6 +4307,8 @@ test("a queued job can skip the shared-directory queue and start immediately", a
 
   const started: string[] = [];
   const release = new Map<string, () => void>();
+  // Scheduler tests must not start real background model requests.
+  instance.runner.generateTitle = async () => undefined;
   instance.runner.run = async (jobId, conversationId) => {
     started.push(jobId);
     await new Promise<void>((resolve) => release.set(jobId, resolve));

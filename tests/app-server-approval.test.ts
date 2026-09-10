@@ -109,6 +109,7 @@ input.on("line", (line) => {
   };
   assert.deepEqual(capture.argv, [
     "app-server", "--listen", "stdio://",
+    "-c", 'cli_auth_credentials_store="file"',
     "-c", 'approval_policy="on-request"',
     "-c", 'approvals_reviewer="auto_review"',
     "-c", 'sandbox_mode="workspace-write"',
@@ -546,6 +547,7 @@ input.on("line", (line) => {
   };
   assert.deepEqual(capture.argv, [
     "app-server", "--listen", "stdio://",
+    "-c", 'cli_auth_credentials_store="file"',
     "-c", 'approval_policy="on-request"',
     "-c", 'approvals_reviewer="auto_review"',
     "-c", 'sandbox_mode="danger-full-access"',

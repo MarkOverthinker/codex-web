@@ -31,6 +31,7 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
   const hostMode = Boolean(request.hostMode);
   codexEnvironment.HOME = hostMode && request.home ? request.home : request.tenantRoot;
   codexEnvironment.CODEX_HOME = request.codexHome;
+  codexEnvironment.CODEX_SQLITE_HOME = request.codexHome;
   if (process.platform === "win32") {
     codexEnvironment.CODEX_WINDOWS_SANDBOX = request.codexWindowsSandbox;
   }
@@ -50,7 +51,11 @@ export function startTenantTurn(request: TenantWorkerRunRequest, callbacks: Exec
     modelProvider: request.modelProvider,
     sandboxMode: request.sandboxMode,
     library: request.library,
-    shellEnvironment: buildShellEnvironment(pythonRuntime, request.runtimeRoot, hostMode ? request.home : undefined),
+    shellEnvironment: {
+      ...buildShellEnvironment(pythonRuntime, request.runtimeRoot, hostMode ? request.home : undefined),
+      CODEX_HOME: request.codexHome,
+      CODEX_SQLITE_HOME: request.codexHome,
+    },
     networkAccessEnabled: request.networkAccessEnabled,
     webSearchMode: request.webSearchMode,
     optionalCapabilities: request.optionalCapabilities,

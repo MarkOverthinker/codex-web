@@ -74,9 +74,8 @@ sessions.
 
 For a personal or small-team deployment on one machine, Codex Web can run
 directly on the host without Docker. Every machine user is then a Codex Web
-tenant: tasks run under that user's Unix identity, `CODEX_HOME` points at the
-user's real `~/.codex` (global skills, `config.toml`, credentials and model
-catalogs included), and the agent uses `workspace-write` with
+tenant: tasks run under that user's Unix identity, `CODEX_HOME` points at
+`TENANT_ROOT/<user-id>/host-codex-home`, and the agent uses `workspace-write` with
 `approval_policy = "on-request"` and `approvals_reviewer = "auto_review"`.
 The selected working directory, conversation workspace, and tenant library are
 writable directly; host tool calls or other escalations are reviewed automatically, without a browser
@@ -105,7 +104,26 @@ HOST_MODE=true \
 owner tenant. Keep `CONTAINERIZED` and `TENANT_WORKER_ISOLATION` unset (host
 mode forces direct execution). `HOST`, `PORT`, `BASE_PATH`, `DATA_ROOT` and
 `TENANT_ROOT` behave as in the container deployment; web data still lives
-under `DATA_ROOT`/`TENANT_ROOT`, while `~/.codex` stays in each user's home.
+under `DATA_ROOT`/`TENANT_ROOT`, while the desktop's `~/.codex` stays in each user's home.
+On first use, configuration, credentials, catalogs, skills and plugins are copied
+into the private Web home. Existing Web installations also snapshot legacy
+rollouts and SQLite thread/history databases (including committed WAL data).
+Rollout paths are rewritten to the private copies. Migration is published only
+after a complete copy; allow enough space for the initial history snapshot.
+Subsequent starts preserve the Web home's settings and authentication, without
+copying back to or re-importing the desktop home. Web task processes and shells
+receive the private `CODEX_HOME` and `CODEX_SQLITE_HOME`; authentication uses a
+private file store. Proxy environment variables and Unix identity stay unchanged.
+To sign in again for Web, run as the mapped system user:
+
+```bash
+CODEX_HOME=<tenant-root>/<user-id>/host-codex-home codex login
+```
+
+Explicit history import reads desktop rollouts and makes independent Web copies;
+continuing or deleting an imported Web conversation does not edit its source.
+Desktop configuration changes after initialization are not synchronized automatically.
+Manage Web providers through the Web UI, and install/update Web skills in its own home.
 For host deployments that generate large files, place `DATA_ROOT` and
 `TENANT_ROOT` on a dedicated data volume instead of the system volume; the
 application keeps the database's relative file paths stable across that
@@ -137,7 +155,7 @@ sudo node scripts/add-tenant.mjs <username> <password> [display-name]
 - If the system user already exists, the script leaves its existing
   `~/.codex` untouched and the user configures Codex themselves.
 - The script then creates the web account, prepares tenant storage under
-  `TENANT_ROOT/<user-id>`, and prints whether the user's `~/.codex` is
+  `TENANT_ROOT/<user-id>`, and prints whether the private Web Codex Home is
   configured.
 
 Removing a tenant reverses the process (root required; `--system` also deletes
@@ -147,7 +165,7 @@ the machine user and its home, `--force` proceeds despite queued/running jobs):
 sudo node scripts/remove-tenant.mjs <username> --system
 ```
 
-The web UI shows a persistent banner when a user's `~/.codex` is missing
+The web UI shows a persistent banner when the private Web Codex Home is missing
 `config.toml` or usable credentials (`auth.json`, `rightcode_auth.json`, or an
 inline `experimental_bearer_token` in `config.toml`), and sending tasks is
 blocked with the same hint until it is configured.
@@ -161,12 +179,12 @@ to the legacy uid/gid-only spawn and task processes keep an empty supplementary
 group set.
 
 Provider records and model catalogs are scoped by the Web user ID. The root web
-process writes only that user's provider configuration into the matching host
-user's `~/.codex` (`config.toml` and `models_cache.json`), then repairs the home
+process writes only that user's provider configuration into the matching
+`host-codex-home` (`config.toml` and `models_cache.json`), then repairs the private home
 directory and hands ownership of those files back to the host user. The
 directory is kept at 0700, `config.toml` at 0600, and `models_cache.json` at
 0644. This keeps the dropped-privilege Codex CLI readable and lets it refresh
-the catalog; never work around access errors by chmodding `~/.codex` to 777.
+the catalog. The provider initializer and repair script also target only this private home.
 
 Security trade-off: this mode runs the web service as root and gives each
 tenant full host access under its own Unix identity. Only add users you trust;
