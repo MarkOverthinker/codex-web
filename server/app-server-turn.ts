@@ -644,6 +644,11 @@ function summarizeCollabAgentToolCall(item: JsonObject, completed: boolean): unk
     subagentTool: tool,
     subagentStatus: status,
     agentThreadIds: receiverThreadIds,
+    agentStates: Object.fromEntries(Object.entries(agentsStates ?? {}).flatMap(([threadId, state]) => {
+      const agentStatus = asObject(state)?.status;
+      return typeof agentStatus === "string" ? [[threadId, agentStatus]] : [];
+    })),
+    agentPrompt: typeof item.prompt === "string" ? redactBrand(item.prompt) : undefined,
   };
 }
 

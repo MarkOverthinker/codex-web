@@ -247,6 +247,8 @@ export type JobEvent = {
   subagentStatus?: string;
   subagentActivity?: string;
   agentThreadIds?: string[];
+  agentStates?: Record<string, string>;
+  agentPrompt?: string;
   agentPath?: string;
   agentThreadId?: string;
 };

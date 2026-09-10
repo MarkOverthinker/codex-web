@@ -40,7 +40,7 @@ export function mergeJobEvents(current: JobEvent[], incoming: JobEvent[]): JobEv
   for (const event of [firstRunning, lastTerminal]) {
     if (event && event.seq !== undefined) retainedBoundaries.push(event);
   }
-  const combined = [...retainedBoundaries, ...retainedStageFeedback, ...retainedApprovals, ...ordered.slice(rollingStart)];
+  const combined = [...retainedBoundaries, ...retainedStageFeedback, ...retainedApprovals, ...ordered.slice(0, rollingStart).filter((event) => event.kind === "subagent"), ...ordered.slice(rollingStart)];
   const deduped = new Map<number, JobEvent>();
   for (const event of combined) deduped.set(event.seq ?? -(deduped.size + 1), event);
   return [...deduped.values()].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
