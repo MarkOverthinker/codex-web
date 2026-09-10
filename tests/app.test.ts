@@ -1121,6 +1121,12 @@ test("upstream failures get actionable diagnostics while unknowns pass through",
   assert.match(model, /^上游不识别所选模型/);
   const config = describeUpstreamError("failed to load configuration: failed to parse model_catalog_json path `/home/gyli/.codex/models_cache.json` as JSON");
   assert.match(config, /^Codex 配置加载失败/);
+  const compatibilityError = JSON.stringify({ error: { message: "include is not supported in Responses compatibility mode", code: "invalid_request" } });
+  const compatibility = describeUpstreamError(compatibilityError);
+  assert.match(compatibility, /Chat Completions（chat）/);
+  assert.match(compatibility, /Responses-only/);
+  assert.ok(compatibility.includes(compatibilityError));
+  assert.equal(isRetryableUpstreamError(compatibilityError), false);
   assert.equal(describeUpstreamError("The agent got stuck"), "The agent got stuck");
 });
 

@@ -90,6 +90,14 @@ sudo node scripts/init-provider-sources.mjs \
 
 ## 限制与边界
 
+### Responses 兼容接口拒绝参数
+
+如果任务报 `include is not supported in Responses compatibility mode`，说明上游的 Responses 兼容层不能接收当前请求，不代表模型不可用。先验证该模型的 Chat Completions 流式响应及工具调用；验证可用后，在“个人设置 → API 源管理”中把对应源的协议改为 `chat`（Chat Completions），保留 Base URL、API Key 和模型 ID，再重试任务。现有任务级 `codex-relay` 会负责协议转换，无需删除模型或会话，也不要通过删掉 Codex 的 `include` 参数来绕过兼容性检查。
+
+协议设置作用于整个源。如果同一端点还提供 Responses-only 模型，应为 Chat 模型建立独立源，不要整体切换混合源。不要仅根据模型名称自动切换协议。
+
+### 通用限制
+
 - 每个用户同一时间只允许一个启用中的官方 OAuth 源（该用户 Codex Home 内的 `auth.json` 只有一份）；其他官方账号可以改用 API key。
 - 当前 Codex 只接受 Responses。选择 `chat` 时，tenant worker 会按任务启动内置 `codex-relay`，把 Codex 的 `/responses` 请求转换到上游 `/chat/completions`；该源不能使用官方 OAuth，可配置上游 API key，也可连接明确允许无鉴权的本地端点。
 - Chat 模型必须正确支持流式响应和结构化 `tool_calls`。当前没有自动能力探测，也没有模型级协议覆盖；同一 provider 内不要混合 Responses-only 与 Chat-only 模型。
