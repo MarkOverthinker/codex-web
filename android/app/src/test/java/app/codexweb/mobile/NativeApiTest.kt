@@ -112,6 +112,16 @@ class NativeApiTest {
         stream.close()
     }
 
+    @Test fun sseUnauthorizedResponseIsReportedAsSessionExpiry() {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"expired\"}"))
+        val failed = CountDownLatch(1)
+        var message = ""
+        val stream = api.events("job-one", 0, { _, _ -> }, { value -> message = value; failed.countDown() })
+        assertTrue(failed.await(5, TimeUnit.SECONDS))
+        assertTrue(message.startsWith("401 "))
+        stream.close()
+    }
+
     @Test fun malformedSuccessIsNotTreatedAsEmptyData() = runBlocking {
         server.enqueue(MockResponse().setBody("<html>Login elsewhere</html>"))
         try { api.call("/auth/session"); fail() } catch (reason: java.io.IOException) { assertTrue(reason.message!!.contains("JSON")) }

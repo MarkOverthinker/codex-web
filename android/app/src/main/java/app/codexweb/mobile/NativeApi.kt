@@ -126,8 +126,9 @@ class NativeApi(
                         .onFailure { failure("事件解析失败，正在同步服务器状态") }
                 }
                 override fun onFailure(eventSource: EventSource, error: Throwable?, response: Response?) {
+                    val status = response?.code
                     response?.close()
-                    failure("实时连接中断，正在重新同步")
+                    failure(if (status == 401) "401 登录已失效，正在清理本机状态" else "实时连接中断，正在重新同步")
                 }
                 override fun onClosed(eventSource: EventSource) { failure("实时连接已关闭，正在同步") }
             })
