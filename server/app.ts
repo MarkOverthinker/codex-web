@@ -55,7 +55,8 @@ import {
   nextProviderId,
   writeProviderConfig,
 } from "./provider-manager.js";
-import { CODEX_CONFIG_HINT, hostTenantFor, isCodexConfigured } from "./host-mode.js";
+import { CODEX_CONFIG_HINT, prepareHostTenant as hostTenantFor, isCodexConfigured } from "./host-mode.js";
+import { copyHostCodexThread } from "./host-codex-home.js";
 import { assertHostPathReadable, chownTenantStorageIfNeeded, ensureTenant, ensureTenantWorkspace, isManagedHostPath, isPersistedDeliverablePath, listHostDirectory, newId, persistDeliverableSync, removeCodexThreadFiles, removePersistedDeliverable, removeWorkspace, resolveHostReadableFile, resolveHostWorkingDir, resolveInside, resolveStoredWorkingDirInput, safeUploadName, tenantPaths, type TenantPaths } from "./paths.js";
 import { AUDIO_MIME_EXTENSIONS, TranscriptionError, TranscriptionService } from "./transcription.js";
 import { parseVoiceOptions } from "../src/voice-options.js";
@@ -145,7 +146,7 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   function codexHomeFor(userId: string): string {
-    if (config.hostMode) return hostTenantFor(config, db, userId)?.codexHome ?? config.codexHome;
+    if (config.hostMode) return hostTenantFor(config, db, userId)?.codexHome ?? storageFor(userId).codexHome;
     return storageFor(userId).codexHome;
   }
 
@@ -1106,7 +1107,8 @@ export function createApp(overrides: AppOverrides = {}) {
     const session = res.locals.session as SessionRow;
     if (config.hostMode && !hostTenantFor(config, db, session.user_id)) return res.json({ sessions: [] });
     const existingThreadIds = new Set(db.listCodexThreadIds());
-    const sessions = await discoverImportableSessions(codexHomeFor(session.user_id), existingThreadIds);
+    const sourceHome = config.hostMode ? hostTenantFor(config, db, session.user_id)!.sourceCodexHome : codexHomeFor(session.user_id);
+    const sessions = await discoverImportableSessions(sourceHome, existingThreadIds);
     return res.json({ sessions });
   });
 
@@ -1121,8 +1123,9 @@ export function createApp(overrides: AppOverrides = {}) {
       .slice(0, 500);
     if (threadIds.length === 0) return res.status(400).json({ error: "请选择要导入的历史会话。" });
     const codexHome = codexHomeFor(session.user_id);
+    const importHost = config.hostMode ? hostTenantFor(config, db, session.user_id) : null;
     const existingThreadIds = new Set(db.listCodexThreadIds());
-    const discovered = await discoverImportableSessions(codexHome, existingThreadIds);
+    const discovered = await discoverImportableSessions(importHost?.sourceCodexHome ?? codexHome, existingThreadIds);
     const discoveredById = new Map(discovered.map((item) => [item.threadId, item]));
     const conversations: ConversationRow[] = [];
     const skipped: string[] = [];
@@ -1137,6 +1140,7 @@ export function createApp(overrides: AppOverrides = {}) {
           resolveHostWorkingDir(raw, { dataRoot: config.dataRoot, tenantRoot: config.tenantRoot, workspaceRoot: config.workspaceRoot }))
         : null;
       try {
+        if (importHost) copyHostCodexThread(importHost, threadId);
         const conversation = await importSessionThread(db, codexHome, threadId, session.user_id, workingDir);
         if (conversation) conversations.push(conversation);
         else skipped.push(threadId);

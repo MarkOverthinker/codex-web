@@ -9,7 +9,7 @@ import { loadConfig } from "../dist-server/server/config.js";
 import { AppDatabase } from "../dist-server/server/db.js";
 import { ensureTenant } from "../dist-server/server/paths.js";
 import { assignTenantIdentity } from "../dist-server/server/tenant-identities.js";
-import { isCodexConfigured, resolveSystemUser } from "../dist-server/server/host-mode.js";
+import { isCodexConfigured, resolveSystemUser, prepareHostTenant } from "../dist-server/server/host-mode.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const containerized = process.env.CONTAINERIZED === "true";
@@ -68,7 +68,7 @@ try {
   if (hostUser) {
     ensureTenant(config.tenantRoot, userId, { skipCodexHome: true });
     execFileSync(toolPath("chown"), ["-R", `${hostUser.uid}:${hostUser.gid}`, path.join(config.tenantRoot, userId)]);
-    const codexHome = path.join(hostUser.home, ".codex");
+    const codexHome = prepareHostTenant(config, db, userId).codexHome;
     const configured = isCodexConfigured(codexHome, { uid: hostUser.uid, gid: hostUser.gid });
     console.log(`User created: ${username} (${userId}) as machine user ${username} (uid ${hostUser.uid}).`);
     console.log(configured
