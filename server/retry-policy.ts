@@ -64,6 +64,9 @@ export function describeUpstreamError(error: unknown): string {
   const message = upstreamErrorMessage(error).trim();
   const lower = message.toLowerCase();
   const detail = message.length > 300 ? `${message.slice(0, 300)}…` : message;
+  if (/include is not supported in responses compatibility mode/.test(lower)) {
+    return `上游 Responses 兼容接口不支持 Codex 请求参数：请在“个人设置 → API 源管理”中确认该模型支持 Chat Completions 后，将对应源的协议改为 Chat Completions（chat），由本地 codex-relay 转换请求；如果源内混有 Responses-only 模型，请为 Chat 模型单独建源（上游返回：${detail}）。`;
+  }
   if (/\b401\b|authentication fails|authentication_error|unauthorized|api key[^\n]*(?:invalid|expired)|invalid(?: or expired)? api key|invalid_api_key/.test(lower)) {
     return `上游认证失败：该源的 API Key 无效或已过期，请检查密钥与 base_url 是否匹配（上游返回：${detail}）。`;
   }
