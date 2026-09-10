@@ -175,6 +175,7 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
     var project by rememberSaveable { mutableStateOf("") }
     var projectMenu by remember { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var collapsed by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val projects = taskGroups(state, false, "")
     val selectedProject = projects.find { it.key == project }
     val scoped = if (byStatus && selectedProject != null) state.copy(conversations = selectedProject.tasks) else state
@@ -208,14 +209,20 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
             groups.forEach { group ->
                 val expandKey = "${if (byStatus) "status" else "project"}:${group.key}"
                 val all = expandKey in expanded || search.isNotBlank()
+                val isCollapsed = expandKey in collapsed && search.isBlank()
                 item(key = "header:${group.key}") {
-                    Row(Modifier.fillMaxWidth().padding(start = 8.dp, top = 14.dp, bottom = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().testTag("group-$expandKey")
+                        .clickable(enabled = search.isBlank(), role = Role.Button, onClickLabel = if (isCollapsed) "展开分类" else "折叠分类") {
+                            collapsed = if (isCollapsed) collapsed - expandKey else collapsed + expandKey
+                        }.heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (byStatus) Icons.Outlined.RadioButtonChecked else Icons.Outlined.FolderOpen, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                         Text(group.title, Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Text(group.tasks.size.toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
+                            if (isCollapsed) "展开分类" else "折叠分类", Modifier.padding(start = 8.dp).size(18.dp))
                     }
                 }
-                items(if (all) group.tasks else group.tasks.take(4), key = { "${group.key}:${it.text("id")}" }) { task ->
+                items(if (isCollapsed) emptyList() else if (all) group.tasks else group.tasks.take(4), key = { "${group.key}:${it.text("id")}" }) { task ->
                     val selected = task.text("id") == state.selectedId
                     Surface(onClick = { model.openConversation(task.text("id")); close() }, enabled = !state.busy,
                         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
@@ -229,9 +236,9 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
                         }
                     }
                 }
-                if (group.tasks.size > 4 && search.isBlank()) item(key = "expand:${group.key}") {
+                if (!isCollapsed && group.tasks.size > 4 && search.isBlank()) item(key = "expand:${group.key}") {
                     TextButton(onClick = { expanded = if (all) expanded - expandKey else expanded + expandKey }, modifier = Modifier.fillMaxWidth().testTag("expand-${group.key}")) {
-                        Text(if (all) "收起" else "展开其余 ${group.tasks.size - 4} 个任务", fontSize = 12.sp)
+                        Text(if (all) "仅显示前 4 个任务" else "展开其余 ${group.tasks.size - 4} 个任务", fontSize = 12.sp)
                         Icon(if (all) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
                     }
                 }
