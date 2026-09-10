@@ -42,18 +42,34 @@ class TrustedCookies(private val server: String, private val store: NativeStore)
         val saved = JSONArray(store.read(storageKey) ?: "[]")
         (0 until saved.length()).mapNotNull { Cookie.parse(server.toHttpUrl(), saved.getString(it)) }
     }.getOrDefault(emptyList())
+    private var generation = 0L
+    private var requireFreshRequest = false
+    private val requestGeneration = ThreadLocal<Long>()
 
     @Synchronized override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         if (!ServerPolicy.sameOrigin(server, url.toString())) return
+        val request = requestGeneration.get()
+        if (requireFreshRequest && request != generation || request != null && request != generation) return
         this.cookies = (this.cookies.filter { old -> cookies.none { it.name == old.name } } + cookies)
             .filter { it.expiresAt > System.currentTimeMillis() && it.matches(server.toHttpUrl()) }
         store.write(storageKey, this.cookies.map { it.toString() }.jsonArray().toString())
     }
     @Synchronized override fun loadForRequest(url: HttpUrl): List<Cookie> =
-        if (!ServerPolicy.sameOrigin(server, url.toString())) emptyList()
-        else cookies.filter { it.expiresAt > System.currentTimeMillis() && it.matches(url) }
+        if (!ServerPolicy.sameOrigin(server, url.toString())) {
+            requestGeneration.remove()
+            emptyList()
+        } else {
+            requestGeneration.set(generation)
+            cookies.filter { it.expiresAt > System.currentTimeMillis() && it.matches(url) }
+        }
 
-    @Synchronized fun clear() { cookies = emptyList(); store.write(storageKey, null) }
+    @Synchronized fun clear() {
+        generation++
+        requireFreshRequest = true
+        requestGeneration.remove()
+        cookies = emptyList()
+        store.write(storageKey, null)
+    }
 }
 
 class NativeApi(
