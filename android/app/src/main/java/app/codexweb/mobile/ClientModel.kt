@@ -113,12 +113,15 @@ class ClientModel(
             pageData = null,
             pageLoading = false,
             pageError = null,
+            busy = false,
+            operation = null,
             connection = "登录已失效，未发送内容保留在本机",
             draftStatus = if (keepDraft) "本机草稿已保留" else "",
             sendUncertain = false,
             uncertainRevision = null,
             detailFromCache = false,
             parentAvailable = false,
+            notice = null,
             error = if (credentialFailure == null) reason.message
                 else "${reason.message}；本机凭证清理未确认，请重启应用后重试。",
         )
@@ -239,32 +242,41 @@ class ClientModel(
         }
     }
 
-    fun refresh() = action("refresh") {
-        refreshList()
-        state.selectedId?.let { reconcile(it) }
-        if (state.page != null) loadPage()
+    fun refresh() = action("refresh") { generation ->
+        refreshList(generation)
+        if (generation != epoch) return@action
+        state.selectedId?.let { reconcile(it, generation) }
+        if (generation != epoch) return@action
+        if (state.page != null) loadPage(generation)
     }
 
-    fun action(operation: String = "request", block: suspend () -> Unit) {
+    fun action(operation: String = "request", block: suspend (Int) -> Unit) {
         if (state.busy || state.connecting) return
         val generation = epoch
         state = state.copy(busy = true, error = null, operation = operation)
         viewModelScope.launch {
-            try { block() } catch (reason: Exception) { error(reason, generation) }
+            try { block(generation) } catch (reason: Exception) { error(reason, generation) }
             finally {
-                if (state.operation == operation) state = state.copy(busy = false, operation = null)
+                if (generation == epoch && state.operation == operation) state = state.copy(busy = false, operation = null)
             }
         }
     }
 
-    fun createConversation(workingDir: String? = null) = action("new") {
-        flushDraft()
+    fun createConversation(workingDir: String? = null) = action("new") { generation ->
+        flushDraft(generation)
+        if (generation != epoch) return@action
         val value = requireNotNull(api).call("/conversations", "POST", if (workingDir == null) JSONObject() else json("workingDir" to workingDir))
-        openInternal(value.objectValue("conversation").text("id"))
-        refreshList()
+        if (generation != epoch) return@action
+        openInternal(value.objectValue("conversation").text("id"), generation)
+        refreshList(generation)
     }
 
-    fun openConversation(id: String) = action("open") { flushDraft(); parents.clear(); openInternal(id) }
+    fun openConversation(id: String) = action("open") { generation ->
+        flushDraft(generation)
+        if (generation != epoch) return@action
+        parents.clear()
+        openInternal(id, generation)
+    }
 
     fun selectTab(tab: HomeTab) {
         pages.clear()
@@ -290,11 +302,14 @@ class ClientModel(
             draftStatus = if (saved != null) "本机草稿" else "")
     }
 
-    fun startNewChat() = action("new") {
-        flushDraft()
+    fun startNewChat() = action("new") { generation ->
+        flushDraft(generation)
         backupJob?.join()
-        restoreNewChat()
-        withContext(Dispatchers.IO) { store.write(lastConversationKey(), "_new") }
+        if (generation != epoch) return@action
+        restoreNewChat(generation)
+        if (generation != epoch) return@action
+        val lastKey = lastConversationKey()
+        withContext(Dispatchers.IO) { store.write(lastKey, "_new") }
     }
 
     private suspend fun ensureConversation(expectedEpoch: Int = epoch): String {
@@ -305,10 +320,11 @@ class ClientModel(
         require(created.isNotBlank())
         if (expectedEpoch != epoch) throw CancellationException("会话已改变")
         val account = accountKey()
+        val lastKey = lastConversationKey()
         backupJob?.join()
         withContext(Dispatchers.IO) {
             store.write(draftKey(account, created), draftBackup(snapshot).toString())
-            store.write(lastConversationKey(), created)
+            store.write(lastKey, created)
             store.write(draftKey(account, "_new"), null)
         }
         openInternal(created, expectedEpoch)
@@ -316,9 +332,16 @@ class ClientModel(
         return created
     }
 
-    fun withConversation(callback: () -> Unit) = action("prepare") { ensureConversation(); callback() }
+    fun withConversation(callback: () -> Unit) = action("prepare") { generation ->
+        ensureConversation(generation)
+        if (generation == epoch) callback()
+    }
 
-    fun clearCache() = action("cache") { cache.clear(accountKey()); note("浏览缓存已清理，未发送草稿保留") }
+    fun clearCache() = action("cache") { generation ->
+        val account = accountKey()
+        cache.clear(account)
+        if (generation == epoch) note("浏览缓存已清理，未发送草稿保留")
+    }
 
     private suspend fun openInternal(id: String, expectedEpoch: Int? = null) {
         require(id.isNotBlank())
@@ -456,8 +479,7 @@ class ClientModel(
         if (state.detailFromCache) { note("当前为本机缓存，请联网刷新后发送。"); return }
         if (state.sendUncertain) { note("上次发送结果尚未确认，请先核对消息和队列。 "); return }
         if (state.composer.content.isBlank() && state.composer.files.isEmpty()) return
-        action("send") {
-            val generation = epoch
+        action("send") { generation ->
             debounce?.cancel()
             debounce = null
             val id = ensureConversation(generation)
@@ -478,20 +500,27 @@ class ClientModel(
                 catch (reason: Exception) {
                     if (reason is CancellationException) throw reason
                     if (reason is ApiFailure && reason.status == 401) throw reason
-                    if (generation == epoch) runCatching { reconcile(id, generation) }
-                    if (reason is ApiFailure && reason.status in 400..499) {
+                    val account = accountKey()
+                    val definitiveClientFailure = reason is ApiFailure && reason.status in 400..499
+                    if (!definitiveClientFailure) {
                         val current = if (state.selectedId == id) state.composer else snapshot
-                        state = state.copy(composer = current.copy(dirty = true), draftStatus = "发送未完成，请检查后重试")
-                        queueBackup(draftKey(accountKey(), id), draftBackup(state.composer).toString(), generation)
+                        val uncertain = current.copy(dirty = true)
+                        state = state.copy(composer = uncertain, sendUncertain = true,
+                            uncertainRevision = snapshot.revision, draftStatus = "发送结果待确认 · 仅存本机")
+                        queueBackup(draftKey(account, id), draftBackup(uncertain, true, snapshot.revision).toString(), generation)
+                    }
+                    if (generation == epoch) runCatching { reconcile(id, generation) }
+                    if (generation != epoch) throw reason
+                    if (definitiveClientFailure) {
+                        val current = if (state.selectedId == id) state.composer else snapshot
+                        state = state.copy(composer = current.copy(dirty = true), sendUncertain = false, uncertainRevision = null,
+                            draftStatus = "发送未完成，请检查后重试")
+                        queueBackup(draftKey(account, id), draftBackup(state.composer).toString(), generation)
                         throw reason
                     }
-                    if (generation != epoch) throw reason
-                    val current = if (state.selectedId == id) state.composer else snapshot
-                    state = state.copy(composer = current.copy(dirty = true), sendUncertain = true,
-                        uncertainRevision = snapshot.revision, draftStatus = "发送结果待确认 · 仅存本机")
-                    queueBackup(draftKey(accountKey(), id), draftBackup(state.composer, true, snapshot.revision).toString(), generation)
                     throw java.io.IOException("发送未确认：${reason.message}。请先刷新核对消息和队列，避免重复发送。")
                 }
+                if (generation != epoch) return@withLock
                 if (result.optBoolean("needsInstruction")) {
                     note(result.text("guidance", "请补充指令"))
                 } else if (state.selectedId == id && snapshot.revision == state.composer.revision) {
@@ -506,40 +535,49 @@ class ClientModel(
         }
     }
 
-    fun resolveUncertainSend(received: Boolean) = action {
+    fun resolveUncertainSend(received: Boolean) = action { generation ->
+        if (generation != epoch) return@action
         val id = state.selectedId ?: return@action
         val current = state.composer
         val sentRevision = state.uncertainRevision
         val hasNewerInput = sentRevision != null && current.revision != sentRevision
         val draft = if (received && !hasNewerInput) Composer.from(state.detail?.optJSONObject("composerDraft")) else current.copy(dirty = true)
         state = state.copy(sendUncertain = false, uncertainRevision = null, composer = draft, draftStatus = "")
-        if (received && !hasNewerInput) queueBackup(draftKey(accountKey(), id), null)
+        if (generation != epoch) return@action
+        if (received && !hasNewerInput) queueBackup(draftKey(accountKey(), id), null, generation)
         else scheduleDraft()
     }
 
-    fun upload(body: RequestBody, id: String) = action("upload") {
+    fun upload(body: RequestBody, id: String) = action("upload") { generation ->
         if (state.selectedId != id) { note("会话已切换，请重新选择附件"); return@action }
-        flushDraft()
+        flushDraft(generation)
+        if (generation != epoch || state.selectedId != id) return@action
         draftMutex.withLock {
             val result = requireNotNull(api).call("/conversations/${id.segment()}/draft/files", "POST", body = body)
-            if (state.selectedId == id) state = state.copy(composer = state.composer.copy(files = result.objectValue("composerDraft").rows("files")))
+            if (generation != epoch || state.selectedId != id) return@withLock
+            state = state.copy(composer = state.composer.copy(files = result.objectValue("composerDraft").rows("files")))
         }
-        note("附件已保存到服务器草稿")
+        if (generation == epoch) note("附件已保存到服务器草稿")
     }
 
     fun transcribe(body: RequestBody, id: String, cleanup: () -> Unit = {}) {
         if (state.busy || state.connecting) { cleanup(); note("当前操作尚未结束，请稍后重新录音"); return }
-        action("voice") {
+        action("voice") { generation ->
             val value = try { requireNotNull(api).call("/transcriptions", "POST", body = body) } finally { cleanup() }
+            if (generation != epoch) return@action
             if (state.selectedId != id) { note("会话已切换，转写结果：${value.text("text")}"); return@action }
             changeText(listOf(state.composer.content, value.text("text")).filter { it.isNotBlank() }.joinToString("\n"))
             note("转写已回填，请确认后发送")
         }
     }
 
-    fun removeAttachment(fileId: String) = action {
-        val result = requireNotNull(api).call("${state.conversationPath}/draft/files/${fileId.segment()}", "DELETE")
-        state = state.copy(composer = state.composer.copy(files = result.optJSONObject("composerDraft")?.rows("files").orEmpty()))
+    fun removeAttachment(fileId: String) = action { generation ->
+        val id = state.selectedId ?: return@action
+        val path = "${state.conversationPath}/draft/files/${fileId.segment()}"
+        val result = requireNotNull(api).call(path, "DELETE")
+        if (generation == epoch && state.selectedId == id) {
+            state = state.copy(composer = state.composer.copy(files = result.optJSONObject("composerDraft")?.rows("files").orEmpty()))
+        }
     }
 
     private suspend fun reconcile(id: String, expectedEpoch: Int = epoch, syncDraft: Boolean = false) {
@@ -560,6 +598,7 @@ class ClientModel(
         }
         if (state.selectedId != id || generation != epoch) return
         saveCache(account, "detail:$id", detail)
+        if (state.selectedId != id || generation != epoch) return
         val oldMessages = state.detail?.rows("messages").orEmpty()
         val fresh = detail.rows("messages")
         val first = fresh.firstOrNull()
@@ -581,70 +620,82 @@ class ClientModel(
         connectStream()
     }
 
-    fun loadOlder() = action {
+    fun loadOlder() = action { generation ->
         val id = state.selectedId ?: return@action
         val cursor = state.detail?.objectValue("messagePage")?.text("nextCursor").orEmpty()
         if (cursor.isBlank()) return@action
         val result = get("${state.conversationPath}/messages?before=${cursor.segment()}")
-        if (state.selectedId == id) state = state.copy(detail = state.detail?.changed(
+        if (generation == epoch && state.selectedId == id) state = state.copy(detail = state.detail?.changed(
             "messages" to (result.rows("messages") + state.detail?.rows("messages").orEmpty()).distinctBy { it.text("id") }.jsonArray(),
             "messagePage" to result.objectValue("messagePage")))
     }
 
     fun mutate(path: String, method: String = "POST", payload: JSONObject? = null, body: RequestBody? = null,
-               after: (suspend (JSONObject) -> Unit)? = null) = action {
+               after: (suspend (JSONObject) -> Unit)? = null) = action { generation ->
         val result = requireNotNull(api).call(path, method, payload, body)
-        if (path.startsWith("/preset-prompts") || path.startsWith("/providers") || path.startsWith("/task-categories")) refreshCatalogs()
+        if (generation != epoch) return@action
+        if (path.startsWith("/preset-prompts") || path.startsWith("/providers") || path.startsWith("/task-categories")) refreshCatalogs(generation)
+        if (generation != epoch) return@action
         if (path == "/user-settings/provider-management") {
-            state = state.copy(session = get("/auth/session"))
+            val session = get("/auth/session")
+            if (generation != epoch) return@action
+            state = state.copy(session = session)
         }
         if (path == "/auth/account") {
             api?.csrf = result.text("csrfToken")
             state = state.copy(session = result)
         }
+        if (generation != epoch) return@action
         if (after != null) after(result) else {
-            state.selectedId?.let { id -> reconcile(id, syncDraft = true) }
-            if (state.page != null) loadPage()
-            refreshList()
+            state.selectedId?.let { id -> reconcile(id, generation, syncDraft = true) }
+            if (generation != epoch) return@action
+            if (state.page != null) loadPage(generation)
+            if (generation != epoch) return@action
+            refreshList(generation)
         }
     }
 
-    fun updateSelection(value: JSONObject) = action {
+    fun updateSelection(value: JSONObject) = action { generation ->
+        val id = state.selectedId ?: return@action
         requireNotNull(api).call("${state.conversationPath}/agent-selection", "PUT", value)
-        state.selectedId?.let { reconcile(it) }
+        if (generation == epoch && state.selectedId == id) reconcile(id, generation)
     }
 
-    fun editPrompt(prompt: JSONObject, text: String, pending: Boolean, removedIds: List<String> = emptyList(), newFiles: List<UploadPart> = emptyList()) = action {
+    fun editPrompt(prompt: JSONObject, text: String, pending: Boolean, removedIds: List<String> = emptyList(), newFiles: List<UploadPart> = emptyList()) = action { generation ->
         require(prompt.rows("files").size - removedIds.size + newFiles.size <= 12) { "一条指令最多 12 个附件" }
         val path = if (pending) "pending-prompts" else "messages"
+        val id = state.selectedId ?: return@action
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("message", text).addFormDataPart("removedFileIds", removedIds.jsonArray().toString())
             .addFormDataPart("quoteExcerpt", prompt.text("quote_excerpt"))
             .addFormDataPart("sourceReference", prompt.optJSONObject("source_reference")?.toString() ?: "null")
             .apply { newFiles.forEach { addFormDataPart("files", it.name, it.body) } }.build()
-        val result = requireNotNull(api).call("${state.conversationPath}/$path/${prompt.text("id").segment()}", "PUT", body = body)
+        val result = requireNotNull(api).call("/conversations/${id.segment()}/$path/${prompt.text("id").segment()}", "PUT", body = body)
+        if (generation != epoch || state.selectedId != id) return@action
         if (result.optBoolean("needsInstruction")) note(result.text("guidance", "请补充指令"))
-        state.selectedId?.let { id ->
-            state = state.copy(detail = null)
-            reconcile(id)
-        }
-        if (state.page != null) loadPage()
+        state = state.copy(detail = null)
+        reconcile(id, generation)
+        if (generation != epoch) return@action
+        if (state.page != null) loadPage(generation)
     }
 
-    fun beginPendingEdit(prompt: JSONObject, ready: (JSONObject) -> Unit) = action {
+    fun beginPendingEdit(prompt: JSONObject, ready: (JSONObject) -> Unit) = action { generation ->
+        val id = state.selectedId ?: return@action
         val result = requireNotNull(api).call("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}/edit", "POST")
-        state.selectedId?.let { reconcile(it) }
-        ready(result.objectValue("editingPrompt"))
+        if (generation != epoch || state.selectedId != id) return@action
+        reconcile(id, generation)
+        if (generation == epoch && state.selectedId == id) ready(result.objectValue("editingPrompt"))
     }
 
-    fun reorder(promptId: String, direction: Int) = action {
+    fun reorder(promptId: String, direction: Int) = action { generation ->
+        val id = state.selectedId ?: return@action
         val ids = state.detail?.rows("pendingPrompts").orEmpty().map { it.text("id") }.toMutableList()
         val position = ids.indexOf(promptId)
         val target = position + direction
         if (position < 0 || target !in ids.indices) return@action
         java.util.Collections.swap(ids, position, target)
-        requireNotNull(api).call("${state.conversationPath}/pending-prompts/order", "PUT", json("ids" to ids.jsonArray()))
-        state.selectedId?.let { reconcile(it) }
+        requireNotNull(api).call("/conversations/${id.segment()}/pending-prompts/order", "PUT", json("ids" to ids.jsonArray()))
+        if (generation == epoch && state.selectedId == id) reconcile(id, generation)
     }
 
     fun navigate(page: ToolPage, replace: Boolean = false) {
@@ -654,10 +705,11 @@ class ClientModel(
         viewModelScope.launch { loadPage() }
     }
 
-    private suspend fun loadPage() {
+    private suspend fun loadPage(expectedSessionGeneration: Int = epoch) {
+        if (expectedSessionGeneration != epoch) return
         val page = state.page ?: return
         val generation = ++pageGeneration
-        val sessionGeneration = epoch
+        val sessionGeneration = expectedSessionGeneration
         state = state.copy(pageLoading = true, pageError = null)
         try {
             val result = if (page.path.isEmpty()) JSONObject() else get(page.path)
@@ -680,45 +732,60 @@ class ClientModel(
             return true
         }
         if (state.selectedId != null) {
-            action {
-                try { withTimeout(exitTimeoutMs) { flushDraft() } }
+            action { generation ->
+                try { withTimeout(exitTimeoutMs) { flushDraft(generation) } }
                 catch (reason: Exception) {
                     if (reason is CancellationException && reason !is TimeoutCancellationException) throw reason
                     if (reason is ApiFailure && reason.status == 401) throw reason
                     backupJob?.join()
                     note("草稿已留在本机，重新打开任务后同步")
                 }
+                if (generation != epoch) return@action
                 val parent = parents.removeLastOrNull()
-                if (parent != null) openInternal(parent)
-                else { disconnectStream(); state = state.copy(selectedId = null, detail = null, composer = Composer(), sendUncertain = false); runCatching { refreshList() } }
+                if (parent != null) openInternal(parent, generation)
+                else {
+                    disconnectStream()
+                    state = state.copy(selectedId = null, detail = null, composer = Composer(), sendUncertain = false, uncertainRevision = null)
+                    runCatching { refreshList(generation) }
+                }
             }
             return true
         }
         return false
     }
 
-    fun openSide(id: String) = action {
-        flushDraft()
+    fun openSide(id: String) = action { generation ->
+        flushDraft(generation)
+        if (generation != epoch) return@action
         requireNotNull(api).call("/side-chats/${id.segment()}/open", "POST")
+        if (generation != epoch) return@action
         state.selectedId?.let { parents.addLast(it) }
-        openInternal(id)
+        openInternal(id, generation)
     }
 
-    fun createSide(path: String, payload: JSONObject? = null) = action {
-        flushDraft()
+    fun createSide(path: String, payload: JSONObject? = null) = action { generation ->
+        flushDraft(generation)
+        if (generation != epoch) return@action
         val result = requireNotNull(api).call(path, "POST", payload)
+        if (generation != epoch) return@action
         state.selectedId?.let { parents.addLast(it) }
-        openInternal(result.objectValue("conversation").text("id"))
+        openInternal(result.objectValue("conversation").text("id"), generation)
     }
 
-    fun archiveOrDelete(delete: Boolean) = action {
-        flushDraft()
-        requireNotNull(api).call(state.conversationPath + if (delete) "" else "/archive", if (delete) "DELETE" else "POST")
-        state.selectedId?.let { discardCache(accountKey(), "detail:$it") }
+    fun archiveOrDelete(delete: Boolean) = action { generation ->
+        val id = state.selectedId ?: return@action
+        val account = accountKey()
+        flushDraft(generation)
+        if (generation != epoch || state.selectedId != id) return@action
+        requireNotNull(api).call("/conversations/${id.segment()}" + if (delete) "" else "/archive", if (delete) "DELETE" else "POST")
+        if (generation != epoch || state.selectedId != id) return@action
+        discardCache(account, "detail:$id")
+        if (generation != epoch || state.selectedId != id) return@action
         disconnectStream()
         pages.clear()
-        state = state.copy(selectedId = null, detail = null, composer = Composer(), page = null)
-        refreshList()
+        state = state.copy(selectedId = null, detail = null, composer = Composer(), page = null, pageData = null, pageError = null,
+            sendUncertain = false, uncertainRevision = null)
+        refreshList(generation)
     }
 
     private suspend fun finishSessionExit(changeServer: Boolean, generation: Int) {
@@ -789,12 +856,12 @@ class ClientModel(
         )
     }
 
-    fun logout() = action {
-        finishSessionExit(changeServer = false, generation = epoch)
+    fun logout() = action { generation ->
+        finishSessionExit(changeServer = false, generation = generation)
     }
 
-    fun changeServer() = action {
-        finishSessionExit(changeServer = true, generation = epoch)
+    fun changeServer() = action { generation ->
+        finishSessionExit(changeServer = true, generation = generation)
     }
 
     fun appearance(theme: String = state.theme, font: Int = state.fontSize) {
@@ -805,7 +872,14 @@ class ClientModel(
 
     suspend fun download(path: String): okhttp3.Response {
         val generation = epoch
-        return try { requireNotNull(api).download(path) }
+        return try {
+            val response = requireNotNull(api).download(path)
+            if (generation != epoch) {
+                response.close()
+                throw CancellationException("会话已改变")
+            }
+            response
+        }
         catch (reason: Exception) {
             if (reason is CancellationException) throw reason
             if (reason is ApiFailure && reason.status == 401) withContext(Dispatchers.Main.immediate) { error(reason, generation) }
