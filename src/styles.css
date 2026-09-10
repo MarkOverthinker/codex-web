@@ -820,6 +820,15 @@ body.resizing-pane * { cursor: col-resize !important; user-select: none !importa
 .process-section-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 1px 6px; color: #555b71; font-size: 10px; }
 .process-section-title > span { color: #999dac; font-weight: 600; }
 .process-plan { margin-bottom: 12px; }
+.subagent-panel { min-width: 0; margin: 12px 0; padding: 12px; border: 1px solid #8993ae55; border-radius: 10px; color: inherit; font-size: 12px; }
+.subagent-panel > header, .subagent-panel summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.subagent-panel header > span, .subagent-panel summary > span { margin-left: auto; font-size: 11px; }
+.subagent-panel ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.subagent-panel li { padding: 9px; border-radius: 7px; background: #8993ae12; }
+.subagent-panel summary { cursor: pointer; }
+.subagent-panel summary strong { overflow-wrap: anywhere; min-width: 0; }
+.subagent-panel p, .subagent-panel small { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+@media (prefers-reduced-motion: reduce) { .subagent-panel .spin { animation: none; } }
 .process-plan ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .process-plan li { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 7px; color: #7b7f8e; font-size: 11px; }
 .process-plan li > span { width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid #d4d8e7; border-radius: 50%; color: #8e93a5; background: #fff; font-size: 9px; }

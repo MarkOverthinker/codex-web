@@ -36,6 +36,7 @@ import { mergeMessagePages, preservePrependedScrollTop, reuseUnchangedMessages }
 import { findUserMessageJump, findViewportAnchorMessageId, type JumpDirection } from "./message-jump";
 import { resolveScrollFollow } from "./scroll-follow";
 import { buildProcessJournal, isNarrativeActivity } from "./process-journal";
+import { SubagentPanel } from "./subagent-panel";
 import { collectReasoningSteps } from "./reasoning-steps";
 import { ProviderManagerDialog } from "./provider-manager-dialog";
 import { BillingPanel } from "./billing-panel";
@@ -3408,6 +3409,11 @@ type MessageListProps = {
 
 const LiveActivitiesContext = createContext<JobEvent[]>([]);
 
+function CompletedSubagents() {
+  const events = useContext(LiveActivitiesContext);
+  return <SubagentPanel events={events} active={false} />;
+}
+
 function LiveProcessPanel({ detail, onSkipQueue, skipQueueBusy }: { detail: ConversationDetail; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean }) {
   const activities = useContext(LiveActivitiesContext);
   const activeJobId = detail.activeJob?.id ?? null;
@@ -3430,6 +3436,7 @@ const MessageList = memo(function MessageList({ messages, detail, hasMore, loadi
       </Fragment>;
     })}
     {sending && <article className="message assistant running"><div className="message-avatar"><Zap size={15} /></div><div className="message-body"><div className="message-meta"><span className="message-name">Codex Web</span><span className="live-label">实时进度</span></div><LiveProcessPanel detail={detail} onSkipQueue={onSkipQueue} skipQueueBusy={skipQueueBusy} /></div></article>}
+    {!sending && <CompletedSubagents />}
     {!sending && reasoningMessageIndex === -1 && <CompletedReasoningPanel steps={reasoningSteps} durationSeconds={taskDurationSeconds} />}
     {messages.some((message) => message.role === "user") && <div className="message-jump-nav" aria-label="我的消息导航">
       <button type="button" title="上一条我的消息" aria-label="上一条我的消息" onClick={() => onJumpToUserMessage("previous")}><ArrowUp size={15} /></button>
@@ -3664,6 +3671,7 @@ function ProcessPanel({ activities, startedAt: jobStartedAt, activeJobId, onSkip
 
   return <div className="activity-card" role="status" aria-live="polite">
     <div className="activity-title"><LoaderCircle className="spin" size={17} /><strong>{queued ? "正在排队" : retrying ? "正在自动重试" : "正在处理"}</strong><span>{queued ? (queueStatus?.jobsAhead ? `前方还有 ${queueStatus.jobsAhead} 个任务 · 当前排在第 ${queueStatus.queuePosition} 位` : "前方无任务，即将自动开始") : retrying ? latestStatus.label : "完成前持续保留，可随时引导"}</span>{queued && activeJobId && onSkipQueue && <button type="button" className="activity-skip-queue" disabled={skipQueueBusy} onClick={() => onSkipQueue(activeJobId)}><Zap size={13} /><span>跳过排队直接执行</span></button>}</div>
+    <SubagentPanel events={activities} active />
     {plan?.items && <div className="process-plan"><div className="process-section-title"><strong>执行计划</strong><span>{completedPlanItems}/{plan.items.length}</span></div><ul>
       {plan.items.map((item, index) => <li className={item.completed ? "completed" : index === completedPlanItems ? "current" : ""} key={`${item.text}-${index}`}><span>{item.completed ? <Check size={12} /> : index === completedPlanItems ? <LoaderCircle className="spin" size={12} /> : index + 1}</span><p>{item.text}</p></li>)}
     </ul></div>}

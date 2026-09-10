@@ -160,3 +160,7 @@ Conversation detail checks the current Codex rollout file size without loading t
 Optional voice transcription receives a bounded context envelope. The budget is shared across the current draft, attachment names, small heads of text attachments, recent messages, technical terms, and at most a few validated images. Temporary audio remains HMAC-signed and short-lived.
 
 The public edition deliberately excludes host-root execution, Docker socket access, host filesystem mounts, private network routing, and multi-user provisioning.
+
+### Subagent status in the main conversation
+
+The current/latest task has a dedicated subagent panel in the main chat: live counts, per-thread status, and expandable task/thread details. It remains visible after the parent finishes until the next task replaces its events. Parent collaboration events carry structured `agentStates` and `agentPrompt`; a completed spawn or wait tool call is not proof that a child finished. Unknown legacy states remain unknown; unresolved running states after parent termination are marked unconfirmed. Child notifications remain isolated from parent lifecycle handling. Subagent events are retained outside the rolling process window and included in database replay so refresh preserves the panel, including for long tasks.
