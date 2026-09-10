@@ -51,6 +51,8 @@ private class UiGateway : Gateway {
     var voiceGate: CompletableDeferred<Unit>? = null
     var pending = emptyList<JSONObject>()
     var longMessages = false
+    var nextConversationFailure: ApiFailure? = null
+    var editingPrompt: JSONObject? = null
     private val conversation = json("id" to "sample-task", "title" to "重做移动端交互", "status" to "idle", "working_dir" to "/workspace/codex-web", "latest_job_status" to "completed")
     private val tasks = listOf(conversation) + (2..7).map { json("id" to "task-$it", "title" to "项目任务 $it", "working_dir" to "/workspace/codex-web",
         "status" to if (it == 2) "running" else "idle", "latest_job_status" to if (it == 4) "failed" else "completed") } +
@@ -114,7 +116,7 @@ private class UiGateway : Gateway {
         if (method != "GET") mutations += "$method $path"
         delay(20)
         return when {
-            path == "/auth/login" -> json("authenticated" to true, "username" to "test-account", "csrfToken" to "token", "providerManagementEnabled" to true, "voiceEnabled" to true)
+            path == "/auth/login" -> json("authenticated" to true, "username" to payload?.text("username").orEmpty().ifBlank { "test-account" }, "csrfToken" to "token", "providerManagementEnabled" to true, "voiceEnabled" to true)
             path == "/auth/session" -> json("authenticated" to false)
             path == "/agent-options" -> json("selection" to selection, "models" to listOf(json("id" to "test-model", "label" to "测试模型",
                 "providerName" to "验收服务", "reasoningEfforts" to listOf("low", "medium", "high").jsonArray()),
@@ -143,12 +145,17 @@ private class UiGateway : Gateway {
                 json("ok" to true)
             }
             path.endsWith("/agent-selection") && method == "PUT" -> { selection = payload ?: selection; json("ok" to true) }
-            path == "/conversations/sample-task" -> json("conversation" to conversation, "composerDraft" to draft, "agentSelection" to selection,
+            path.contains("/pending-prompts/") && path.endsWith("/edit") && method == "POST" ->
+                json("editingPrompt" to (editingPrompt ?: json()))
+            path == "/conversations/sample-task" -> {
+                nextConversationFailure?.let { failure -> nextConversationFailure = null; throw failure }
+                json("conversation" to conversation, "composerDraft" to draft, "agentSelection" to selection,
                 "messages" to listOf(
                     json("id" to "user-one", "role" to "user", "content" to "保留核心功能，让手机界面更专注。", "can_edit" to true),
                     json("id" to "assistant-one", "role" to "assistant", "content" to "## 让任务回到中心\n\n保留熟悉的 Web 风格，让对话成为主界面。\n\n- 右滑打开按项目分类的任务\n- 输入区轻点即可管理队列\n- 草稿与近期对话保存在本机\n\n```kotlin\nval focus = \"专注当前对话\"\n```" + if (longMessages) "\n\n继续查看项目细节。".repeat(35) else "", "can_fork" to true)
                 ).jsonArray(), "messagePage" to json("hasMore" to false), "pendingPrompts" to pending.jsonArray(), "jobEvents" to emptyList<JSONObject>().jsonArray(),
                 "outputFiles" to outputs.jsonArray())
+            }
             path.contains("/file-tree/preview") -> {
                 val target = params(path)["path"].orEmpty()
                 if (target == "已删除文件.txt") throw ApiFailure(400, "ENOENT: no such file or directory, open '/workspace/已删除文件.txt'")
@@ -204,9 +211,16 @@ class NativeUiTest {
 
     @After fun cleanup() { compose.runOnUiThread { owner.clear() } }
 
-    private fun login() {
+    private fun login(username: String = "test-account") {
+        if (model.state.error != null) {
+            compose.onNodeWithText("知道了").performClick()
+            compose.waitUntil(5000) { model.state.error == null }
+        }
+        compose.onNodeWithTag("server").performTextClearance()
+        compose.onNodeWithTag("username").performTextClearance()
+        compose.onNodeWithTag("password").performTextClearance()
         compose.onNodeWithTag("server").performTextInput("https://example.org")
-        compose.onNodeWithTag("username").performTextInput("test-account")
+        compose.onNodeWithTag("username").performTextInput(username)
         compose.onNodeWithTag("password").performTextInput("test-only-password")
         compose.onNodeWithTag("login").performScrollTo().assertIsDisplayed().performClick()
         try {
@@ -218,10 +232,16 @@ class NativeUiTest {
         compose.onNodeWithTag("composer").assertIsDisplayed()
     }
 
+    private fun expireSessionThroughConversation() {
+        gateway.nextConversationFailure = ApiFailure(401, "expired")
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(5000) { !model.state.authenticated && !model.state.busy }
+    }
+
     private fun screenshot(name: String) {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val directory = File(instrumentation.targetContext.getExternalFilesDir(null), "native-screenshots").apply { mkdirs() }
+        val directory = File(instrumentation.targetContext.filesDir, "native-screenshots").apply { mkdirs() }
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         File(directory, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
@@ -546,6 +566,60 @@ class NativeUiTest {
         compose.onNodeWithContentDescription("关闭队列").performClick()
         compose.onNodeWithTag("composer").assertIsDisplayed()
         assertEquals(0, gateway.sends)
+    }
+
+    @Test fun expiredSessionDoesNotKeepOpenEditorForNextAccount() {
+        login()
+        gateway.pending = listOf(json("id" to "p1", "content" to "队列摘要", "status" to "queued"))
+        gateway.editingPrompt = json("id" to "p1", "content" to "旧账号敏感内容", "files" to emptyList<JSONObject>().jsonArray())
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(5000) { !model.state.busy && model.state.detail?.rows("pendingPrompts")?.size == 1 }
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithText("队列摘要").assertIsDisplayed()
+        compose.onNodeWithText("编辑").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithText("编辑队列指令").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("旧账号敏感内容").assertIsDisplayed()
+        compose.waitUntil(5000) { !model.state.busy }
+
+        expireSessionThroughConversation()
+        compose.onNodeWithText("旧账号敏感内容").assertDoesNotExist()
+        compose.onNodeWithText("编辑队列指令").assertDoesNotExist()
+        login("second-account")
+        compose.onNodeWithText("旧账号敏感内容").assertDoesNotExist()
+        compose.onNodeWithText("编辑队列指令").assertDoesNotExist()
+        assertEquals(0, gateway.mutations.count { it.startsWith("DELETE ") })
+        screenshot("native-session-expiry-editor-isolated")
+    }
+
+    @Test fun expiredSessionClosesOpenOptionsSheetForNextAccount() {
+        login()
+        compose.onNodeWithText("测试模型").performClick()
+        compose.onNodeWithText("任务选项").assertIsDisplayed()
+
+        expireSessionThroughConversation()
+        compose.onNodeWithText("任务选项").assertDoesNotExist()
+        login("second-account")
+        compose.onNodeWithText("任务选项").assertDoesNotExist()
+        screenshot("native-session-expiry-options-isolated")
+    }
+
+    @Test fun expiredSessionDiscardsOpenDangerConfirmWithoutExecutingIt() {
+        login()
+        gateway.pending = listOf(json("id" to "p1", "content" to "待删除敏感队列", "status" to "queued"))
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(5000) { !model.state.busy && model.state.detail?.rows("pendingPrompts")?.size == 1 }
+        compose.onNodeWithTag("queue-hint").performClick()
+        compose.onNodeWithTag("queue-more-0").performClick()
+        compose.onNodeWithText("删除").performClick()
+        compose.onNodeWithText("删除这条待发送指令及其附件？").assertIsDisplayed()
+
+        expireSessionThroughConversation()
+        compose.onNodeWithText("删除这条待发送指令及其附件？").assertDoesNotExist()
+        assertEquals(0, gateway.mutations.count { it.startsWith("DELETE ") })
+        login("second-account")
+        compose.onNodeWithText("删除这条待发送指令及其附件？").assertDoesNotExist()
+        assertEquals(0, gateway.mutations.count { it.startsWith("DELETE ") })
+        screenshot("native-session-expiry-confirm-isolated")
     }
 
     @Test fun queueMenuRealOutsideTapDismissesWithoutTouchingUnderlyingControls() {

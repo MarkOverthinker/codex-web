@@ -23,6 +23,7 @@ class ModelGateway : Gateway {
     var draft: JSONObject? = null
     var failSend = false
     var acceptBeforeFailure = false
+    var messageFailure: Exception? = null
     var failDraft = false
     var draftFailure: Exception? = null
     var logoutFailure: Exception? = null
@@ -32,6 +33,7 @@ class ModelGateway : Gateway {
     var detailGate: CompletableDeferred<Unit>? = null
     var detailFailure: Exception? = null
     var nextDetailFailure: Exception? = null
+    var nextAuthSessionFailure: Exception? = null
     var loginGate: CompletableDeferred<Unit>? = null
     var clearCredentialsCalls = 0
     var logoutCalls = 0
@@ -41,6 +43,7 @@ class ModelGateway : Gateway {
     var active: JSONObject? = null
     var after = 0L
     var opens = 0
+    var loginUser = "test-user"
     private fun multipartField(body: RequestBody?, name: String): String {
         val buffer = Buffer()
         body?.writeTo(buffer)
@@ -64,7 +67,12 @@ class ModelGateway : Gateway {
             }
             path == "/auth/login" -> {
                 loginGate?.await()
-                json("authenticated" to true, "username" to payload?.text("username", "test-user"), "csrfToken" to "csrf")
+                loginUser = payload?.text("username", "test-user").orEmpty()
+                json("authenticated" to true, "username" to loginUser, "csrfToken" to "csrf")
+            }
+            path == "/auth/session" -> {
+                nextAuthSessionFailure?.let { failure -> nextAuthSessionFailure = null; throw failure }
+                json("authenticated" to true, "username" to "test-user", "csrfToken" to "csrf")
             }
             path.startsWith("/auth/") -> json("authenticated" to true, "username" to "test-user", "csrfToken" to "csrf")
             path == "/agent-options" -> json("models" to emptyList<JSONObject>().jsonArray())
@@ -83,6 +91,7 @@ class ModelGateway : Gateway {
             }
             path.endsWith("/messages") && method == "POST" -> {
                 messageGate?.await()
+                messageFailure?.let { throw it }
                 if (!failSend || acceptBeforeFailure) {
                     messages = messages + json("id" to "sent-${messages.size}", "role" to "user",
                         "content" to multipartField(body, "message").ifBlank { draft?.text("content") },
@@ -93,9 +102,10 @@ class ModelGateway : Gateway {
                 json("queued" to true)
             }
             path == "/conversations/one" -> {
-                detailGate?.await()
+                val owner = loginUser
+                if (owner == "test-user") detailGate?.await()
                 (nextDetailFailure.also { nextDetailFailure = null } ?: detailFailure)?.let { throw it }
-                json("conversation" to json("id" to "one", "title" to "Test task"), "composerDraft" to draft,
+                json("conversation" to json("id" to "one", "title" to "Test task", "owner" to owner), "composerDraft" to draft,
                 "messages" to messages.jsonArray(), "messagePage" to json("hasMore" to false), "activeJob" to active,
                 "jobEvents" to emptyList<JSONObject>().jsonArray())
             }
@@ -376,6 +386,26 @@ class ClientModelTest {
         assertEquals("new-user", model.state.session?.text("username"))
     }
 
+    @Test fun delayedOldConversationSuccessCannotReplaceNewLoginState() = runBlocking {
+        api.detailGate = CompletableDeferred()
+        withContext(dispatcher) { model.openConversation("one") }
+        await { api.calls.count { it.first == "/conversations/one" } >= 2 }
+
+        api.nextAuthSessionFailure = ApiFailure(401, "expired")
+        val expiry = CoroutineScope(dispatcher).launch { runCatching { model.get("/auth/session") } }
+        await { !model.state.authenticated && !model.state.busy }
+
+        withContext(dispatcher) { model.connect("https://example.org", "new-user", "new-password") }
+        await { model.state.session?.text("username") == "new-user" }
+        api.detailGate!!.complete(Unit)
+        expiry.join()
+        await { !model.state.connecting }
+        assertTrue(model.state.authenticated)
+        assertEquals("new-user", model.state.session?.text("username"))
+        assertEquals("one", model.state.selectedId)
+        assertEquals("new-user", model.state.conversation.text("owner"))
+    }
+
     @Test fun sendUsesOneSnapshotAndRetainsTextChangedWhileDraftSyncIsDelayed() = runBlocking {
         api.draftGate = CompletableDeferred()
         withContext(dispatcher) { model.changeText("发送的原始内容"); model.quote(json("content" to "原始引用")); model.send() }
@@ -401,5 +431,34 @@ class ClientModelTest {
         await { !model.state.busy }
         assertTrue(model.state.sendUncertain)
         assertEquals("发送期间新增内容", model.state.composer.content)
+    }
+
+    @Test fun ambiguousSendUnauthorizedReconcileRetainsProtectionAcrossRelogin() = runBlocking {
+        api.failSend = true
+        api.nextDetailFailure = ApiFailure(401, "expired while checking send")
+        withContext(dispatcher) { model.changeText("结果未知的旧发送"); model.send() }
+        await { !model.state.authenticated && !model.state.busy }
+        await { storage.read("draft:https://example.org/codex-web/:test-user:one") != null }
+        val backup = JSONObject(storage.read("draft:https://example.org/codex-web/:test-user:one")!!)
+        assertTrue(backup.optBoolean("sendUncertain"))
+        assertEquals(1, api.calls.count { it.first.endsWith("/messages") })
+
+        withContext(dispatcher) { model.connect("https://example.org", "test-user", "test-password") }
+        await { model.state.authenticated && model.state.selectedId == "one" && !model.state.busy }
+        assertTrue(model.state.sendUncertain)
+        withContext(dispatcher) { model.send() }
+        delay(100)
+        assertEquals(1, api.calls.count { it.first.endsWith("/messages") })
+    }
+
+    @Test fun clientFailureUnauthorizedReconcileDoesNotWriteNullAccountDraft() = runBlocking {
+        api.messageFailure = ApiFailure(422, "invalid request")
+        api.nextDetailFailure = ApiFailure(401, "expired while checking client failure")
+        withContext(dispatcher) { model.changeText("明确失败的旧草稿"); model.send() }
+        await { !model.state.authenticated && !model.state.busy }
+        await { storage.read("draft:https://example.org/codex-web/:test-user:one") != null }
+        assertNull(storage.read("draft:https://example.org/codex-web/:null:one"))
+        assertEquals("明确失败的旧草稿", JSONObject(storage.read("draft:https://example.org/codex-web/:test-user:one")!!).text("content"))
+        assertFalse(JSONObject(storage.read("draft:https://example.org/codex-web/:test-user:one")!!).optBoolean("sendUncertain"))
     }
 }
