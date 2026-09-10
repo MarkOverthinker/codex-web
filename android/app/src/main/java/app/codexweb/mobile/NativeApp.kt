@@ -81,101 +81,102 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
     }
     MaterialTheme(colorScheme = if (dark) DarkColors else LightColors) {
         Surface(Modifier.fillMaxSize()) {
-            var sheet by remember { mutableStateOf<String?>(null) }
-            var edit by remember { mutableStateOf<Pair<JSONObject, Boolean>?>(null) }
-            var editSubmitting by remember { mutableStateOf(false) }
-            var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
-            val clipboard = LocalClipboardManager.current
-            LaunchedEffect(state.busy, editSubmitting) {
-                if (editSubmitting && !state.busy) {
-                    if (state.error == null) edit = null
-                    editSubmitting = false
-                }
-            }
-            val chatStates = rememberSaveableStateHolder()
-            val profilePage = remember { ToolPage("我的", "settings", "") }
-            val queuePage = remember { ToolPage("任务与队列", "queue", "") }
             if (!state.authenticated) {
                 LoginScreen(state, model::connect)
             } else {
-                ChatFirstShell(model, sheet != null || edit != null || confirm != null, tools = { sheet = "tools" }, composer = {
-                    ComposerBar(state, model, { model.withConversation { sheet = "options" } },
-                        { model.withConversation(pickFiles) }, { if (recording) voice() else model.withConversation(voice) }, recording, { sheet = "queue" })
-                }) {
-                    when {
-                        state.page != null -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
-                        state.homeTab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
-                        state.homeTab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
-                        state.selectedId == null -> WelcomeChat(model)
-                        else -> chatStates.SaveableStateProvider("chat:${state.server}:${state.session?.text("username")}:${state.selectedId}") {
-                            ChatScreen(state, model, download, openLink, { prompt -> edit = prompt to false },
-                                { message, action -> confirm = message to action }, { sheet = "queue" })
+                key("${state.server}:${state.session?.text("username")}") {
+                    var sheet by remember { mutableStateOf<String?>(null) }
+                    var edit by remember { mutableStateOf<Pair<JSONObject, Boolean>?>(null) }
+                    var editSubmitting by remember { mutableStateOf(false) }
+                    var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+                    LaunchedEffect(state.busy, editSubmitting) {
+                        if (editSubmitting && !state.busy) {
+                            if (state.error == null) edit = null
+                            editSubmitting = false
                         }
                     }
-                }
-                if (sheet == "queue") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-                    Column(Modifier.fillMaxWidth().fillMaxHeight(.85f).testTag("queue-sheet")) {
-                        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("任务与队列", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                            IconButton(onClick = { sheet = null }) { Icon(Icons.Outlined.Close, "关闭队列") }
-                        }
-                        ToolsScreen(model, download, { prompt -> sheet = null; edit = prompt to true }, { message, action -> confirm = message to action }, queuePage)
-                    }
-                }
-                if (sheet == "tools" || sheet == "options") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-                    if (sheet == "options") OptionsSheet(model) { sheet = null }
-                    else Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState())) {
-                        Text("任务工具", Modifier.padding(20.dp), style = MaterialTheme.typography.titleLarge)
-                        listOf(
-                            Triple("任务与队列", "queue", ""), Triple("文件", "files", "${state.conversationPath}/file-tree"),
-                            Triple("代码 Review", "review", "${state.conversationPath}/review?scope=working"),
-                            Triple("侧边线程", "side", "${state.conversationPath}/side-chats"),
-                            Triple("工作目录", "directories", "/working-dirs"), Triple("API 统计", "billing", "/billing?days=30"),
-                        ).forEach { (title, kind, path) ->
-                            ToolRow(title, onClick = { if (kind == "queue") sheet = "queue" else { sheet = null; model.navigate(ToolPage(title, kind, path)) } })
-                        }
-                        ToolRow("重命名", onClick = { sheet = "rename" })
-                        ToolRow("归档任务", onClick = { sheet = null; confirm = "归档这个任务？服务器会保留历史，可在设置中恢复。" to { model.archiveOrDelete(false) } })
-                        ToolRow("删除任务", danger = true, onClick = { sheet = null; confirm = "永久删除这个任务及其消息和附件？此操作不可撤销。" to { model.archiveOrDelete(true) } })
-                        Spacer(Modifier.height(20.dp))
-                    }
-                }
-                if (sheet == "rename") NativeForm("重命名任务", listOf(FormField("title", "任务名称", state.conversation.text("title"))),
-                    onDismiss = { sheet = null }) { payload -> sheet = null; model.mutate(state.conversationPath, "PATCH", payload) }
-                edit?.let { (prompt, pending) ->
-                    var removed by remember(prompt.text("id")) { mutableStateOf(emptyList<String>()) }
-                    var newFiles by remember(prompt.text("id")) { mutableStateOf(emptyList<UploadPart>()) }
-                    val context = LocalContext.current
-                    val editorPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-                        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
-                    ) { uris ->
-                        if (prompt.rows("files").size - removed.size + newFiles.size + uris.size > 12) model.note("一条指令最多 12 个附件")
-                        else newFiles = newFiles + uris.map { nativeUpload(context, it) }
-                    }
-                    NativeForm(if (pending) "编辑队列指令" else "编辑并重新执行", listOf(FormField("message", "指令", prompt.text("content"), "multiline")),
-                        busy = state.busy,
-                        explanation = if (pending) "已暂停此条队列。保存后恢复排队；取消编辑会恢复原指令。" else "服务器将按原有编辑重发规则处理后续消息，请确认内容。",
-                        extra = { prompt.rows("files").forEach { file ->
-                            val id = file.text("id")
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = id !in removed, onCheckedChange = { checked -> removed = if (checked) removed - id else removed + id })
-                                Text(file.text("original_name"), Modifier.weight(1f))
+                    val chatStates = rememberSaveableStateHolder()
+                    val profilePage = remember { ToolPage("我的", "settings", "") }
+                    val queuePage = remember { ToolPage("任务与队列", "queue", "") }
+                    ChatFirstShell(model, sheet != null || edit != null || confirm != null, tools = { sheet = "tools" }, composer = {
+                        ComposerBar(state, model, { model.withConversation { sheet = "options" } },
+                            { model.withConversation(pickFiles) }, { if (recording) voice() else model.withConversation(voice) }, recording, { sheet = "queue" })
+                    }) {
+                        when {
+                            state.page != null -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
+                            state.homeTab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
+                            state.homeTab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
+                            state.selectedId == null -> WelcomeChat(model)
+                            else -> chatStates.SaveableStateProvider("chat:${state.server}:${state.session?.text("username")}:${state.selectedId}") {
+                                ChatScreen(state, model, download, openLink, { prompt -> edit = prompt to false },
+                                    { message, action -> confirm = message to action }, { sheet = "queue" })
                             }
                         }
-                            newFiles.forEachIndexed { index, file -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("新附件 · ${file.name}", Modifier.weight(1f))
-                                IconButton(onClick = { newFiles = newFiles.filterIndexed { position, _ -> position != index } }, enabled = !state.busy) { Icon(Icons.Outlined.Close, "移除新附件") }
-                            } }
-                            OutlinedButton(onClick = { editorPicker.launch(arrayOf("*/*")) }, enabled = !state.busy) { Text("添加新附件") }
-                        }, onDismiss = {
-                            edit = null
-                            if (pending) model.mutate("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}/restore")
-                        }) { value -> editSubmitting = true; model.editPrompt(prompt, value.text("message"), pending, removed, newFiles) }
-                }
-                confirm?.let { (message, action) ->
-                    AlertDialog(onDismissRequest = { confirm = null }, title = { Text("确认操作") }, text = { Text(message) },
-                        confirmButton = { TextButton(onClick = { confirm = null; action() }) { Text("确认") } },
-                        dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } })
+                    }
+                    if (sheet == "queue") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+                        Column(Modifier.fillMaxWidth().fillMaxHeight(.85f).testTag("queue-sheet")) {
+                            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("任务与队列", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                                IconButton(onClick = { sheet = null }) { Icon(Icons.Outlined.Close, "关闭队列") }
+                            }
+                            ToolsScreen(model, download, { prompt -> sheet = null; edit = prompt to true }, { message, action -> confirm = message to action }, queuePage)
+                        }
+                    }
+                    if (sheet == "tools" || sheet == "options") ModalBottomSheet(onDismissRequest = { sheet = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+                        if (sheet == "options") OptionsSheet(model) { sheet = null }
+                        else Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState())) {
+                            Text("任务工具", Modifier.padding(20.dp), style = MaterialTheme.typography.titleLarge)
+                            listOf(
+                                Triple("任务与队列", "queue", ""), Triple("文件", "files", "${state.conversationPath}/file-tree"),
+                                Triple("代码 Review", "review", "${state.conversationPath}/review?scope=working"),
+                                Triple("侧边线程", "side", "${state.conversationPath}/side-chats"),
+                                Triple("工作目录", "directories", "/working-dirs"), Triple("API 统计", "billing", "/billing?days=30"),
+                            ).forEach { (title, kind, path) ->
+                                ToolRow(title, onClick = { if (kind == "queue") sheet = "queue" else { sheet = null; model.navigate(ToolPage(title, kind, path)) } })
+                            }
+                            ToolRow("重命名", onClick = { sheet = "rename" })
+                            ToolRow("归档任务", onClick = { sheet = null; confirm = "归档这个任务？服务器会保留历史，可在设置中恢复。" to { model.archiveOrDelete(false) } })
+                            ToolRow("删除任务", danger = true, onClick = { sheet = null; confirm = "永久删除这个任务及其消息和附件？此操作不可撤销。" to { model.archiveOrDelete(true) } })
+                            Spacer(Modifier.height(20.dp))
+                        }
+                    }
+                    if (sheet == "rename") NativeForm("重命名任务", listOf(FormField("title", "任务名称", state.conversation.text("title"))),
+                        onDismiss = { sheet = null }) { payload -> sheet = null; model.mutate(state.conversationPath, "PATCH", payload) }
+                    edit?.let { (prompt, pending) ->
+                        var removed by remember(prompt.text("id")) { mutableStateOf(emptyList<String>()) }
+                        var newFiles by remember(prompt.text("id")) { mutableStateOf(emptyList<UploadPart>()) }
+                        val context = LocalContext.current
+                        val editorPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                            androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
+                        ) { uris ->
+                            if (prompt.rows("files").size - removed.size + newFiles.size + uris.size > 12) model.note("一条指令最多 12 个附件")
+                            else newFiles = newFiles + uris.map { nativeUpload(context, it) }
+                        }
+                        NativeForm(if (pending) "编辑队列指令" else "编辑并重新执行", listOf(FormField("message", "指令", prompt.text("content"), "multiline")),
+                            busy = state.busy,
+                            explanation = if (pending) "已暂停此条队列。保存后恢复排队；取消编辑会恢复原指令。" else "服务器将按原有编辑重发规则处理后续消息，请确认内容。",
+                            extra = { prompt.rows("files").forEach { file ->
+                                val id = file.text("id")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = id !in removed, onCheckedChange = { checked -> removed = if (checked) removed - id else removed + id })
+                                    Text(file.text("original_name"), Modifier.weight(1f))
+                                }
+                            }
+                                newFiles.forEachIndexed { index, file -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("新附件 · ${file.name}", Modifier.weight(1f))
+                                    IconButton(onClick = { newFiles = newFiles.filterIndexed { position, _ -> position != index } }, enabled = !state.busy) { Icon(Icons.Outlined.Close, "移除新附件") }
+                                } }
+                                OutlinedButton(onClick = { editorPicker.launch(arrayOf("*/*")) }, enabled = !state.busy) { Text("添加新附件") }
+                            }, onDismiss = {
+                                edit = null
+                                if (pending) model.mutate("${state.conversationPath}/pending-prompts/${prompt.text("id").segment()}/restore")
+                            }) { value -> editSubmitting = true; model.editPrompt(prompt, value.text("message"), pending, removed, newFiles) }
+                    }
+                    confirm?.let { (message, action) ->
+                        AlertDialog(onDismissRequest = { confirm = null }, title = { Text("确认操作") }, text = { Text(message) },
+                            confirmButton = { TextButton(onClick = { confirm = null; action() }) { Text("确认") } },
+                            dismissButton = { TextButton(onClick = { confirm = null }) { Text("取消") } })
+                    }
                 }
             }
             state.error?.let { message -> AlertDialog(onDismissRequest = model::dismissError, title = { Text("操作未完成") },
