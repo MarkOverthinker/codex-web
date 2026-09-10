@@ -9,6 +9,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -261,6 +262,19 @@ class NativeUiTest {
             .flatMap { it.config[androidx.compose.ui.semantics.SemanticsProperties.Text].map { value -> value.text } }
             .toList()
         assertTrue("Expected status '$expected' in $tag, found: $texts", expected in texts)
+    }
+
+    @Test fun bottomNavigationExposesSelectionAndPreservesDraft() {
+        login()
+        compose.runOnUiThread { model.changeText("导航切换保留草稿") }
+        HomeTab.entries.forEach { tab ->
+            compose.onNodeWithTag("tab-${tab.name}").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick().assertIsSelected()
+            HomeTab.entries.filter { it != tab }.forEach { other -> compose.onNodeWithTag("tab-${other.name}").assertIsNotSelected() }
+            screenshot("native-navigation-${tab.name}")
+        }
+        compose.onNodeWithTag("tab-Chat").performClick()
+        compose.onNodeWithTag("composer").assertTextContains("导航切换保留草稿")
+        assertEquals(0, gateway.sends)
     }
 
     @Test fun loginAndChatAreNativeAndToolsPreserveComposer() {
