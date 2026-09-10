@@ -1,6 +1,8 @@
 package app.codexweb.mobile
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MultipartBody
@@ -64,6 +66,28 @@ class NativeApiTest {
         assertTrue(cookies.loadForRequest(server.url("/outside/")).isEmpty())
         assertEquals(1, TrustedCookies(base, store).loadForRequest(base.toHttpUrl()).size)
         api.clearCredentials()
+        assertTrue(TrustedCookies(base, store).loadForRequest(base.toHttpUrl()).isEmpty())
+    }
+
+    @Test fun lateCookieResponseAfterClearCannotRestoreCredentials() {
+        cookies.saveFromResponse(base.toHttpUrl(), listOf(Cookie.parse(base.toHttpUrl(), "sid=before; Path=/codex-web; Secure")!!))
+        cookies.loadForRequest(base.toHttpUrl())
+        cookies.clear()
+        cookies.saveFromResponse(base.toHttpUrl(), listOf(Cookie.parse(base.toHttpUrl(), "sid=late; Path=/codex-web; Secure")!!))
+        assertTrue(TrustedCookies(base, store).loadForRequest(base.toHttpUrl()).isEmpty())
+
+        cookies.loadForRequest(base.toHttpUrl())
+        cookies.saveFromResponse(base.toHttpUrl(), listOf(Cookie.parse(base.toHttpUrl(), "sid=fresh; Path=/codex-web; Secure")!!))
+        assertEquals("fresh", TrustedCookies(base, store).loadForRequest(base.toHttpUrl()).single().value)
+    }
+
+    @Test fun delayedHttpCookieFromPreClearRequestIsIgnored() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(401).setHeadersDelay(250, TimeUnit.MILLISECONDS)
+            .addHeader("Set-Cookie", "sid=late-http; Path=/codex-web; Secure").setBody("{\"error\":\"expired\"}"))
+        val request = async(Dispatchers.IO) { runCatching { api.call("/auth/session") } }
+        assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+        api.clearCredentials()
+        request.await()
         assertTrue(TrustedCookies(base, store).loadForRequest(base.toHttpUrl()).isEmpty())
     }
 
