@@ -69,6 +69,7 @@ data class NativeState(
     val connection: String = "未连接",
     val draftStatus: String = "",
     val sendUncertain: Boolean = false,
+    val uncertainRevision: Long? = null,
     val categorySettings: JSONObject = JSONObject(),
     val theme: String = "system",
     val fontSize: Int = 16,

@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.RequestBody
 import okhttp3.Response
+import okio.Buffer
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
@@ -23,18 +24,48 @@ class ModelGateway : Gateway {
     var failSend = false
     var acceptBeforeFailure = false
     var failDraft = false
+    var draftFailure: Exception? = null
+    var logoutFailure: Exception? = null
+    var logoutGate: CompletableDeferred<Unit>? = null
     var draftGate: CompletableDeferred<Unit>? = null
+    var messageGate: CompletableDeferred<Unit>? = null
     var detailGate: CompletableDeferred<Unit>? = null
     var detailFailure: Exception? = null
+    var nextDetailFailure: Exception? = null
+    var loginGate: CompletableDeferred<Unit>? = null
+    var clearCredentialsCalls = 0
+    var logoutCalls = 0
     var messages = emptyList<JSONObject>()
     var sequenceCallback: ((JSONObject, Long) -> Unit)? = null
     var eventFailures: ((String) -> Unit)? = null
     var active: JSONObject? = null
     var after = 0L
     var opens = 0
+    private fun multipartField(body: RequestBody?, name: String): String {
+        val buffer = Buffer()
+        body?.writeTo(buffer)
+        val raw = buffer.readUtf8()
+        val header = raw.indexOf("name=\"$name\"")
+        if (header < 0) return ""
+        val valueStart = raw.indexOf("\r\n\r\n", header).let { if (it >= 0) it + 4 else raw.indexOf("\n\n", header).let { fallback -> if (fallback >= 0) fallback + 2 else -1 } }
+        if (valueStart < 0) return ""
+        val valueEnd = raw.indexOf("\r\n--", valueStart).let { if (it >= 0) it else raw.indexOf("\n--", valueStart) }
+        return raw.substring(valueStart, if (valueEnd >= 0) valueEnd else raw.length)
+    }
+
     override suspend fun call(path: String, method: String, payload: JSONObject?, body: RequestBody?): JSONObject {
         calls += path to payload
         return when {
+            path == "/auth/logout" -> {
+                logoutCalls++
+                logoutGate?.await()
+                logoutFailure?.let { throw it }
+                json("ok" to true)
+            }
+            path == "/auth/login" -> {
+                loginGate?.await()
+                json("authenticated" to true, "username" to payload?.text("username", "test-user"), "csrfToken" to "csrf")
+            }
             path.startsWith("/auth/") -> json("authenticated" to true, "username" to "test-user", "csrfToken" to "csrf")
             path == "/agent-options" -> json("models" to emptyList<JSONObject>().jsonArray())
             path == "/preset-prompts" -> json("presetPrompts" to emptyList<JSONObject>().jsonArray())
@@ -45,13 +76,17 @@ class ModelGateway : Gateway {
             path.endsWith("/draft") && method == "PUT" -> {
                 draftGate?.await()
                 if (failDraft) throw IOException("offline")
+                draftFailure?.let { throw it }
                 draft = json("content" to payload?.text("content"), "quote_excerpt" to payload?.text("quoteExcerpt"),
                     "source_reference" to payload?.optJSONObject("sourceReference"), "files" to (draft?.rows("files").orEmpty()).jsonArray())
                 json("composerDraft" to draft)
             }
             path.endsWith("/messages") && method == "POST" -> {
+                messageGate?.await()
                 if (!failSend || acceptBeforeFailure) {
-                    messages = messages + json("id" to "sent-${messages.size}", "role" to "user", "content" to draft?.text("content"))
+                    messages = messages + json("id" to "sent-${messages.size}", "role" to "user",
+                        "content" to multipartField(body, "message").ifBlank { draft?.text("content") },
+                        "quote_excerpt" to multipartField(body, "quoteExcerpt"))
                     draft = null
                 }
                 if (failSend) throw IOException("response lost")
@@ -59,7 +94,7 @@ class ModelGateway : Gateway {
             }
             path == "/conversations/one" -> {
                 detailGate?.await()
-                detailFailure?.let { throw it }
+                (nextDetailFailure.also { nextDetailFailure = null } ?: detailFailure)?.let { throw it }
                 json("conversation" to json("id" to "one", "title" to "Test task"), "composerDraft" to draft,
                 "messages" to messages.jsonArray(), "messagePage" to json("hasMore" to false), "activeJob" to active,
                 "jobEvents" to emptyList<JSONObject>().jsonArray())
@@ -75,7 +110,7 @@ class ModelGateway : Gateway {
         eventFailures = failure
         return Closeable {}
     }
-    override fun clearCredentials() {}
+    override fun clearCredentials() { clearCredentialsCalls++ }
     override fun close() {}
 }
 
@@ -273,5 +308,98 @@ class ClientModelTest {
         assertEquals("已经同步的草稿", model.state.composer.content)
         assertEquals("引用内容", model.state.composer.quote)
         assertEquals("attachment-one", model.state.composer.files.single().text("id"))
+    }
+
+    @Test fun offlineLogoutClearsLocalSessionAndKeepsDraftWithoutClaimingServerLogout() = runBlocking {
+        api.draft = json("content" to "服务器附件草稿", "files" to listOf(json("id" to "keep-file", "original_name" to "keep.md")).jsonArray())
+        withContext(dispatcher) { model.openConversation("one") }
+        await { !model.state.busy }
+        api.failDraft = true
+        api.logoutFailure = IOException("offline")
+        withContext(dispatcher) { model.changeText("退出时必须保留") ; model.logout() }
+        await { !model.state.busy }
+        await { storage.read("draft:https://example.org/codex-web/:test-user:one") != null }
+        assertEquals("keep-file", JSONObject(storage.read("draft:https://example.org/codex-web/:test-user:one")!!).rows("files").single().text("id"))
+        assertFalse(model.state.authenticated)
+        assertNull(model.state.selectedId)
+        assertNull(model.state.detail)
+        assertEquals(1, api.clearCredentialsCalls)
+        assertEquals(1, api.logoutCalls)
+        assertTrue(model.state.error.orEmpty().contains("未确认"))
+    }
+
+    @Test fun serverChangeOnUnauthorizedLogoutClearsCredentialsAndForgetsServer() = runBlocking {
+        api.logoutFailure = ApiFailure(401, "expired")
+        withContext(dispatcher) { model.changeServer() }
+        await { !model.state.busy }
+        assertFalse(model.state.authenticated)
+        assertEquals("", model.state.server)
+        assertEquals(1, api.clearCredentialsCalls)
+        assertTrue(model.state.error.orEmpty().contains("未确认"))
+    }
+
+    @Test fun logoutTimeoutStillClearsLocalSessionAndReportsUnknownServerState() = runBlocking {
+        api.logoutGate = CompletableDeferred()
+        withContext(dispatcher) { model.logout() }
+        await { !model.state.busy }
+        assertFalse(model.state.authenticated)
+        assertEquals(1, api.clearCredentialsCalls)
+        assertTrue(model.state.error.orEmpty().contains("未确认"))
+    }
+
+    @Test fun backgroundDraftUnauthorizedResponseExpiresSessionAndPreservesLocalDraft() = runBlocking {
+        api.draftFailure = ApiFailure(401, "expired")
+        withContext(dispatcher) { model.changeText("后台同步遇到过期会话") }
+        await { api.calls.any { it.first.endsWith("/draft") } }
+        await { !model.state.authenticated }
+        await { storage.read("draft:https://example.org/codex-web/:test-user:one") != null }
+        assertNull(model.state.selectedId)
+        assertNull(model.state.detail)
+        assertEquals(1, api.clearCredentialsCalls)
+    }
+
+    @Test fun delayedOldPageUnauthorizedResponseCannotClearNewLogin() = runBlocking {
+        api.detailGate = CompletableDeferred()
+        api.nextDetailFailure = ApiFailure(401, "expired")
+        withContext(dispatcher) { model.navigate(ToolPage("旧页", "detail", "/conversations/one")) }
+        await { api.calls.count { it.first == "/conversations/one" } >= 3 }
+        withContext(dispatcher) { model.logout() }
+        await { !model.state.busy && !model.state.authenticated }
+        api.loginGate = CompletableDeferred()
+        withContext(dispatcher) { model.connect("https://example.org", "new-user", "new-password") }
+        await { model.state.connecting && api.calls.any { it.first == "/auth/login" } }
+        api.loginGate!!.complete(Unit)
+        await { model.state.session?.text("username") == "new-user" }
+        api.detailGate!!.complete(Unit)
+        await { !model.state.connecting }
+        assertTrue(model.state.authenticated)
+        assertEquals("new-user", model.state.session?.text("username"))
+    }
+
+    @Test fun sendUsesOneSnapshotAndRetainsTextChangedWhileDraftSyncIsDelayed() = runBlocking {
+        api.draftGate = CompletableDeferred()
+        withContext(dispatcher) { model.changeText("发送的原始内容"); model.quote(json("content" to "原始引用")); model.send() }
+        await { api.calls.any { it.first.endsWith("/draft") } }
+        withContext(dispatcher) { model.changeText("发送后继续输入") ; model.quote(json("content" to "后续引用")) }
+        api.draftGate!!.complete(Unit)
+        await { !model.state.busy }
+        assertEquals("发送的原始内容", api.messages.single().text("content"))
+        assertEquals("原始引用", api.messages.single().text("quote_excerpt"))
+        assertEquals("发送后继续输入", model.state.composer.content)
+        assertEquals("后续引用", model.state.composer.quote)
+        assertTrue(model.state.composer.dirty)
+    }
+
+    @Test fun uncertainSendDoesNotOverwriteNewerInput() = runBlocking {
+        api.failSend = true
+        api.acceptBeforeFailure = true
+        api.messageGate = CompletableDeferred()
+        withContext(dispatcher) { model.changeText("可能已发送"); model.send() }
+        await { api.calls.any { it.first.endsWith("/messages") } }
+        withContext(dispatcher) { model.changeText("发送期间新增内容") }
+        api.messageGate!!.complete(Unit)
+        await { !model.state.busy }
+        assertTrue(model.state.sendUncertain)
+        assertEquals("发送期间新增内容", model.state.composer.content)
     }
 }
