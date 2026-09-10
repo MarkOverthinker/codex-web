@@ -485,6 +485,31 @@ test("chat providers use codex-relay at runtime and stay out of persistent Codex
   );
   db.close();
 });
+test("switching an existing Responses provider to chat preserves models and enables relay", () => {
+  const root = tempRoot();
+  const codexHome = path.join(root, "codex-home");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const db = testDb(root);
+  try {
+    db.createProvider({ userId: LEGACY_USER_ID, id: "compat", name: "Compatibility", baseUrl: "https://chat.example.com/v1", apiKey: "sk-test", wireApi: "responses" });
+    db.createProviderModel({ userId: LEGACY_USER_ID, id: "compat-model", providerId: "compat", modelId: "chat-model", slug: "chat-model", displayName: "Chat model" });
+    writeProviderConfig(codexHome, db, LEGACY_USER_ID);
+    assert.equal(resolveModelAdapter(db, LEGACY_USER_ID, "compat", "/opt/codex-relay"), undefined);
+    const before = db.listProviderModels(LEGACY_USER_ID, "compat");
+    db.updateProvider(LEGACY_USER_ID, "compat", { wireApi: "chat" });
+    writeProviderConfig(codexHome, db, LEGACY_USER_ID);
+    const config = parseToml(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"));
+    assert.equal(config.model_providers, undefined);
+    assert.deepEqual(db.listProviderModels(LEGACY_USER_ID, "compat"), before);
+    const catalog = JSON.parse(fs.readFileSync(path.join(codexHome, "models_cache.json"), "utf8"));
+    assert.equal(catalog.models[0].slug, "chat-model");
+    assert.equal(resolveModelAdapter(db, LEGACY_USER_ID, "compat", "/opt/codex-relay")?.kind, "codex-relay");
+    assert.equal(db.getProvider(LEGACY_USER_ID, "compat")?.api_key, "sk-test");
+  } finally {
+    db.close();
+  }
+});
+
 test("model context settings default and support per-model overrides", () => {
   const root = tempRoot();
   const db = testDb(root);
