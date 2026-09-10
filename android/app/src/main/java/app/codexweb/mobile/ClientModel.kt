@@ -38,6 +38,8 @@ class ClientModel(
     private var lastSequence = 0L
     private var foreground = false
     private var epoch = 0
+    private data class DraftWriteId(val key: String, val generation: Int)
+    private val draftWriteFailures = mutableMapOf<DraftWriteId, Throwable>()
     private var pageGeneration = 0
     private val pages = ArrayDeque<ToolPage>()
     private val parents = ArrayDeque<String>()
@@ -84,11 +86,15 @@ class ClientModel(
     private fun expireSession(reason: ApiFailure, expectedEpoch: Int) {
         if (expectedEpoch != epoch) return
         val account = accountKey()
+        val server = state.server
         val id = state.selectedId ?: "_new"
         val composer = state.composer
         val keepDraft = hasLocalDraft(composer, state.sendUncertain)
-        if (keepDraft) queueBackup(draftKey(account, id), draftBackup(composer, state.sendUncertain, state.uncertainRevision).toString(), expectedEpoch)
+        val localDraftKey = draftKey(account, id)
+        val localDraftJob = if (keepDraft) queueBackup(localDraftKey,
+            draftBackup(composer, state.sendUncertain, state.uncertainRevision).toString(), expectedEpoch) else null
         epoch++
+        val expiredEpoch = epoch
         debounce?.cancel()
         debounce = null
         polling?.cancel()
@@ -115,8 +121,8 @@ class ClientModel(
             pageError = null,
             busy = false,
             operation = null,
-            connection = "登录已失效，未发送内容保留在本机",
-            draftStatus = if (keepDraft) "本机草稿已保留" else "",
+            connection = if (keepDraft) "登录已失效，本机草稿正在保存" else "登录已失效",
+            draftStatus = if (keepDraft) "正在保存本机草稿…" else "",
             sendUncertain = false,
             uncertainRevision = null,
             detailFromCache = false,
@@ -125,6 +131,16 @@ class ClientModel(
             error = if (credentialFailure == null) reason.message
                 else "${reason.message}；本机凭证清理未确认，请重启应用后重试。",
         )
+        if (keepDraft) {
+            viewModelScope.launch {
+                localDraftJob?.join()
+                val failure = draftWriteFailures.remove(DraftWriteId(localDraftKey, expectedEpoch))
+                if (epoch != expiredEpoch || state.authenticated || state.server != server) return@launch
+                state = if (failure == null) state.copy(draftStatus = "本机草稿已保留", connection = "登录已失效，未发送内容已保留在本机")
+                else state.copy(draftStatus = "本机草稿保存失败，请勿退出", connection = "登录已失效，本机草稿保存失败",
+                    error = "本机草稿保存失败：${failure.message}")
+            }
+        }
     }
 
     private fun error(reason: Throwable, expectedEpoch: Int = epoch) {
@@ -440,16 +456,23 @@ class ClientModel(
         }
     }
 
-    private fun queueBackup(key: String, value: String?, generation: Int = epoch) {
+    private fun queueBackup(key: String, value: String?, generation: Int = epoch): Job {
         val preceding = backupJob
-        backupJob = viewModelScope.launch {
+        val writeId = DraftWriteId(key, generation)
+        val job = viewModelScope.launch {
             preceding?.join()
-            try { withContext(Dispatchers.IO) { store.write(key, value) } }
+            try {
+                withContext(Dispatchers.IO) { store.write(key, value) }
+                draftWriteFailures.remove(writeId)
+            }
             catch (reason: Exception) {
                 if (reason is CancellationException) throw reason
+                draftWriteFailures[writeId] = reason
                 if (generation == epoch) state = state.copy(draftStatus = "本机保存失败，请勿退出", error = "本机草稿保存失败：${reason.message}")
             }
         }
+        backupJob = job
+        return job
     }
 
     private suspend fun syncDraftLocked(id: String, snapshot: Composer, generation: Int): JSONObject {
@@ -806,6 +829,7 @@ class ClientModel(
             queueBackup(draftKey(account, id), draftBackup(composer, state.sendUncertain, state.uncertainRevision).toString(), generation)
         }
         backupJob?.join()
+        val localDraftFailure = draftWriteFailures.remove(DraftWriteId(draftKey(account, id), generation))
         if (generation != epoch) return
         if (state.authenticated) {
             try { withTimeout(exitTimeoutMs) { requireNotNull(api).call("/auth/logout", "POST") } }
@@ -843,6 +867,7 @@ class ClientModel(
         }
         val message = when {
             credentialFailure != null -> "已退出本机；本机凭证清理未确认，请重启应用后重试。"
+            localDraftFailure != null -> "已退出本机；本机草稿保存失败，无法确认重启后可恢复。"
             logoutFailure != null -> "已清除本机凭证；服务器注销未确认。未发送草稿已保留在本机。"
             serverStoreFailure != null -> "已清除本机状态，但服务器地址未能从本机设置中删除。"
             draftFailure != null -> "已退出本机；服务器会话已注销，但草稿仅保留在本机。"
