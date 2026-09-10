@@ -16,6 +16,7 @@ type BillingAmount = { amount: number | null; currency: string; priced: boolean 
 export type BillingState = {
   rangeDays: number;
   from: string;
+  to: string;
   summary: {
     calls: number;
     inputTokens: number;
@@ -52,7 +53,7 @@ export type BillingState = {
     currency: string;
   }>;
   rules: PricingRuleRow[];
-  models: Array<{ providerId: string; providerName: string; modelId: string; displayName: string }>;
+  models: Array<{ providerId: string; providerName: string; modelId: string; displayName: string; enabled: boolean }>;
 };
 
 function numberValue(value: unknown): number | null {
@@ -145,10 +146,11 @@ function modelDisplayName(providerId: string, modelId: string, models: ProviderM
   return models.find((model) => model.provider_id === providerId && (model.model_id === modelId || model.slug === modelId))?.display_name ?? modelId;
 }
 
-export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 30, options: { useCurrentPricing?: boolean } = {}): BillingState {
-  const days = Math.min(3650, Math.max(1, Math.trunc(rangeDays) || 30));
-  const from = new Date(Date.now() - days * 86_400_000).toISOString();
-  const rows = db.listApiUsage(userId, from);
+export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 30, options: { useCurrentPricing?: boolean; from?: string; to?: string } = {}): BillingState {
+  const days = rangeDays === 0 ? 0 : Math.min(3650, Math.max(1, Math.trunc(rangeDays) || 30));
+  const to = options.to ? new Date(options.to).toISOString() : new Date(Date.now() + 1).toISOString();
+  const from = options.from ? new Date(options.from).toISOString() : days === 0 ? new Date(0).toISOString() : new Date(Date.parse(to) - days * 86_400_000).toISOString();
+  const rows = db.listApiUsage(userId, from, to);
   const providers = db.listProviders(userId);
   const models = db.listProviderModels(userId);
   const rules = db.listPricingRules(userId);
@@ -187,14 +189,18 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
       currency: groupCosts.find((cost) => cost.priced)?.currency ?? "USD",
     };
   }).sort((left, right) => right.calls - left.calls);
-  const knownModels = new Map<string, { providerId: string; providerName: string; modelId: string; displayName: string }>();
-  for (const model of models) knownModels.set(`${model.provider_id}:${model.model_id}`, { providerId: model.provider_id, providerName: providerName(model.provider_id, providers), modelId: model.model_id, displayName: model.display_name });
+  const knownModels = new Map<string, BillingState["models"][number]>();
+  for (const model of models) knownModels.set(`${model.provider_id}:${model.model_id}`, { providerId: model.provider_id, providerName: providerName(model.provider_id, providers), modelId: model.model_id, displayName: model.display_name, enabled: Boolean(model.visible && providers.find((provider) => provider.id === model.provider_id)?.enabled) });
   for (const row of rows) {
     const key = `${row.provider_id}:${row.model_id}`;
-    if (!knownModels.has(key)) knownModels.set(key, { providerId: row.provider_id, providerName: providerName(row.provider_id, providers), modelId: row.model_id, displayName: modelDisplayName(row.provider_id, row.model_id, models) });
+    if (!knownModels.has(key)) knownModels.set(key, { providerId: row.provider_id, providerName: providerName(row.provider_id, providers), modelId: row.model_id, displayName: modelDisplayName(row.provider_id, row.model_id, models), enabled: false });
+  }
+  for (const rule of rules) {
+    const key = `${rule.provider_id}:${rule.model_id}`;
+    if (!knownModels.has(key)) knownModels.set(key, { providerId: rule.provider_id, providerName: providerName(rule.provider_id, providers), modelId: rule.model_id, displayName: rule.model_id, enabled: false });
   }
   return {
-    rangeDays: days, from,
+    rangeDays: days, from, to,
     summary: {
       calls: total.calls, inputTokens: total.input_tokens, cachedInputTokens: total.cached_input_tokens,
       cacheWriteInputTokens: total.cache_write_input_tokens, outputTokens: total.output_tokens, reasoningOutputTokens: total.reasoning_output_tokens,

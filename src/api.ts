@@ -2,6 +2,7 @@ import type { TaskListCategorySettings } from "./task-categories.js";
 import type { GitReview, ReviewScope } from "./git-review.js";
 import type { MessageSourceReference } from "./message-source.js";
 import type { VoiceOptions } from "./voice-options.js";
+import { billingQuery, type BillingRange } from "./billing-range.js";
 
 export type { MessageSourceReference } from "./message-source.js";
 
@@ -197,10 +198,11 @@ export type BillingPricingRule = {
   timezone: string;
   updated_at: string;
 };
-export type BillingModel = { providerId: string; providerName: string; modelId: string; displayName: string };
+export type BillingModel = { providerId: string; providerName: string; modelId: string; displayName: string; enabled: boolean };
 export type BillingState = {
   rangeDays: number;
   from: string;
+  to: string;
   summary: { calls: number; inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number; outputTokens: number; reasoningOutputTokens: number; cacheHitRate: number; estimatedCost: number; currency: string; unpricedCalls: number };
   byProvider: Array<{ providerId: string; providerName: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
   byModel: Array<{ providerId: string; providerName: string; modelId: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
@@ -348,13 +350,13 @@ export const api = {
     { method: "PUT", body: JSON.stringify(selection) },
   ),
   providers: () => request<ProviderState>("/providers"),
-  billing: (days = 30) => request<BillingState>(`/billing?days=${days}`),
-  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cacheReadPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string; peakEnabled?: boolean; peakInputPerMillion?: number; peakCacheReadPerMillion?: number; peakCacheWritePerMillion?: number; peakOutputPerMillion?: number; peakStart?: string; peakEnd?: string; peakWeekdays?: number[]; timezone?: string }, days = 30) =>
-    request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}?days=${days}`, { method: "PUT", body: JSON.stringify(payload) }),
-  recalculateBilling: (days = 30) => request<BillingState>(`/billing/recalculate?days=${days}`, { method: "POST", body: JSON.stringify({}) }),
-  syncBillingPricing: (providerId?: string, pricingUrl?: string, days = 30) => providerId
-    ? request<{ imported: number; url: string; billing: BillingState }>(`/billing/providers/${encodeURIComponent(providerId)}/sync-pricing?days=${days}`, { method: "POST", body: JSON.stringify({ pricingUrl }) })
-    : request<{ imported: number; results: Array<{ providerId: string; imported: number; error?: string }>; billing: BillingState }>(`/billing/sync-pricing?days=${days}`, { method: "POST", body: JSON.stringify({}) }),
+  billing: (range: BillingRange = 30) => request<BillingState>(`/billing?${billingQuery(range)}`),
+  updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cacheReadPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string; peakEnabled?: boolean; peakInputPerMillion?: number; peakCacheReadPerMillion?: number; peakCacheWritePerMillion?: number; peakOutputPerMillion?: number; peakStart?: string; peakEnd?: string; peakWeekdays?: number[]; timezone?: string }, range: BillingRange = 30) =>
+    request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}?${billingQuery(range)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  recalculateBilling: (range: BillingRange = 30) => request<BillingState>(`/billing/recalculate?${billingQuery(range)}`, { method: "POST", body: JSON.stringify({}) }),
+  syncBillingPricing: (providerId?: string, pricingUrl?: string, range: BillingRange = 30) => providerId
+    ? request<{ imported: number; url: string; billing: BillingState }>(`/billing/providers/${encodeURIComponent(providerId)}/sync-pricing?${billingQuery(range)}`, { method: "POST", body: JSON.stringify({ pricingUrl }) })
+    : request<{ imported: number; results: Array<{ providerId: string; imported: number; error?: string }>; billing: BillingState }>(`/billing/sync-pricing?${billingQuery(range)}`, { method: "POST", body: JSON.stringify({}) }),
   createProvider: (payload: { name: string; baseUrl: string; apiKey?: string; modelsFile?: string; autoReviewModelOverride?: string | null; wireApi?: Provider["wireApi"]; requiresOpenaiAuth?: boolean; enabled?: boolean }) =>
     request<{ provider: Provider }>("/providers", { method: "POST", body: JSON.stringify(payload) }),
   updateProvider: (id: string, payload: Partial<Omit<Provider, "id" | "createdAt" | "updatedAt" | "hasApiKey" | "apiKeyHint" | "extraConfig">> & { apiKey?: string | null }) =>
