@@ -173,7 +173,7 @@ test("billing panel keeps historical rates and exposes global refresh and sync a
   assert.match(billingSource, /recalculateBilling/);
   assert.match(billingSource, /同步远程费率/);
   assert.match(billingSource, /async function syncPricing\(\)/);
-  assert.match(billingSource, /syncBillingPricing\(undefined, undefined, days\)/);
+  assert.match(billingSource, /syncBillingPricing\(undefined, undefined, range\)/);
   assert.doesNotMatch(openEffect, /syncBillingPricing/);
   assert.doesNotMatch(billingSource, /已自动同步/);
   assert.doesNotMatch(billingSource, /pricingUrl/);

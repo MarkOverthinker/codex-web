@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,43 @@ function makeDb(): { db: AppDatabase; root: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-billing-"));
   return { root, db: new AppDatabase(root, { username: "owner", passwordHash: "$2b$10$invalid", displayName: "Owner" }, false) };
 }
+
+test("billing historical ranges filter every aggregate and preserve inactive model pricing", () => {
+  const { db, root } = makeDb();
+  try {
+    const conversation = db.createConversation(crypto.randomUUID(), "Date filters");
+    const userId = conversation.user_id;
+    const provider = db.createProvider({ userId, id: "source", name: "Source", baseUrl: "https://example.com" });
+    for (const [modelId, visible] of [["active", true], ["inactive", false]] as const) {
+      db.createProviderModel({ userId, id: modelId, providerId: provider.id, modelId, slug: modelId, displayName: modelId, visible });
+      db.upsertPricingRule({ user_id: userId, provider_id: provider.id, model_id: modelId, input_per_million: 2, cached_input_per_million: 1, cache_write_per_million: 0, output_per_million: 4, currency: "USD", source: "manual", pricing_url: null });
+    }
+    const timestamps = ["2010-01-01T00:00:00.000Z", "2026-09-01T15:59:59.999Z", "2026-09-01T16:00:00.000Z", "2026-09-02T15:59:59.999Z", "2026-09-02T16:00:00.000Z"];
+    for (const createdAt of timestamps) {
+      const job = db.createJob(crypto.randomUUID(), conversation.id);
+      db.addApiUsage({ id: crypto.randomUUID(), user_id: userId, job_id: job.id, conversation_id: conversation.id, provider_id: provider.id, model_id: "inactive", input_tokens: 1_000_000, cached_input_tokens: 200_000, cache_write_input_tokens: 0, output_tokens: 500_000, reasoning_output_tokens: 0, created_at: createdAt });
+    }
+    const range = { from: "2026-09-02T00:00:00+08:00", to: "2026-09-03T00:00:00+08:00" };
+    const state = buildBillingState(db, userId, 30, range);
+    assert.equal(state.summary.calls, 2);
+    assert.equal(state.summary.inputTokens, 2_000_000);
+    assert.equal(state.summary.cacheHitRate, 0.2);
+    assert.equal(state.summary.estimatedCost, 7.6);
+    assert.equal(state.byProvider[0].calls, 2);
+    assert.equal(state.byModel[0].calls, 2);
+    assert.equal(state.models.find((model) => model.modelId === "active")?.enabled, true);
+    assert.equal(state.models.find((model) => model.modelId === "inactive")?.enabled, false);
+    assert.equal(state.rules.length, 2);
+    assert.equal(buildBillingState(db, userId, 0).summary.calls, 5);
+    assert.equal(buildBillingState(db, userId, 30, { from: "2026-01-01T00:00:00Z", to: "2026-01-02T00:00:00Z" }).summary.calls, 0);
+    db.updateProvider(userId, provider.id, { enabled: false });
+    assert.ok(buildBillingState(db, userId, 30, range).models.every((model) => !model.enabled));
+    assert.equal(buildBillingState(db, "another-user", 0).summary.calls, 0);
+  } finally {
+    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("billing aggregates usage and calculates token costs", () => {
   const { db, root } = makeDb();
