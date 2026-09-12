@@ -5,6 +5,14 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsNode
@@ -13,6 +21,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -203,6 +212,7 @@ class NativeUiTest {
     private lateinit var gateway: UiGateway
     private val owner = ViewModelStore()
     private var picks = 0
+    private var enlargedWelcomeLayout by mutableStateOf(false)
 
     @Before fun setup() {
         gateway = UiGateway()
@@ -210,7 +220,18 @@ class NativeUiTest {
             model = ClientModel(UiStore()) { gateway }
             owner.put("ui", model)
         }
-        compose.setContent { CodexApp(model, pickFiles = { picks++ }) }
+        compose.setContent {
+            if (enlargedWelcomeLayout) {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+                    Box(Modifier.size(width = 360.dp, height = 600.dp)) {
+                        CodexApp(model, pickFiles = { picks++ })
+                    }
+                }
+            } else {
+                CodexApp(model, pickFiles = { picks++ })
+            }
+        }
     }
 
     @After fun cleanup() { compose.runOnUiThread { owner.clear() } }
@@ -928,6 +949,90 @@ class NativeUiTest {
         compose.onNodeWithTag("composer").assertTextContains("浏览文件期间草稿不丢失")
         assertEquals(0, gateway.sends)
         assertEquals(0, gateway.creates)
+    }
+
+    @Test fun emptyNewConversationSuggestionOnlyFillsDraftWithoutSendingOrCreatingTask() {
+        login()
+        compose.onNodeWithContentDescription("新建对话").performClick()
+        compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
+        compose.onNodeWithTag("welcome-chat").assertIsDisplayed()
+        assertEquals("", model.state.composer.content)
+        val mutationsBefore = gateway.mutations.toList()
+        val prompt = "请检查当前项目的代码，"
+
+        compose.onNodeWithText("检查代码").performScrollTo().assertIsEnabled().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("composer").assertTextContains(prompt)
+        listOf("检查代码", "整理文件", "继续工作").forEach { label ->
+            compose.onNodeWithText(label).assertIsNotEnabled()
+        }
+        compose.runOnIdle {
+            assertEquals(prompt, model.state.composer.content)
+            assertNull(model.state.selectedId)
+            assertFalse(model.state.busy)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+            assertEquals(mutationsBefore, gateway.mutations.toList())
+        }
+    }
+
+    @Test fun nonEmptyNewConversationDisablesSuggestionsAndKeepsDraftOnTap() {
+        login()
+        compose.onNodeWithContentDescription("新建对话").performClick()
+        compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
+        val draft = "保留已有草稿，不用建议替换。"
+        val mutationsBefore = gateway.mutations.toList()
+        compose.onNodeWithTag("composer").performTextInput(draft)
+        compose.runOnUiThread {
+            compose.activity.getSystemService(InputMethodManager::class.java)
+                .hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("bottom-navigation").fetchSemanticsNodes().isNotEmpty() }
+
+        listOf("检查代码", "整理文件", "继续工作").forEach { label ->
+            compose.onNodeWithText(label).performScrollTo().assertIsDisplayed().assertIsNotEnabled()
+                .performTouchInput { click() }
+            compose.waitForIdle()
+            compose.onNodeWithTag("composer").assertTextContains(draft)
+            compose.runOnIdle {
+                assertEquals(draft, model.state.composer.content)
+                assertNull(model.state.selectedId)
+                assertFalse(model.state.busy)
+                assertEquals(0, gateway.sends)
+                assertEquals(0, gateway.creates)
+                assertEquals(mutationsBefore, gateway.mutations.toList())
+            }
+        }
+    }
+
+    @Test fun welcomeSuggestionsRemainScrollableAndReachableAtDoubleFontScale() {
+        login()
+        compose.onNodeWithContentDescription("新建对话").performClick()
+        compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
+        val mutationsBefore = gateway.mutations.toList()
+        compose.runOnUiThread { enlargedWelcomeLayout = true }
+        compose.waitForIdle()
+
+        val welcome = compose.onNodeWithTag("welcome-chat").assertIsDisplayed().assert(hasScrollAction())
+        val scrollRange = welcome.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertTrue("The 2x-font welcome fixture must overflow its viewport", scrollRange.maxValue() > 0f)
+        listOf("检查代码", "整理文件", "继续工作").forEach { label ->
+            compose.onNodeWithText(label).performScrollTo().assertIsDisplayed().assertIsEnabled()
+                .assertHeightIsAtLeast(48.dp)
+        }
+        assertTrue("Reaching the suggestions must scroll the welcome region", scrollRange.value() > 0f)
+        screenshot("native-welcome-suggestions-2x", "welcome-chat")
+        compose.onNodeWithText("继续工作").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("composer").assertTextContains("请先查看项目进度，再继续完成任务。")
+        compose.runOnIdle {
+            assertEquals("请先查看项目进度，再继续完成任务。", model.state.composer.content)
+            assertNull(model.state.selectedId)
+            assertFalse(model.state.busy)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+            assertEquals(mutationsBefore, gateway.mutations.toList())
+        }
     }
 
     @Test fun newConversationHidesRenameUntilTaskExists() {
