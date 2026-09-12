@@ -10,10 +10,14 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.rememberScrollState
@@ -29,12 +33,16 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,7 +60,7 @@ fun BrandMark(modifier: Modifier = Modifier) {
 
 @Composable
 fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
-                   composer: @Composable () -> Unit, content: @Composable () -> Unit) {
+                   composer: @Composable (NativeState) -> Unit, content: @Composable (HomeTab, NativeState) -> Unit) {
     val state = model.state
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -60,6 +68,7 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
     val focus = LocalFocusManager.current
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val child = state.page != null
+    val pagerState = rememberPagerState(initialPage = state.homeTab.ordinal) { HomeTab.entries.size }
     val titleHeight = with(LocalDensity.current) {
         MaterialTheme.typography.titleLarge.lineHeight.toDp() +
             if (!child && state.homeTab == HomeTab.Chat) MaterialTheme.typography.labelMedium.lineHeight.toDp() else 0.dp
@@ -67,6 +76,18 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
     val closeDrawer = { scope.launch { drawer.close() }; Unit }
     LaunchedEffect(drawer.targetValue) {
         if (drawer.targetValue == DrawerValue.Open) { keyboard?.hide(); focus.clearFocus() }
+    }
+    LaunchedEffect(state.homeTab, child) {
+        if (!child && pagerState.currentPage != state.homeTab.ordinal) {
+            pagerState.animateScrollToPage(state.homeTab.ordinal)
+        }
+    }
+    LaunchedEffect(pagerState, child) {
+        snapshotFlow { pagerState.settledPage }
+            .collect { page ->
+                val tab = HomeTab.entries[page]
+                if (!child && model.state.homeTab != tab) model.selectTab(tab)
+            }
     }
     BackHandler(enabled = !modalOpen && (drawer.isOpen || child || state.homeTab != HomeTab.Chat || state.parentAvailable)) {
         when {
@@ -115,18 +136,60 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
             }, bottomBar = {
                 Column(Modifier.navigationBarsPadding()) {
-                    if (!child && state.homeTab == HomeTab.Chat) composer()
+                    if (!child && state.homeTab == HomeTab.Chat) composer(state)
                     if (!child && !keyboardVisible) {
                         Row(Modifier.widthIn(max = 480.dp).fillMaxWidth().align(Alignment.CenterHorizontally)
                             .padding(horizontal = 16.dp).selectableGroup().testTag("bottom-navigation"),
                             verticalAlignment = Alignment.CenterVertically) {
-                            HomeTab.entries.forEach { tab -> BottomNavItem(tab, state.homeTab == tab, Modifier.weight(1f)) { keyboard?.hide(); focus.clearFocus(); model.selectTab(tab) } }
+                            HomeTab.entries.forEach { tab -> BottomNavItem(tab, state.homeTab == tab, Modifier.weight(1f)) {
+                                keyboard?.hide()
+                                focus.clearFocus()
+                                if (state.homeTab != tab) model.selectTab(tab)
+                            } }
                         }
                     }
                 }
             }) { padding ->
             Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
-                Box(Modifier.weight(1f).fillMaxWidth()) { content() }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (child) {
+                        content(state.homeTab, state)
+                    } else {
+                        val drawerEdgeWidth = 32.dp
+                        val drawerEdgePx = with(LocalDensity.current) { drawerEdgeWidth.toPx() }
+                        val drawerEdgeEnabled = state.homeTab == HomeTab.Chat && !modalOpen && !keyboardVisible && drawer.targetValue == DrawerValue.Closed
+                        Box(Modifier.fillMaxSize().testTag("home-pager").pointerInput(drawerEdgeEnabled, drawerEdgePx) {
+                            if (!drawerEdgeEnabled) return@pointerInput
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                if (down.position.x > drawerEdgePx) return@awaitEachGesture
+                                var movement = Offset.Zero
+                                var intercepting = false
+                                var eligible = true
+                                do {
+                                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull() ?: break
+                                    movement += change.positionChange()
+                                    if (!intercepting && movement.getDistance() >= viewConfiguration.touchSlop) {
+                                        intercepting = movement.x > 0f && movement.x > kotlin.math.abs(movement.y)
+                                        eligible = intercepting
+                                    }
+                                    if (intercepting) change.consume()
+                                } while (change.pressed && eligible)
+                                if (intercepting && movement.x >= drawerEdgePx) scope.launch { drawer.open() }
+                            }
+                        }) {
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxSize().testTag("home-pager-settled-${HomeTab.entries[pagerState.settledPage].name}"),
+                                userScrollEnabled = !modalOpen && !keyboardVisible && drawer.targetValue == DrawerValue.Closed,
+                                key = { HomeTab.entries[it] },
+                            ) { page ->
+                                val tab = HomeTab.entries[page]
+                                Box(Modifier.fillMaxSize().testTag("home-page-${tab.name}")) { content(tab, state) }
+                            }
+                        }
+                    }
+                }
                 state.notice?.let { notice ->
                     Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
                         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {

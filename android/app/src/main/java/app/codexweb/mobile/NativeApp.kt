@@ -94,17 +94,17 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
                     val chatStates = rememberSaveableStateHolder()
                     val profilePage = remember { ToolPage("我的", "settings", "") }
                     val queuePage = remember { ToolPage("任务与队列", "queue", "") }
-                    ChatFirstShell(model, sheet != null || edit != null || confirm != null, tools = { sheet = "tools" }, composer = {
-                        ComposerBar(state, model, { model.withConversation { sheet = "options" } },
+                    ChatFirstShell(model, sheet != null || edit != null || confirm != null, tools = { sheet = "tools" }, composer = { shellState ->
+                        ComposerBar(shellState, model, { model.withConversation { sheet = "options" } },
                             { model.withConversation(pickFiles) }, { if (recording) voice() else model.withConversation(voice) }, recording, { sheet = "queue" })
-                    }) {
+                    }) { tab, shellState ->
                         when {
-                            state.page != null -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
-                            state.homeTab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
-                            state.homeTab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
-                            state.selectedId == null -> WelcomeChat(model, recording)
-                            else -> chatStates.SaveableStateProvider("chat:${state.server}:${state.session?.text("username")}:${state.selectedId}") {
-                                ChatScreen(state, model, download, openLink, { prompt -> edit = prompt to false },
+                            shellState.page != null -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
+                            tab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
+                            tab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
+                            shellState.selectedId == null -> WelcomeChat(model, recording)
+                            else -> chatStates.SaveableStateProvider("chat:${shellState.server}:${shellState.session?.text("username")}:${shellState.selectedId}") {
+                                ChatScreen(shellState, model, download, openLink, { prompt -> edit = prompt to false },
                                     { message, action -> confirm = message to action }, { sheet = "queue" })
                             }
                         }
