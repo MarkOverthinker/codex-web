@@ -7,14 +7,14 @@ import { summarizeEvent } from "./codex-events.js";
 import type { TenantWorkerRunRequest } from "./tenant-worker-protocol.js";
 import { isOptionalAgentCapabilities } from "./optional-capabilities.js";
 import { startCodexRelay } from "./codex-relay.js";
-import type { TokenUsage } from "./billing.js";
+import type { TokenUsage, TokenUsageIdentity } from "./billing.js";
 
 type ExecutionCallbacks = {
   signal: AbortSignal;
   onThreadStarted(threadId: string): void;
   onTurnStarted?(turnId: string): void;
   onProgress(payload: unknown): void;
-  onUsage(usage: TokenUsage): void;
+  onUsage(usage: TokenUsage, identity?: TokenUsageIdentity): void;
   onContextUsage?(usage: ContextUsage): void;
 };
 

@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import request from "supertest";
 import { createApp } from "../server/app.js";
 import { BUILTIN_PROVIDER_ID } from "../server/billing.js";
+import { tenantPaths } from "../server/paths.js";
 
 test("billing API validates ranges before mutations and retains them across saves, sync and reprice", async (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "billing-api-"));
@@ -33,6 +34,18 @@ test("billing API validates ranges before mutations and retains them across save
   assert.equal(saved.body.summary.estimatedCost, 2);
   assert.equal(saved.body.from, range.from);
   assert.equal(saved.body.to, range.to);
+  const sessionDirectory = path.join(tenantPaths(path.join(root, "tenants"), user.id).codexHome, "sessions", "2026", "08", "01");
+  fs.mkdirSync(sessionDirectory, { recursive: true });
+  fs.writeFileSync(path.join(sessionDirectory, "rollout-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl"), [
+    { timestamp: "2026-08-01T12:00:00.000Z", type: "session_meta", payload: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", originator: "codex-tui", model_provider: BUILTIN_PROVIDER_ID } },
+    { timestamp: "2026-08-01T12:00:01.000Z", type: "turn_context", payload: { turn_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", model: "model" } },
+    { timestamp: "2026-08-01T12:00:02.000Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 500_000, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 } } } },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  await agent.post(`${prefix}/billing/sync-usage`).query(range).send({}).expect(403);
+  const usageSynced = await agent.post(`${prefix}/billing/sync-usage`).query(range).set("X-CSRF-Token", csrf).send({}).expect(200);
+  assert.equal(usageSynced.body.result.inserted, 1);
+  assert.equal(usageSynced.body.billing.summary.calls, 2);
+  assert.equal(usageSynced.body.billing.byClient.find((item: { clientName: string }) => item.clientName === "Codex CLI")?.calls, 1);
   for (const query of [{ from: range.from }, { to: range.to }, { from: range.to, to: range.from }, { from: "bad", to: range.to }, { from: "2026-02-30T00:00:00Z", to: range.to }, { days: -1 }, { days: "bad" }]) {
     await agent.get(`${prefix}/billing`).query(query).expect(400);
     await agent.put(pricingPath).query(query).set("X-CSRF-Token", csrf).send({ ...payload, inputPerMillion: 99 }).expect(400);
@@ -40,11 +53,11 @@ test("billing API validates ranges before mutations and retains them across save
   }
   assert.equal(instance.db.getPricingRule(user.id, BUILTIN_PROVIDER_ID, "model")?.input_per_million, 2);
   const synced = await agent.post(`${prefix}/billing/sync-pricing`).query(range).set("X-CSRF-Token", csrf).send({}).expect(200);
-  assert.equal(synced.body.billing.summary.calls, 1);
+  assert.equal(synced.body.billing.summary.calls, 2);
   assert.equal(synced.body.billing.to, range.to);
   const repriced = await agent.post(`${prefix}/billing/recalculate`).query(range).set("X-CSRF-Token", csrf).send({}).expect(200);
-  assert.equal(repriced.body.summary.calls, 1);
+  assert.equal(repriced.body.summary.calls, 2);
   assert.equal(repriced.body.to, range.to);
   const all = await agent.get(`${prefix}/billing`).query({ days: 0 }).expect(200);
-  assert.equal(all.body.summary.calls, 2);
+  assert.equal(all.body.summary.calls, 3);
 });

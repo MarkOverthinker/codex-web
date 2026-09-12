@@ -54,7 +54,7 @@ input.on("line", (line) => {
         onThreadStarted: (threadId) => send({ type: "thread_started", threadId }),
         onTurnStarted: (turnId) => send({ type: "turn_started", turnId }),
         onProgress: (payload) => send({ type: "progress", payload }),
-        onUsage: (usage) => send({ type: "usage", usage }),
+        onUsage: (usage, identity) => send({ type: "usage", usage, identity }),
         onContextUsage: (usage) => send({ type: "context_usage", usage }),
       });
       const finalResponse = await activeExecution.result;

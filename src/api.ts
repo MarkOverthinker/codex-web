@@ -206,6 +206,7 @@ export type BillingState = {
   summary: { calls: number; inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens: number; outputTokens: number; reasoningOutputTokens: number; cacheHitRate: number; estimatedCost: number; currency: string; unpricedCalls: number };
   byProvider: Array<{ providerId: string; providerName: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
   byModel: Array<{ providerId: string; providerName: string; modelId: string; calls: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; cacheHitRate: number; estimatedCost: number | null; currency: string }>;
+  byClient: Array<{ sourceKind: "web" | "rollout"; originator: string; clientName: string; calls: number; inputTokens: number; outputTokens: number; estimatedCost: number | null; currency: string }>;
   rules: BillingPricingRule[];
   models: BillingModel[];
 };
@@ -355,6 +356,7 @@ export const api = {
   ),
   providers: () => request<ProviderState>("/providers"),
   billing: (range: BillingRange = 30) => request<BillingState>(`/billing?${billingQuery(range)}`),
+  syncBillingUsage: (range: BillingRange = 30) => request<{ result: { filesScanned: number; inserted: number; updated: number; unchanged: number }; billing: BillingState }>(`/billing/sync-usage?${billingQuery(range)}`, { method: "POST", body: JSON.stringify({}) }),
   updateBillingRule: (providerId: string, modelId: string, payload: { inputPerMillion: number; cacheReadPerMillion: number; cacheWritePerMillion: number; outputPerMillion: number; currency?: string; peakEnabled?: boolean; peakInputPerMillion?: number; peakCacheReadPerMillion?: number; peakCacheWritePerMillion?: number; peakOutputPerMillion?: number; peakStart?: string; peakEnd?: string; peakWeekdays?: number[]; timezone?: string }, range: BillingRange = 30) =>
     request<BillingState>(`/billing/pricing-rules/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}?${billingQuery(range)}`, { method: "PUT", body: JSON.stringify(payload) }),
   recalculateBilling: (range: BillingRange = 30) => request<BillingState>(`/billing/recalculate?${billingQuery(range)}`, { method: "POST", body: JSON.stringify({}) }),

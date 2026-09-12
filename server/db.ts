@@ -161,16 +161,42 @@ export type JobEventRow = {
 export type ApiUsageRow = {
   id: string;
   user_id: string;
-  job_id: string;
-  conversation_id: string;
+  job_id: string | null;
+  conversation_id: string | null;
   provider_id: string;
   model_id: string;
+  source_kind: "web" | "rollout";
+  originator: string | null;
+  thread_id: string | null;
+  turn_id: string | null;
   input_tokens: number;
   cached_input_tokens: number;
   cache_write_input_tokens: number;
   output_tokens: number;
   reasoning_output_tokens: number;
   created_at: string;
+};
+
+export type RolloutUsageCursorRow = {
+  user_id: string;
+  source_id: string;
+  file_key: string;
+  relative_path: string;
+  byte_offset: number;
+  file_size: number;
+  thread_id: string | null;
+  originator: string | null;
+  provider_id: string | null;
+  turn_id: string | null;
+  model_id: string | null;
+  turn_started_at: string | null;
+  last_usage_at: string | null;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  updated_at: string;
 };
 
 export type PricingRuleRow = {
@@ -514,10 +540,14 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS api_usage (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+        conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
         provider_id TEXT NOT NULL,
         model_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL DEFAULT 'web',
+        originator TEXT,
+        thread_id TEXT,
+        turn_id TEXT,
         input_tokens INTEGER NOT NULL DEFAULT 0,
         cached_input_tokens INTEGER NOT NULL DEFAULT 0,
         cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -526,6 +556,28 @@ export class AppDatabase {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS api_usage_user_created_idx ON api_usage(user_id, created_at);
+      CREATE TABLE IF NOT EXISTS rollout_usage_cursors (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL,
+        file_key TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        byte_offset INTEGER NOT NULL DEFAULT 0,
+        file_size INTEGER NOT NULL DEFAULT 0,
+        thread_id TEXT,
+        originator TEXT,
+        provider_id TEXT,
+        turn_id TEXT,
+        model_id TEXT,
+        turn_started_at TEXT,
+        last_usage_at TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, source_id, file_key)
+      );
       CREATE TABLE IF NOT EXISTS pricing_rules (
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         provider_id TEXT NOT NULL,
@@ -643,6 +695,7 @@ export class AppDatabase {
     if (!pricingRuleColumns.has("peak_end_minute")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_end_minute INTEGER");
     if (!pricingRuleColumns.has("peak_weekdays")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN peak_weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5'");
     if (!pricingRuleColumns.has("timezone")) this.sqlite.exec("ALTER TABLE pricing_rules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'");
+    this.migrateApiUsageLedger();
     this.sqlite.exec("CREATE INDEX IF NOT EXISTS messages_visible_order ON messages(conversation_id,superseded_at,created_at,id)");
     this.migrateSideChats();
     this.sqlite.prepare("UPDATE jobs SET queue_seq=rowid WHERE queue_seq IS NULL").run();
@@ -695,6 +748,9 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS provider_models_provider_idx ON provider_models(user_id, provider_id, priority, created_at);
       CREATE INDEX IF NOT EXISTS preset_prompts_user_idx ON preset_prompts(user_id, position);
       CREATE INDEX IF NOT EXISTS conversation_preset_prompts_conversation_idx ON conversation_preset_prompts(conversation_id, position);
+      CREATE INDEX IF NOT EXISTS api_usage_user_created_idx ON api_usage(user_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS api_usage_turn_idx ON api_usage(user_id, thread_id, turn_id)
+        WHERE thread_id IS NOT NULL AND turn_id IS NOT NULL;
     `);
 
     const uploadedFiles = this.sqlite.prepare("SELECT id,original_name FROM files WHERE kind='upload'").all() as Array<{ id: string; original_name: string }>;
@@ -708,6 +764,58 @@ export class AppDatabase {
 
   private columnNames(table: string): Set<string> {
     return new Set((this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+  }
+
+  private migrateApiUsageLedger(): void {
+    const columns = this.sqlite.prepare("PRAGMA table_info(api_usage)").all() as Array<{ name: string; notnull: number }>;
+    const names = new Set(columns.map((column) => column.name));
+    const legacyForeignKeys = columns.some((column) => ["job_id", "conversation_id"].includes(column.name) && column.notnull === 1);
+    if (!legacyForeignKeys && ["source_kind", "originator", "thread_id", "turn_id"].every((name) => names.has(name))) return;
+
+    this.sqlite.exec("PRAGMA foreign_keys=OFF");
+    try {
+      this.sqlite.exec("BEGIN IMMEDIATE");
+      this.sqlite.exec(`
+        ALTER TABLE api_usage RENAME TO api_usage_legacy;
+        CREATE TABLE api_usage (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+          provider_id TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          source_kind TEXT NOT NULL DEFAULT 'web',
+          originator TEXT,
+          thread_id TEXT,
+          turn_id TEXT,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO api_usage(
+          id,user_id,job_id,conversation_id,provider_id,model_id,source_kind,originator,thread_id,turn_id,
+          input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,created_at
+        )
+        SELECT
+          id,user_id,job_id,conversation_id,provider_id,model_id,
+          ${names.has("source_kind") ? "source_kind" : "'web'"},
+          ${names.has("originator") ? "originator" : "'codex-web'"},
+          ${names.has("thread_id") ? "thread_id" : "NULL"},
+          ${names.has("turn_id") ? "turn_id" : "NULL"},
+          input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,created_at
+        FROM api_usage_legacy;
+        DROP TABLE api_usage_legacy;
+      `);
+      this.sqlite.exec("COMMIT");
+    } catch (error) {
+      this.sqlite.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys=ON");
+    }
   }
 
   private migrateSideChats(): void {
@@ -1940,20 +2048,102 @@ export class AppDatabase {
     return this.sqlite.prepare("DELETE FROM provider_models WHERE user_id=? AND id=?").run(userId, id).changes > 0;
   }
 
-  addApiUsage(row: Omit<ApiUsageRow, "created_at"> & { created_at?: string }): void {
+  addApiUsage(row: Omit<ApiUsageRow, "created_at" | "source_kind" | "originator" | "thread_id" | "turn_id"> & Partial<Pick<ApiUsageRow, "created_at" | "source_kind" | "originator" | "thread_id" | "turn_id">>): void {
     this.sqlite.prepare(`
-      INSERT INTO api_usage(id,user_id,job_id,conversation_id,provider_id,model_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,created_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO api_usage(id,user_id,job_id,conversation_id,provider_id,model_id,source_kind,originator,thread_id,turn_id,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       row.id, row.user_id, row.job_id, row.conversation_id, row.provider_id, row.model_id,
+      row.source_kind ?? "web", row.originator ?? "codex-web", row.thread_id ?? null, row.turn_id ?? null,
       row.input_tokens, row.cached_input_tokens, row.cache_write_input_tokens, row.output_tokens,
       row.reasoning_output_tokens, row.created_at ?? new Date().toISOString(),
     );
   }
 
+  upsertApiUsage(row: Omit<ApiUsageRow, "id"> & { id?: string }): "inserted" | "updated" | "unchanged" {
+    const existing = row.thread_id && row.turn_id
+      ? this.sqlite.prepare("SELECT * FROM api_usage WHERE user_id=? AND thread_id=? AND turn_id=?").get(row.user_id, row.thread_id, row.turn_id) as ApiUsageRow | undefined
+      : undefined;
+    if (!existing) {
+      this.addApiUsage({ ...row, id: row.id ?? crypto.randomUUID() });
+      return "inserted";
+    }
+    if (existing.source_kind === "web" && row.source_kind !== "web") return "unchanged";
+    const authoritative = row.source_kind === "web";
+    const values = authoritative ? row : {
+      ...row,
+      input_tokens: Math.max(existing.input_tokens, row.input_tokens),
+      cached_input_tokens: Math.max(existing.cached_input_tokens, row.cached_input_tokens),
+      cache_write_input_tokens: Math.max(existing.cache_write_input_tokens, row.cache_write_input_tokens),
+      output_tokens: Math.max(existing.output_tokens, row.output_tokens),
+      reasoning_output_tokens: Math.max(existing.reasoning_output_tokens, row.reasoning_output_tokens),
+      created_at: Date.parse(row.created_at) >= Date.parse(existing.created_at) ? row.created_at : existing.created_at,
+    };
+    const next = {
+      job_id: authoritative ? row.job_id : existing.job_id ?? row.job_id,
+      conversation_id: authoritative ? row.conversation_id : existing.conversation_id ?? row.conversation_id,
+      provider_id: authoritative ? row.provider_id : existing.provider_id || row.provider_id,
+      model_id: authoritative ? row.model_id : existing.model_id || row.model_id,
+      source_kind: authoritative ? "web" as const : existing.source_kind,
+      originator: authoritative ? row.originator : existing.originator ?? row.originator,
+      input_tokens: values.input_tokens,
+      cached_input_tokens: values.cached_input_tokens,
+      cache_write_input_tokens: values.cache_write_input_tokens,
+      output_tokens: values.output_tokens,
+      reasoning_output_tokens: values.reasoning_output_tokens,
+      created_at: values.created_at,
+    };
+    if (Object.entries(next).every(([key, value]) => existing[key as keyof ApiUsageRow] === value)) return "unchanged";
+    this.sqlite.prepare(`
+      UPDATE api_usage SET job_id=?,conversation_id=?,provider_id=?,model_id=?,source_kind=?,originator=?,
+        input_tokens=?,cached_input_tokens=?,cache_write_input_tokens=?,output_tokens=?,reasoning_output_tokens=?,created_at=?
+      WHERE id=?
+    `).run(
+      next.job_id, next.conversation_id, next.provider_id, next.model_id, next.source_kind, next.originator,
+      next.input_tokens, next.cached_input_tokens, next.cache_write_input_tokens,
+      next.output_tokens, next.reasoning_output_tokens, next.created_at, existing.id,
+    );
+    return "updated";
+  }
+
   listApiUsage(userId: string, since: string, until?: string): ApiUsageRow[] {
     if (until) return this.sqlite.prepare("SELECT * FROM api_usage WHERE user_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC,id DESC").all(userId, since, until) as ApiUsageRow[];
     return this.sqlite.prepare("SELECT * FROM api_usage WHERE user_id=? AND created_at>=? ORDER BY created_at DESC,id DESC").all(userId, since) as ApiUsageRow[];
+  }
+
+  rolloutUsageCutoff(): string {
+    const key = "rollout_usage_web_cutoff_v1";
+    const existing = this.sqlite.prepare("SELECT value FROM app_settings WHERE key=?").get(key) as { value: string } | undefined;
+    if (existing && Number.isFinite(Date.parse(existing.value))) return existing.value;
+    const now = new Date().toISOString();
+    this.sqlite.prepare("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+      .run(key, now, now);
+    return now;
+  }
+
+  getRolloutUsageCursor(userId: string, sourceId: string, fileKey: string): RolloutUsageCursorRow | undefined {
+    return this.sqlite.prepare("SELECT * FROM rollout_usage_cursors WHERE user_id=? AND source_id=? AND file_key=?")
+      .get(userId, sourceId, fileKey) as RolloutUsageCursorRow | undefined;
+  }
+
+  upsertRolloutUsageCursor(row: Omit<RolloutUsageCursorRow, "updated_at">): void {
+    this.sqlite.prepare(`
+      INSERT INTO rollout_usage_cursors(
+        user_id,source_id,file_key,relative_path,byte_offset,file_size,thread_id,originator,provider_id,turn_id,model_id,
+        turn_started_at,last_usage_at,input_tokens,cached_input_tokens,cache_write_input_tokens,output_tokens,reasoning_output_tokens,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(user_id,source_id,file_key) DO UPDATE SET
+        relative_path=excluded.relative_path,byte_offset=excluded.byte_offset,file_size=excluded.file_size,thread_id=excluded.thread_id,
+        originator=excluded.originator,provider_id=excluded.provider_id,turn_id=excluded.turn_id,model_id=excluded.model_id,
+        turn_started_at=excluded.turn_started_at,last_usage_at=excluded.last_usage_at,input_tokens=excluded.input_tokens,
+        cached_input_tokens=excluded.cached_input_tokens,cache_write_input_tokens=excluded.cache_write_input_tokens,
+        output_tokens=excluded.output_tokens,reasoning_output_tokens=excluded.reasoning_output_tokens,updated_at=excluded.updated_at
+    `).run(
+      row.user_id, row.source_id, row.file_key, row.relative_path, row.byte_offset, row.file_size,
+      row.thread_id, row.originator, row.provider_id, row.turn_id, row.model_id, row.turn_started_at, row.last_usage_at,
+      row.input_tokens, row.cached_input_tokens, row.cache_write_input_tokens, row.output_tokens, row.reasoning_output_tokens,
+      new Date().toISOString(),
+    );
   }
 
   listPricingRules(userId: string): PricingRuleRow[] {

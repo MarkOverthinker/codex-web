@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startAppServerTurn, summarizeAppServerItem } from "../server/app-server-turn.js";
-import type { TokenUsage } from "../server/billing.js";
+import type { TokenUsage, TokenUsageIdentity } from "../server/billing.js";
 import { DEFAULT_OPTIONAL_AGENT_CAPABILITIES } from "../server/optional-capabilities.js";
 import { isRetryableUpstreamError } from "../server/retry-policy.js";
 import { buildProcessJournal } from "../src/process-journal.js";
@@ -235,6 +235,7 @@ input.on("line", (line) => {
 
   const controller = new AbortController();
   let usage: TokenUsage | undefined;
+  let usageIdentity: TokenUsageIdentity | undefined;
   let contextUsage: { usedTokens: number; contextWindow: number | null } | undefined;
   const execution = startAppServerTurn({
     executablePath: executable,
@@ -256,7 +257,7 @@ input.on("line", (line) => {
     signal: controller.signal,
     onThreadStarted: () => undefined,
     onProgress: () => undefined,
-    onUsage: (value) => { usage = value; },
+    onUsage: (value, identity) => { usage = value; usageIdentity = identity; },
     onContextUsage: (value) => { contextUsage = value; },
   });
 
@@ -268,6 +269,7 @@ input.on("line", (line) => {
     output_tokens: 55,
     reasoning_output_tokens: 7,
   });
+  assert.deepEqual(usageIdentity, { threadId: "thread-usage", turnId: "turn-usage" });
   assert.deepEqual(contextUsage, { usedTokens: 75, contextWindow: 115_200 });
 });
 

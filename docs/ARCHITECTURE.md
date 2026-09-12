@@ -150,6 +150,15 @@ Output files stay behind a collapsed, conditionally rendered list; opening a fil
 
 Local Codex CLI sessions can be imported into the web UI. The importer scans the executor's Codex Home (`sessions/` and `archived_sessions/`), reads each rollout's user turns and final agent replies, and creates a conversation whose `codex_thread_id` points at the existing thread. When a rollout records `turn_context.payload.turn_id`, that ID is stored on the corresponding imported user message so it can also be edited and resent. The rollout file stays the single source of truth: imported history is readable in the browser and later web turns resume the same thread; deleting the imported conversation removes the underlying rollout files just like any other conversation.
 
+Usage accounting has two inputs. Completed Web turns write authoritative rows
+from app-server token events with a user/thread/turn identity. A background
+reconciler scans only newly appended rollout bytes and upserts missing turns;
+rollout data cannot overwrite a Web row with the same identity. Its cursor is
+stored independently from conversations, and external usage may legitimately
+have null job/conversation foreign keys. In host mode both the desktop and
+private Web Codex Homes are scanned. The scanner parses usage metadata only and
+does not persist conversation content.
+
 In host mode the importer also recovers the rollout's recorded `cwd` into the
 conversation's `working_dir` (with the same canonicalization and safety checks
 as user-selected directories), so imported sessions join working-directory

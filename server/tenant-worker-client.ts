@@ -8,7 +8,7 @@ type PendingJob = {
   onTurnStarted?(turnId: string): void;
   onProgress(payload: unknown): void;
   onContextUsage(usage: import("./app-server-turn.js").ContextUsage): void;
-  onUsage(usage: import("./billing.js").TokenUsage): void;
+  onUsage(usage: import("./billing.js").TokenUsage, identity?: import("./billing.js").TokenUsageIdentity): void;
 };
 
 export class TenantWorkerClient {
@@ -85,7 +85,7 @@ export class TenantWorkerClient {
     if (event.type === "thread_started") pending.onThreadStarted(event.threadId);
     if (event.type === "turn_started") pending.onTurnStarted?.(event.turnId);
     if (event.type === "progress") pending.onProgress(event.payload);
-    if (event.type === "usage") pending.onUsage(event.usage);
+    if (event.type === "usage") pending.onUsage(event.usage, event.identity);
     if (event.type === "context_usage") pending.onContextUsage(event.usage);
     if (event.type === "steer_completed" || event.type === "steer_failed") {
       const steer = this.steers.get(event.requestId);

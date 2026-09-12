@@ -7,8 +7,9 @@ import { assertProductionConfig, loadConfig } from "./config.js";
 const config = loadConfig();
 fs.mkdirSync(path.join(config.dataRoot, "logs"), { recursive: true });
 const logger = pino(pino.destination({ dest: path.join(config.dataRoot, "logs", "app.log"), sync: false }));
-const { app, db, runner, beginShutdown } = createApp({ logger });
+const { app, db, runner, rolloutUsage, beginShutdown } = createApp({ logger });
 assertProductionConfig(config);
+rolloutUsage.start();
 
 const server = app.listen(config.port, config.host, () => {
   logger.info({ host: config.host, port: config.port, basePath: config.basePath }, "Codex Web started");
@@ -21,6 +22,7 @@ async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   beginShutdown();
+  await rolloutUsage.stop();
   logger.info({ signal }, "Codex Web stopping");
   const deadline = Date.now() + SHUTDOWN_DRAIN_TIMEOUT_MS;
   while ((db.runningJobCount() > 0 || runner.activeJobCount > 0) && Date.now() < deadline) {
