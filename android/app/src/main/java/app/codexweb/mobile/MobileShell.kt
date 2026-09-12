@@ -295,21 +295,72 @@ internal fun WelcomeSuggestions(state: NativeState, recording: Boolean = false, 
 @Composable
 fun WorkspaceHome(model: ClientModel, queue: () -> Unit) {
     val state = model.state
+    val task = state.selectedId?.let { selectedId ->
+        state.conversation.takeIf { it.text("id") == selectedId }
+            ?: state.conversations.firstOrNull { it.text("id") == selectedId }
+    }
+    data class WorkspaceTool(val title: String, val purpose: String, val tag: String, val open: () -> Unit)
+    val taskTools = if (state.selectedId == null) emptyList() else listOf(
+        WorkspaceTool("任务与队列", "查看执行过程、调整排队指令", "workspace-queue", queue),
+        WorkspaceTool("项目文件", "浏览当前任务产物与项目目录", "workspace-files") {
+            model.navigate(ToolPage("项目文件", "files", "${state.conversationPath}/file-tree"))
+        },
+        WorkspaceTool("代码 Review", "查看工作区、暂存区或分支差异", "workspace-review") {
+            model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=working"))
+        },
+        WorkspaceTool("侧边线程", "查看或创建当前任务的辅助对话", "workspace-side") {
+            model.navigate(ToolPage("侧边线程", "side", "${state.conversationPath}/side-chats"))
+        },
+    )
+    val globalTools = listOf(
+        WorkspaceTool("工作目录", "管理账号的目录收藏与默认项目设置", "workspace-directories") {
+            model.navigate(ToolPage("工作目录", "directories", "/working-dirs"))
+        },
+        WorkspaceTool("API 统计", "查看账号用量、费用与模型统计", "workspace-billing") {
+            model.navigate(ToolPage("API 统计", "billing", "/billing?days=30"))
+        },
+    )
     ToolColumn {
-        Text("让工具围绕当前对话", style = MaterialTheme.typography.titleLarge)
-        Text(state.conversation.text("title", "先从对话开始，再打开任务工具"), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-        if (state.selectedId != null) {
-            OutlinedCard(shape = MaterialTheme.shapes.medium,
-                colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                ToolRow("任务与队列", "查看执行过程、调整排队指令", onClick = queue)
-                listOf(Triple("项目文件", "files", "${state.conversationPath}/file-tree"), Triple("代码 Review", "review", "${state.conversationPath}/review?scope=working"),
-                    Triple("侧边线程", "side", "${state.conversationPath}/side-chats")).forEach { (title, kind, path) -> ToolRow(title) { model.navigate(ToolPage(title, kind, path)) } }
+        Surface(modifier = Modifier.fillMaxWidth().testTag("workspace-context"), shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("当前任务", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (state.selectedId == null) {
+                    Text("尚未选择任务", style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("workspace-no-task"))
+                    Text("返回对话选择已有任务后，可查看文件、Review 和队列。", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = { model.selectTab(HomeTab.Chat) }, modifier = Modifier.heightIn(min = 48.dp).testTag("workspace-back-to-chat")) {
+                        Text("返回对话")
+                    }
+                } else {
+                    Text(task?.text("title").orEmpty().ifBlank { if (task == null) "任务信息暂不可用" else "未命名任务" },
+                        style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("workspace-task-title"))
+                    Text(task?.let(::taskStatus) ?: "状态暂不可用", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("workspace-task-status"))
+                    Text("工作目录", style = MaterialTheme.typography.labelLarge)
+                    Text(task?.text("working_dir").orEmpty().ifBlank { "目录信息暂不可用" },
+                        style = MaterialTheme.typography.bodyMedium, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.testTag("workspace-task-directory"))
+                    if (state.detailFromCache) Text("缓存只读：任务信息可能不是最新状态", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.tertiary)
+                }
             }
         }
-        OutlinedCard(shape = MaterialTheme.shapes.medium,
-                colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            ToolRow("工作目录", "沿用 Web 端收藏和项目设置") { model.navigate(ToolPage("工作目录", "directories", "/working-dirs")) }
-            ToolRow("API 统计", "用量、费用与模型统计") { model.navigate(ToolPage("API 统计", "billing", "/billing?days=30")) }
+        listOf("任务工具" to taskTools, "全局管理" to globalTools).forEach { (title, tools) ->
+            if (tools.isNotEmpty()) {
+                Text(title, style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 4.dp).testTag(if (title == "任务工具") "workspace-task-tools" else "workspace-global-tools"))
+                OutlinedCard(shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    tools.forEachIndexed { index, tool ->
+                        if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        ListItem(modifier = Modifier.clickable(onClick = tool.open).heightIn(min = 56.dp).testTag(tool.tag),
+                            headlineContent = { Text(tool.title, style = MaterialTheme.typography.titleSmall) },
+                            supportingContent = { Text(tool.purpose, style = MaterialTheme.typography.bodyMedium) },
+                            trailingContent = { Icon(Icons.Outlined.ChevronRight, null) })
+                    }
+                }
+            }
         }
     }
 }

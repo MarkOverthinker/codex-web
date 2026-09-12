@@ -11,6 +11,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +33,11 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -47,6 +53,8 @@ import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.MarkwonConfiguration
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -213,53 +221,90 @@ private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRe
     val scroll = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
     var positioned by rememberSaveable { mutableStateOf(false) }
-    var previousMessage by rememberSaveable { mutableStateOf(messages.lastOrNull()?.text("id")) }
+    var followingLatest by rememberSaveable { mutableStateOf(true) }
+    var activatedInScene by remember { mutableStateOf(false) }
+    var tailScrollRequests by remember { mutableIntStateOf(0) }
+    var previousMessage by remember { mutableStateOf(messages.lastOrNull()?.text("id")) }
     val scope = rememberCoroutineScope()
-    val nearBottom by remember { derivedStateOf { !scroll.canScrollForward || scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.let {
-        it.index == scroll.layoutInfo.totalItemsCount - 1 && it.offset + it.size <= scroll.layoutInfo.viewportEndOffset + 120
-    } == true } }
+    val atBottom by remember { derivedStateOf { !scroll.canScrollForward } }
+    val latestMessage = messages.lastOrNull()?.text("id")
+    val hasOlderMessages = state.detail?.objectValue("messagePage")?.optBoolean("hasMore") == true
+    val expectedItems = messages.size + (if (state.activeJob != null) 1 else 0) + (if (hasOlderMessages) 1 else 0)
+
+    suspend fun moveToLatest(animate: Boolean) {
+        followingLatest = true
+        activatedInScene = true
+        tailScrollRequests++
+        try { scroll.scrollToLatest(animate) }
+        finally { tailScrollRequests-- }
+    }
+    LaunchedEffect(scroll) {
+        var previous: MessageScrollObservation? = null
+        var lastAttemptedLayout: MessageTailLayout? = null
+        snapshotFlow {
+            val layout = scroll.layoutInfo
+            val current = MessageScrollObservation(scroll.firstVisibleItemIndex, scroll.firstVisibleItemScrollOffset,
+                layout.totalItemsCount, !scroll.canScrollForward,
+                userScrolling = scroll.isScrollInProgress && tailScrollRequests == 0,
+                scrollingToLatest = tailScrollRequests > 0)
+            val tail = layout.visibleItemsInfo.lastOrNull()?.let { item ->
+                MessageTailLayout(layout.totalItemsCount, layout.viewportEndOffset, layout.afterContentPadding,
+                    item.index, item.offset, item.size, scroll.canScrollForward)
+            }
+            Triple(current, tail to layout.viewportSize.height, activatedInScene)
+        }.collect { (current, geometry, activeInScene) ->
+            followingLatest = current.followAfter(previous, followingLatest)
+            previous = current
+            if (current.atEnd) lastAttemptedLayout = null
+            val (tail, viewportHeight) = geometry
+            if (tail?.shouldCompensate(lastAttemptedLayout, viewportHeight, followingLatest, activeInScene, current) == true) {
+                lastAttemptedLayout = tail
+                scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    if (followingLatest && activatedInScene && !scroll.isScrollInProgress && tailScrollRequests == 0) {
+                        moveToLatest(animate = false)
+                    }
+                }
+            }
+        }
+    }
     LaunchedEffect(state.selectedId) {
         if (positioned) return@LaunchedEffect
-        val count = snapshotFlow { scroll.layoutInfo.totalItemsCount }.first { it > 0 }
-        scroll.scrollToItem(count - 1)
+        snapshotFlow {
+            val layout = scroll.layoutInfo
+            layout.totalItemsCount > 0 && layout.viewportSize.height > 0 && layout.visibleItemsInfo.isNotEmpty()
+        }.first { it }
         positioned = true
+        moveToLatest(animate = false)
     }
-    LaunchedEffect(messages.lastOrNull()?.text("id")) {
-        val latest = messages.lastOrNull()?.text("id")
-        if (previousMessage != latest && nearBottom && scroll.layoutInfo.totalItemsCount > 0) scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1)
-        previousMessage = latest
+    LaunchedEffect(latestMessage) {
+        if (positioned && previousMessage != latestMessage && followingLatest) {
+            snapshotFlow { scroll.layoutInfo.totalItemsCount }.first { it >= expectedItems }
+            if (followingLatest && (!scroll.isScrollInProgress || tailScrollRequests > 0)) moveToLatest(animate = true)
+        }
+        previousMessage = latestMessage
     }
-    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
+    Box(Modifier.weight(1f).fillMaxWidth()) {
     if (messages.isEmpty() && state.activeJob == null) {
         EmptyState("有什么需要一起完成？", "描述目标、补充文件，然后开始。\n运行过程与队列不会挤占聊天。")
     } else LazyColumn(state = scroll, modifier = Modifier.fillMaxSize().testTag("messages"), contentPadding = PaddingValues(18.dp, 12.dp, 18.dp, 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        if (state.detail?.objectValue("messagePage")?.optBoolean("hasMore") == true) item {
-            TextButton(onClick = model::loadOlder, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("加载更早消息") }
+        if (hasOlderMessages) item(key = "load-older") {
+            TextButton(onClick = model::loadOlder, enabled = !state.busy, modifier = Modifier.fillMaxWidth().testTag("load-older-messages")) { Text("加载更早消息") }
         }
         items(messages, key = { it.text("id") }) { message ->
             val user = message.text("role") == "user"
             val messageColors = nativeMessageColors(MaterialTheme.colorScheme, user)
             var menu by remember { mutableStateOf(false) }
             Column(Modifier.fillMaxWidth().testTag("message-${message.text("id")}"), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
-                Surface(color = messageColors.container, contentColor = messageColors.content,
-                    modifier = Modifier.fillMaxWidth(if (user) .9f else 1f), shape = MaterialTheme.shapes.medium) {
-                    Column(Modifier.padding(if (user) 14.dp else 0.dp).widthIn(max = 680.dp)) {
-                        if (message.text("quote_excerpt").isNotBlank()) Text("引用 · ${message.text("quote_excerpt")}", maxLines = 3,
-                            overflow = TextOverflow.Ellipsis, color = messageColors.quote, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 8.dp))
-                        message.optJSONObject("source_reference")?.let { source -> Text("关联上下文 · ${source.text("sourceConversationTitle", "来源任务")}", fontSize = 12.sp) }
-                        MarkdownText(message.text("content"), state.fontSize, openLink,
-                            quote = { excerpt -> model.quote(message, excerpt) }, side = { excerpt ->
-                                model.createSide("${state.conversationPath}/side-chat/reference", json("sourceMessageId" to message.text("id"), "excerpt" to excerpt))
-                            })
-                        message.rows("files").forEach { file -> FileChip(file) { model.previewFile(file) } }
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (user) "你" else if (message.text("role") == "system") "系统" else "Codex", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(if (user) .9f else 1f), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(if (user) "你" else if (message.text("role") == "system") "系统" else "Codex", style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("message-author-${message.text("id")}"))
                     Box {
-                        IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "消息操作", Modifier.size(18.dp)) }
+                        IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp).testTag("message-actions-${message.text("id")}")) {
+                            Icon(Icons.Outlined.MoreHoriz, "消息操作", Modifier.size(18.dp))
+                        }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(text = { Text("复制") }, onClick = { menu = false; clipboard.setText(AnnotatedString(message.text("content"))); model.note("已复制") })
                             DropdownMenuItem(text = { Text("引用") }, onClick = { menu = false; model.quote(message) })
@@ -279,23 +324,67 @@ private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRe
                         }
                     }
                 }
+                Surface(color = messageColors.container, contentColor = messageColors.content,
+                    modifier = Modifier.fillMaxWidth(if (user) .9f else 1f), shape = MaterialTheme.shapes.medium) {
+                    Column(Modifier.padding(if (user) 14.dp else 0.dp).widthIn(max = 680.dp)) {
+                        if (message.text("quote_excerpt").isNotBlank()) Text("引用 · ${message.text("quote_excerpt")}", maxLines = 3,
+                            overflow = TextOverflow.Ellipsis, color = messageColors.quote, style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 8.dp).testTag("message-quote-${message.text("id")}"))
+                        message.optJSONObject("source_reference")?.let { source -> Text("关联上下文 · ${source.text("sourceConversationTitle", "来源任务")}",
+                            color = messageColors.quote, style = MaterialTheme.typography.bodySmall) }
+                        MarkdownText(message.text("content"), state.fontSize, openLink,
+                            quote = { excerpt -> model.quote(message, excerpt) }, side = { excerpt ->
+                                model.createSide("${state.conversationPath}/side-chat/reference", json("sourceMessageId" to message.text("id"), "excerpt" to excerpt))
+                            })
+                        message.rows("files").forEach { file -> FileChip(file) { model.previewFile(file) } }
+                    }
+                }
             }
         }
-        if (state.activeJob != null) item {
+        if (state.activeJob != null) item(key = "active-job") {
             OutlinedCard(onClick = queue) {
                 Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Column { Text("任务${if (state.activeJob?.text("status") == "queued") "排队中" else "运行中"}")
+                    Column { Text(composerPresentation(state).activeJobLabel.orEmpty(), style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.testTag("active-job-status"))
                         Text(state.detail?.rows("jobEvents")?.lastOrNull()?.text("label").orEmpty().ifBlank { "点此查看过程、队列和停止操作" },
-                            fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                            style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                 }
             }
         }
     }
-    if (!nearBottom && messages.isNotEmpty()) SmallFloatingActionButton(onClick = { scope.launch { scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1) } },
-        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp), containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary) {
-        Icon(Icons.Outlined.ArrowDownward, "回到最新消息")
     }
+    if (!atBottom && messages.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
+        FilledTonalButton(onClick = { scope.launch { moveToLatest(animate = true) } },
+            modifier = Modifier.heightIn(min = 48.dp).testTag("back-to-latest").semantics { contentDescription = "回到最新消息" }) {
+            Icon(Icons.Outlined.ArrowDownward, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("回到最新", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+    }
+}
+
+private suspend fun LazyListState.scrollToLatest(animate: Boolean) {
+    val initialLayout = layoutInfo
+    val lastIndex = initialLayout.totalItemsCount - 1
+    if (lastIndex < 0 || initialLayout.viewportSize.height <= 0 || initialLayout.visibleItemsInfo.isEmpty()) return
+    if (animate) animateScrollToItem(lastIndex) else scrollToItem(lastIndex)
+    scroll {
+        var previousLayout: MessageTailLayout? = null
+        while (true) {
+            withFrameNanos { }
+            val layout = layoutInfo
+            if (layout.totalItemsCount == 0 || layout.viewportSize.height <= 0) return@scroll
+            val lastItem = layout.visibleItemsInfo.lastOrNull() ?: return@scroll
+            val tail = MessageTailLayout(layout.totalItemsCount, layout.viewportEndOffset, layout.afterContentPadding,
+                lastItem.index, lastItem.offset, lastItem.size, canScrollForward)
+            if (tail.isSettledAfter(previousLayout)) return@scroll
+            previousLayout = tail
+            if (tail.canScrollForward && scrollBy(maxOf(tail.remainingScroll, layout.viewportSize.height).toFloat()) == 0f) {
+                return@scroll
+            }
+        }
     }
 }
 
@@ -352,68 +441,86 @@ fun MarkdownText(content: String, size: Int, openLink: (String) -> Unit = {}, qu
 
 @Composable
 private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> Unit, pickFiles: () -> Unit, voice: () -> Unit, recording: Boolean, queue: () -> Unit) {
+    val presentation = composerPresentation(state, recording)
+    val composerActionsEnabled = !state.busy && !state.connecting && !state.sendUncertain
+    val feedback = listOfNotNull(presentation.statusText, state.draftStatus.takeIf { it.isNotBlank() }).distinct().joinToString(" · ")
     Surface(color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
             if (state.sendUncertain) {
                 var resolve by remember { mutableStateOf(false) }
-                TextButton(onClick = { resolve = true }, modifier = Modifier.fillMaxWidth()) { Text("上次发送待核对 · 点击处理") }
+                TextButton(onClick = { resolve = true }, enabled = !state.busy && !state.connecting,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("composer-resolve-send").semantics { liveRegion = LiveRegionMode.Polite }) {
+                    Text("上次发送待核对 · 点击处理", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelLarge)
+                }
                 if (resolve) AlertDialog(onDismissRequest = { resolve = false }, title = { Text("先核对消息和队列") },
                     text = { Text("网络中断不代表发送失败。确认服务器是否已收到后再选择，避免重复执行。") },
-                    confirmButton = { TextButton(onClick = { resolve = false; model.resolveUncertainSend(true) }) { Text("已收到，清除本机副本") } },
-                    dismissButton = { TextButton(onClick = { resolve = false; model.resolveUncertainSend(false) }) { Text("未收到，保留以便重发") } })
+                    confirmButton = { TextButton(onClick = { resolve = false; model.resolveUncertainSend(true) }, enabled = !state.busy && !state.connecting) { Text("已收到，清除本机副本") } },
+                    dismissButton = { TextButton(onClick = { resolve = false; model.resolveUncertainSend(false) }, enabled = !state.busy && !state.connecting) { Text("未收到，保留以便重发") } })
             }
             if (state.composer.quote.isNotBlank() || state.composer.source != null) Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("引用 · ${state.composer.quote.ifBlank { "关联上下文" }}", Modifier.weight(1f).padding(start = 8.dp), maxLines = 2, fontSize = 12.sp, overflow = TextOverflow.Ellipsis)
-                IconButton(onClick = model::clearQuote, enabled = !state.busy) { Icon(Icons.Outlined.Close, "取消引用") }
+                Text("引用 · ${state.composer.quote.ifBlank { "关联上下文" }}", Modifier.weight(1f).padding(start = 8.dp).testTag("composer-quote"), maxLines = 2,
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, overflow = TextOverflow.Ellipsis)
+                IconButton(onClick = model::clearQuote, enabled = composerActionsEnabled, modifier = Modifier.testTag("composer-remove-quote")) { Icon(Icons.Outlined.Close, "取消引用") }
             }
             if (state.composer.files.isNotEmpty()) androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.composer.files, key = { it.text("id") }) { file ->
                     InputChip(selected = true, onClick = { model.previewFile(file) }, label = { Text(file.text("original_name"), maxLines = 1, modifier = Modifier.widthIn(max = 160.dp)) },
-                        trailingIcon = { IconButton(onClick = { model.removeAttachment(file.text("id")) }, modifier = Modifier.size(48.dp), enabled = !state.busy) { Icon(Icons.Outlined.Close, "移除附件") } })
+                        trailingIcon = { IconButton(onClick = { model.removeAttachment(file.text("id")) },
+                            modifier = Modifier.size(48.dp).testTag("composer-remove-attachment-${file.text("id")}"),
+                            enabled = composerActionsEnabled && !state.detailFromCache) { Icon(Icons.Outlined.Close, "移除附件") } })
                 }
             }
             val pending = state.detail?.rows("pendingPrompts").orEmpty().size
             if (pending > 0 || state.editingPrompt != null || state.activeJob != null) TextButton(
-                onClick = queue, modifier = Modifier.fillMaxWidth().testTag("queue-hint"), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                onClick = queue, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("queue-hint"), contentPadding = PaddingValues(horizontal = 12.dp)) {
                 Icon(Icons.Outlined.Queue, null, Modifier.size(16.dp))
-                Text("${if (state.activeJob != null) "执行中 · " else ""}队列 $pending${if (state.editingPrompt != null) " · 暂停编辑" else ""}",
-                    Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Start)
+                Text("${presentation.activeJobLabel?.let { "$it · " }.orEmpty()}队列 $pending${if (state.editingPrompt != null) " · 暂停编辑" else ""}",
+                    Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.labelMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                 Icon(Icons.Outlined.ExpandLess, "展开队列", Modifier.size(18.dp))
             }
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-            Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-            TextField(value = state.composer.content, onValueChange = model::changeText,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composer"), enabled = !state.connecting && (!state.busy || state.operation == "voice") && !state.sendUncertain,
-                placeholder = { Text(if (recording) "正在聆听…" else "给 Agent 发消息…", style = MaterialTheme.typography.bodyLarge) }, maxLines = 5,
-                colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = pickFiles, enabled = !state.busy && !recording && !state.detailFromCache) {
-                    if (state.operation == "upload") CircularProgressIndicator(Modifier.size(22.dp).testTag("upload-progress"), strokeWidth = 2.dp)
-                    else Icon(Icons.Outlined.Add, "添加附件")
-                }
-                TextButton(onClick = options, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                    val selected = state.detail?.objectValue("agentSelection") ?: state.options.objectValue("selection")
-                    val label = state.options.rows("models").find { it.text("id") == selected.text("model") }?.text("label") ?: selected.text("model")
-                    Text(label.ifBlank { "模型与选项" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
-                    Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
-                }
-                if (state.session?.optBoolean("voiceEnabled") == true) IconButton(onClick = voice, enabled = !state.busy && !state.detailFromCache) {
-                    if (state.operation == "voice") CircularProgressIndicator(Modifier.size(22.dp).testTag("voice-progress"), strokeWidth = 2.dp)
-                    else Icon(if (recording) Icons.Outlined.StopCircle else Icons.Outlined.Mic, if (recording) "结束录音并转写" else "语音输入",
-                        tint = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-                }
-                FilledIconButton(onClick = model::send, enabled = !state.busy && !recording && !state.sendUncertain && !state.detailFromCache && (state.composer.content.isNotBlank() || state.composer.files.isNotEmpty()),
-                    modifier = Modifier.size(48.dp).testTag("send")) {
-                    if (state.operation == "send") CircularProgressIndicator(Modifier.size(20.dp).testTag("send-progress"), strokeWidth = 2.dp)
-                    else Icon(Icons.Outlined.ArrowUpward, "发送")
+                Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                    TextField(value = state.composer.content, onValueChange = model::changeText,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composer"), enabled = presentation.inputEnabled,
+                        placeholder = { Text(if (recording) "正在聆听…" else "给 Agent 发消息…", style = MaterialTheme.typography.bodyLarge) }, maxLines = 5,
+                        colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = pickFiles, enabled = composerActionsEnabled && !recording && !state.detailFromCache,
+                            modifier = Modifier.testTag("composer-add-attachment")) {
+                            if (state.busy && state.operation == "upload") CircularProgressIndicator(Modifier.size(22.dp).testTag("upload-progress"), strokeWidth = 2.dp)
+                            else Icon(Icons.Outlined.Add, "添加附件")
+                        }
+                        TextButton(onClick = options, enabled = composerActionsEnabled && !state.detailFromCache,
+                            modifier = Modifier.weight(1f).testTag("composer-options"), contentPadding = PaddingValues(4.dp)) {
+                            val selected = state.detail?.objectValue("agentSelection") ?: state.options.objectValue("selection")
+                            val label = state.options.rows("models").find { it.text("id") == selected.text("model") }?.text("label") ?: selected.text("model")
+                            Text(label.ifBlank { "模型与选项" }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
+                            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
+                        }
+                        if (state.session?.optBoolean("voiceEnabled") == true) IconButton(onClick = voice,
+                            enabled = composerActionsEnabled && !state.detailFromCache,
+                            modifier = Modifier.testTag("voice").semantics { contentDescription = presentation.voiceContentDescription }) {
+                            if (state.busy && state.operation == "voice") CircularProgressIndicator(Modifier.size(22.dp).testTag("voice-progress"), strokeWidth = 2.dp)
+                            else Icon(if (recording) Icons.Outlined.StopCircle else Icons.Outlined.Mic, null,
+                                tint = if (recording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        }
+                        FilledIconButton(onClick = model::send, enabled = presentation.sendEnabled,
+                            modifier = Modifier.size(48.dp).testTag("send").semantics {
+                                contentDescription = presentation.sendLabel
+                                stateDescription = presentation.hint
+                            }) {
+                            if (state.busy && state.operation == "send") CircularProgressIndicator(Modifier.size(20.dp).testTag("send-progress"), strokeWidth = 2.dp)
+                            else Icon(if (presentation.status == ComposerStatus.Queue) Icons.Outlined.Queue else Icons.Outlined.ArrowUpward, null)
+                        }
+                    }
                 }
             }
-            }
-            }
-            if (state.draftStatus.isNotBlank()) Text(state.draftStatus, style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (feedback.isNotBlank()) Text(feedback, style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp).testTag("composer-status").semantics {
+                    if (presentation.statusText != null) liveRegion = LiveRegionMode.Polite
+                }, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
