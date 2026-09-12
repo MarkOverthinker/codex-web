@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsNode
@@ -55,6 +56,7 @@ private class UiGateway : Gateway {
     var sends = 0
     var creates = 0
     var mutations = mutableListOf<String>()
+    val requests = mutableListOf<String>()
     var draft: JSONObject? = null
     var failSend = false
     var failReview = false
@@ -64,7 +66,9 @@ private class UiGateway : Gateway {
     var voiceGate: CompletableDeferred<Unit>? = null
     var pending = emptyList<JSONObject>()
     var longMessages = false
-    var nextConversationFailure: ApiFailure? = null
+    var activeJob: JSONObject? = null
+    var appendedMessages = emptyList<JSONObject>()
+    var nextConversationFailure: Exception? = null
     var editingPrompt: JSONObject? = null
     private val conversation = json("id" to "sample-task", "title" to "重做移动端交互", "status" to "idle", "working_dir" to "/workspace/codex-web", "latest_job_status" to "completed")
     private val tasks = listOf(conversation) + (2..7).map { json("id" to "task-$it", "title" to "项目任务 $it", "working_dir" to "/workspace/codex-web",
@@ -126,6 +130,7 @@ private class UiGateway : Gateway {
     }
 
     override suspend fun call(path: String, method: String, payload: JSONObject?, body: RequestBody?): JSONObject {
+        requests += "$method $path"
         if (method != "GET") mutations += "$method $path"
         delay(20)
         return when {
@@ -162,11 +167,11 @@ private class UiGateway : Gateway {
                 json("editingPrompt" to (editingPrompt ?: json()))
             path == "/conversations/sample-task" -> {
                 nextConversationFailure?.let { failure -> nextConversationFailure = null; throw failure }
-                json("conversation" to conversation, "composerDraft" to draft, "agentSelection" to selection,
-                "messages" to listOf(
+                json("conversation" to conversation, "composerDraft" to draft, "agentSelection" to selection, "activeJob" to activeJob,
+                "messages" to (listOf(
                     json("id" to "user-one", "role" to "user", "content" to "保留核心功能，让手机界面更专注。", "can_edit" to true),
                     json("id" to "assistant-one", "role" to "assistant", "content" to "## 让任务回到中心\n\n保留熟悉的 Web 风格，让对话成为主界面。\n\n- 右滑打开按项目分类的任务\n- 输入区轻点即可管理队列\n- 草稿与近期对话保存在本机\n\n```kotlin\nval focus = \"专注当前对话\"\n```" + if (longMessages) "\n\n继续查看项目细节。".repeat(35) else "", "can_fork" to true)
-                ).jsonArray(), "messagePage" to json("hasMore" to false), "pendingPrompts" to pending.jsonArray(), "jobEvents" to emptyList<JSONObject>().jsonArray(),
+                ) + appendedMessages).jsonArray(), "messagePage" to json("hasMore" to false), "pendingPrompts" to pending.jsonArray(), "jobEvents" to emptyList<JSONObject>().jsonArray(),
                 "outputFiles" to outputs.jsonArray())
             }
             path.contains("/file-tree/preview") -> {
@@ -255,6 +260,69 @@ class NativeUiTest {
         }
         compose.waitUntil(10000) { model.state.selectedId != null && !model.state.busy }
         compose.onNodeWithTag("composer").assertIsDisplayed()
+    }
+
+    private fun assertComposerFeedback(sendLabel: String, hint: String, sendEnabled: Boolean, inputEnabled: Boolean = true,
+                                       statusText: String? = null) {
+        val send = compose.onNodeWithTag("send")
+        send.assertIsDisplayed().assertContentDescriptionEquals(sendLabel)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, hint))
+        if (sendEnabled) send.assertIsEnabled() else send.assertIsNotEnabled()
+        compose.onNodeWithText(hint).assertDoesNotExist()
+        if (statusText != null) compose.onNodeWithTag("composer-status").assertTextContains(statusText, substring = true).assertIsDisplayed()
+        val composer = compose.onNodeWithTag("composer")
+        if (inputEnabled) composer.assertIsEnabled() else composer.assertIsNotEnabled()
+    }
+
+    private fun assertMessagesAtEnd() {
+        try {
+            compose.waitUntil(5000) {
+                val current = compose.onNodeWithTag("messages").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+                kotlin.math.abs(current.maxValue() - current.value()) <= 0.001f
+            }
+        } catch (timeout: ComposeTimeoutException) {
+            val messages = compose.onNodeWithTag("messages")
+            val range = messages.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+            messages.printToLog("MessagesScrollFailure")
+            screenshot("native-messages-not-at-end")
+            throw AssertionError("消息列表未到末端：value=${range.value()}, max=${range.maxValue()}, bounds=${messages.getUnclippedBoundsInRoot()}", timeout)
+        }
+        val range = compose.onNodeWithTag("messages").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertEquals("消息列表仍有未滚动到的尾部内容", range.maxValue(), range.value(), 0.001f)
+    }
+
+    private fun dismissKeyboard() {
+        compose.runOnUiThread {
+            compose.activity.getSystemService(InputMethodManager::class.java)
+                .hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.waitUntil(5000) {
+            androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) != true
+        }
+        compose.waitForIdle()
+    }
+
+    private fun openReview() {
+        login()
+        compose.onNodeWithContentDescription("任务工具").performClick()
+        compose.onNodeWithText("代码 Review").performClick()
+        compose.waitUntil(10000) { model.state.page?.kind == "review" && model.state.pageData != null && !model.state.pageLoading }
+        compose.waitForIdle()
+    }
+
+    private fun reviewNode(tag: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("review-list").performScrollToNode(hasTestTag(tag))
+        return compose.onNodeWithTag(tag).assertIsDisplayed()
+    }
+
+    private fun assertReviewQuery(query: String) {
+        reviewNode("review-search").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(query)))
+    }
+
+    private fun assertReviewMatchCount(matches: Int, total: Int) {
+        reviewNode("review-match-count").assertTextEquals("匹配 $matches / $total 个文件")
+        compose.runOnIdle { assertEquals(total, model.state.pageData!!.rows("files").size) }
     }
 
     private fun expireSessionThroughConversation() {
@@ -450,9 +518,164 @@ class NativeUiTest {
         screenshot("native-dark")
     }
 
+    @Test fun composerFeedbackDistinguishesEmptyReadyAndRunningWithoutPromisingQueueing() {
+        login()
+        val emptyHint = "请输入文字或添加附件；仅有引用不能发送。"
+        assertComposerFeedback("发送", emptyHint, sendEnabled = false)
+
+        compose.onNodeWithTag("composer").performTextInput("请继续检查当前实现")
+        assertComposerFeedback("发送", "发送消息；任务状态变化时也可能排队。", sendEnabled = true)
+
+        gateway.activeJob = json("id" to "running-ui-job", "status" to "running")
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(10000) { !model.state.busy && model.state.activeJob != null }
+        assertComposerFeedback("加入队列", "任务运行中；是否入队以服务器接收时的状态为准。", sendEnabled = true)
+        compose.onNodeWithTag("queue-hint").assertTextContains("任务运行中", substring = true)
+        compose.onNodeWithTag("composer").assertTextContains("请继续检查当前实现")
+
+        gateway.activeJob = json("id" to "running-ui-job", "status" to "queued")
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(10000) { !model.state.busy && model.state.activeJob?.text("status") == "queued" }
+        assertComposerFeedback("加入队列", "任务排队中；是否入队以服务器接收时的状态为准。", sendEnabled = true)
+        compose.onNodeWithTag("queue-hint").assertTextContains("任务排队中", substring = true)
+
+        compose.onNodeWithTag("composer").performTextClearance()
+        assertComposerFeedback("发送", emptyHint, sendEnabled = false)
+        compose.runOnIdle {
+            assertNotNull(model.state.activeJob)
+            assertEquals("", model.state.composer.content)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun newMessagesFollowAutomaticallyWhenAlreadyAtEnd() {
+        gateway.longMessages = true
+        login()
+        compose.waitForIdle()
+        assertMessagesAtEnd()
+        compose.onNodeWithTag("back-to-latest").assertDoesNotExist()
+
+        gateway.appendedMessages = listOf(json("id" to "assistant-followed", "role" to "assistant", "content" to "保持在底部时自动看到这条新增回复。"))
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(10000) {
+            !model.state.busy && model.state.detail?.rows("messages")?.any { it.text("id") == "assistant-followed" } == true
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("message-assistant-followed").assertIsDisplayed()
+        assertMessagesAtEnd()
+        compose.onNodeWithTag("back-to-latest").assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun keyboardLayoutChangesKeepTailFollowingWithoutStealingHistory() {
+        gateway.longMessages = true
+        login()
+        assertMessagesAtEnd()
+
+        fun showKeyboard() {
+            compose.onNodeWithTag("composer").performClick()
+            compose.waitUntil(5000) {
+                androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+            }
+            compose.waitForIdle()
+        }
+
+        showKeyboard()
+        assertMessagesAtEnd()
+        dismissKeyboard()
+        assertMessagesAtEnd()
+        compose.onNodeWithTag("messages").performScrollToIndex(0)
+        compose.onNodeWithTag("message-user-one").assertIsDisplayed()
+        showKeyboard()
+        compose.onNodeWithTag("message-user-one").assertIsDisplayed()
+        compose.onNodeWithTag("back-to-latest").assertIsDisplayed()
+        dismissKeyboard()
+        compose.onNodeWithTag("message-user-one").assertIsDisplayed()
+        compose.onNodeWithTag("back-to-latest").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun newMessagesDoNotStealHistoryPositionAndLatestActionReturnsToEnd() {
+        gateway.longMessages = true
+        login()
+        compose.onNodeWithTag("messages").performScrollToIndex(0)
+        val history = compose.onNodeWithTag("message-user-one").assertIsDisplayed()
+        val historyTop = history.fetchSemanticsNode().boundsInRoot.top
+        val latestAction = compose.onNodeWithTag("back-to-latest")
+        latestAction.assertContentDescriptionEquals("回到最新消息").assertIsDisplayed()
+
+        val latestContent = "这是刚刚到达的超高回复。" + "\n\n新增回复的长段落，需要滚动才能读完。".repeat(70) + "\n\n超高回复的最后一行。"
+        gateway.appendedMessages = listOf(json("id" to "assistant-latest", "role" to "assistant", "content" to latestContent))
+        compose.runOnUiThread { model.refresh() }
+        compose.waitUntil(10000) {
+            !model.state.busy && model.state.detail?.rows("messages")?.any { it.text("id") == "assistant-latest" } == true
+        }
+        compose.waitForIdle()
+        history.assertIsDisplayed()
+        assertEquals("新增消息不应移动历史阅读锚点", historyTop, history.fetchSemanticsNode().boundsInRoot.top, 2f)
+        latestAction.assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        val latestMessage = compose.onNodeWithTag("message-assistant-latest").assertIsDisplayed()
+        val viewport = compose.onNodeWithTag("messages").getUnclippedBoundsInRoot()
+        val latestBounds = latestMessage.getUnclippedBoundsInRoot()
+        val latestHeight = latestBounds.bottom - latestBounds.top
+        val viewportHeight = viewport.bottom - viewport.top
+        assertTrue("末条回复必须高于消息视口，才能检验真正到达尾部", latestHeight > viewportHeight)
+        assertTrue("超高末消息的最后一行仍在视口下方", latestBounds.bottom <= viewport.bottom)
+        assertMessagesAtEnd()
+        latestAction.assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(latestContent, model.state.detail!!.rows("messages").last().text("content"))
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun cachedConversationKeepsLocalDraftEditableButCannotSubmit() {
+        login()
+        gateway.nextConversationFailure = java.io.IOException("simulated offline detail")
+        compose.runOnUiThread { model.openConversation("sample-task") }
+        compose.waitUntil(10000) { model.state.detailFromCache && !model.state.busy }
+        val hint = "正在查看本机缓存；请联网刷新后发送，不会离线执行。"
+        val statusText = "本机缓存 · 联网刷新后发送"
+        assertComposerFeedback("发送", hint, sendEnabled = false, statusText = statusText)
+        val mutationsBefore = gateway.mutations.toList()
+        val draft = "离线时仍可补充并保留这份本机草稿"
+        compose.onNodeWithTag("composer").performTextInput(draft)
+        assertComposerFeedback("发送", hint, sendEnabled = false, statusText = statusText)
+        compose.onNodeWithTag("send").performTouchInput { click() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("composer").assertTextContains(draft)
+
+        gateway.nextConversationFailure = java.io.IOException("still offline when reopening")
+        compose.runOnUiThread { model.openConversation("sample-task") }
+        compose.waitUntil(10000) { model.state.detailFromCache && !model.state.busy }
+        assertComposerFeedback("发送", hint, sendEnabled = false, statusText = statusText)
+        compose.onNodeWithTag("composer").assertTextContains(draft)
+        compose.runOnIdle {
+            assertEquals(draft, model.state.composer.content)
+            assertTrue(model.state.composer.dirty)
+            assertTrue(model.state.detailFromCache)
+            assertNull(model.state.error)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+            assertEquals(mutationsBefore, gateway.mutations.toList())
+        }
+    }
+
     @Test fun failedSendKeepsTextAndDisablesAccidentalDuplicateSubmission() {
         login()
         gateway.failSend = true
+        val quote = "发送失败后也必须保留的引用"
+        compose.runOnUiThread { model.quote(model.state.detail!!.rows("messages").last(), quote) }
         compose.onNodeWithTag("composer").performTextInput("网络失败也不能丢失")
         compose.onNodeWithTag("send").performClick()
         compose.waitUntil(10000) { model.state.sendUncertain }
@@ -468,8 +691,15 @@ class NativeUiTest {
         Thread.sleep(800)
         screenshot("native-recovery")
         compose.onNodeWithTag("composer").assertTextContains("网络失败也不能丢失")
-        compose.onNodeWithTag("send").assertIsNotEnabled()
-        assertEquals(1, gateway.sends)
+        assertComposerFeedback("发送", "上次发送结果未确认；请先刷新核对消息和队列，勿重复发送。", sendEnabled = false, inputEnabled = false)
+        repeat(2) { compose.onNodeWithTag("send").performTouchInput { click() } }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("网络失败也不能丢失", model.state.composer.content)
+            assertEquals(quote, model.state.composer.quote)
+            assertTrue(model.state.sendUncertain)
+            assertEquals(1, gateway.sends)
+        }
     }
 
     @Test fun swipeOpensProjectDrawerWithLimitedGroupsAndStatusSwitch() {
@@ -566,7 +796,10 @@ class NativeUiTest {
         Thread.sleep(300)
         screenshot("native-profile-top")
         compose.onNodeWithTag("tab-Workspace").performClick()
-        compose.onNodeWithText("让工具围绕当前对话").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-context").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-task-title").assertTextEquals("重做移动端交互").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-task-directory").assertTextEquals("/workspace/codex-web").assertIsDisplayed()
+        compose.runOnIdle { assertEquals("切换页面也保留这份草稿", model.state.composer.content) }
         screenshot("native-workspace")
         compose.onNodeWithTag("tab-Chat").performClick()
         compose.onNodeWithTag("composer").assertTextContains("切换页面也保留这份草稿")
@@ -763,6 +996,10 @@ class NativeUiTest {
         compose.onNodeWithTag("queue-more-0").performClick()
         compose.onNodeWithText("上移").assertIsNotEnabled()
         compose.onNodeWithText("下移").assertIsEnabled()
+        compose.waitUntil(5000) {
+            model.state.draftStatus == "已同步" && !model.state.composer.dirty &&
+                model.state.composer.content == "菜单项真实点击后草稿仍在"
+        }
         val downRect = screenRect(compose.onNodeWithText("下移"))
         gateway.mutations.clear()
         realTap(downRect)
@@ -820,6 +1057,8 @@ class NativeUiTest {
         compose.waitUntil(5000) { model.state.operation == "voice" }
         compose.onNodeWithTag("voice-progress").assertIsDisplayed()
         compose.onNodeWithTag("request-progress").assertDoesNotExist()
+        assertComposerFeedback("发送", "语音正在转写；完成后请确认文字再发送，不会自动发送。", sendEnabled = false,
+            statusText = "转写中 · 请稍候")
         // 布局尺寸核验：指示器直径来自布局约束（此处 22dp ≥ 18dp），不以单帧像素断言
         val metrics = compose.activity.resources.displayMetrics
         val node = compose.onNodeWithTag("voice-progress").fetchSemanticsNode()
@@ -838,6 +1077,247 @@ class NativeUiTest {
         compose.waitUntil(5000) { !model.state.busy }
         compose.onNodeWithTag("composer").assertTextContains("边转写边补充\n语音转写的内容")
         assertEquals(0, gateway.sends)
+    }
+
+    @Test fun reviewPathAndStatusFiltersAreLocalAndNoMatchesCanBeCleared() {
+        openReview()
+        val requestsBefore = gateway.requests.toList()
+        assertReviewMatchCount(13, 13)
+        val search = reviewNode("review-search")
+        search.performClick()
+        compose.waitUntil(5000) {
+            androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+        }
+        search.performTextInput(" DOCS/设计方案 ")
+        assertReviewQuery(" DOCS/设计方案 ")
+        dismissKeyboard()
+        assertReviewQuery(" DOCS/设计方案 ")
+        assertReviewMatchCount(1, 13)
+        reviewNode("review-filter-added").performClick().assertIsSelected()
+        assertReviewMatchCount(1, 13)
+        reviewNode("review-file:docs/$longFileName").assertIsDisplayed()
+
+        reviewNode("review-filter-modified").performClick().assertIsSelected()
+        assertReviewMatchCount(0, 13)
+        reviewNode("review-no-matches").assertIsDisplayed()
+        compose.onNodeWithText("没有匹配文件").assertIsDisplayed()
+        compose.onNodeWithTag("review-empty").assertDoesNotExist()
+        compose.onNodeWithTag("review-error").assertDoesNotExist()
+        reviewNode("review-clear-no-matches").performClick()
+        assertReviewQuery("")
+        reviewNode("review-filter-all").assertIsSelected()
+        assertReviewMatchCount(13, 13)
+
+        reviewNode("review-filter-added").performClick().assertIsSelected()
+        assertReviewMatchCount(2, 13)
+        reviewNode("review-clear-filters").performClick()
+        assertReviewMatchCount(13, 13)
+        compose.runOnIdle {
+            assertEquals("搜索、状态选择与清除只筛选已加载数据，不应新增任何 API 请求", requestsBefore, gateway.requests.toList())
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun reviewSearchRemainsVisibleWhileTypingWithDoubleFontScaleAndIme() {
+        openReview()
+        compose.runOnUiThread { enlargedWelcomeLayout = true }
+        compose.waitForIdle()
+        val search = reviewNode("review-search")
+        search.performClick()
+        compose.waitUntil(5000) {
+            androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+        }
+        compose.waitForIdle()
+        val requestsBefore = gateway.requests.toList()
+
+        fun assertSearchRemainsVisible() {
+            search.assertIsDisplayed().assertIsFocused()
+            val viewport = compose.onNodeWithTag("review-list").getUnclippedBoundsInRoot()
+            val bounds = search.getUnclippedBoundsInRoot()
+            assertTrue("输入期间搜索框不能跳回摘要后方或超出列表视口",
+                bounds.top >= viewport.top - 1.dp && bounds.bottom <= viewport.bottom + 1.dp)
+            assertTrue("2x 字体下搜索框不能横向溢出",
+                bounds.left >= viewport.left - 1.dp && bounds.right <= viewport.right + 1.dp)
+            val decor = compose.activity.window.decorView
+            val insets = checkNotNull(androidx.core.view.ViewCompat.getRootWindowInsets(decor))
+            val imeType = androidx.core.view.WindowInsetsCompat.Type.ime()
+            assertTrue("连续输入期间必须保持实际 IME 显示", insets.isVisible(imeType))
+            val imeHeight = insets.getInsets(imeType).bottom
+            assertTrue("该布局用例需要占位式 IME，不能以未弹出键盘代替", imeHeight > 0)
+            val windowLocation = IntArray(2)
+            decor.getLocationOnScreen(windowLocation)
+            val keyboardTop = windowLocation[1] + decor.height - imeHeight
+            assertTrue("搜索框被实际 IME 遮挡", screenRect(search).bottom <= keyboardTop)
+        }
+
+        assertSearchRemainsVisible()
+        var query = ""
+        for (character in "src/module") {
+            search.performTextInput(character.toString())
+            query += character
+            compose.waitForIdle()
+            search.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(query)))
+            assertSearchRemainsVisible()
+        }
+        screenshot("native-review-search-2x-ime")
+        compose.runOnIdle {
+            assertEquals("连续搜索只能本地筛选，不应新增 API 请求", requestsBefore, gateway.requests.toList())
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun reviewDiffReturnKeepsFiltersButScopeChangesResetThem() {
+        openReview()
+        val query = " SRC/ZZ-LAST "
+        val filePath = "src/zz-last-changed-file.kt"
+        reviewNode("review-search").performTextInput(query)
+        dismissKeyboard()
+        reviewNode("review-filter-modified").performClick().assertIsSelected()
+        assertReviewMatchCount(1, 13)
+        reviewNode("review-file:$filePath").performClick()
+        compose.waitUntil(10000) { model.state.page?.kind == "patch" && model.state.pageData != null && !model.state.pageLoading }
+        val patch = compose.onNodeWithTag("patch-horizontal-scroll").assertExists().performScrollTo().assertIsDisplayed()
+        patch.assertTextContains("diff --git a/src/zz-last-changed-file.kt", substring = true)
+        patch.assertTextContains("+    val added = true", substring = true)
+        val horizontalRange = patch.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
+        assertTrue("长 diff 必须提供实际横向滚动范围", horizontalRange.maxValue() > 0f)
+        val horizontalBefore = horizontalRange.value()
+        patch.performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        assertTrue("横向手势必须实际移动 diff，不能只声明滚动语义", horizontalRange.value() > horizontalBefore)
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.waitUntil(10000) { model.state.page?.kind == "review" && model.state.pageData != null && !model.state.pageLoading }
+        compose.waitForIdle()
+        compose.onNodeWithTag("review-file:$filePath").assertIsDisplayed()
+        assertReviewQuery(query)
+        reviewNode("review-filter-modified").assertIsSelected()
+        assertReviewMatchCount(1, 13)
+
+        reviewNode("choice-范围").performClick()
+        compose.onNodeWithTag("choice-option-staged").performClick()
+        compose.waitUntil(10000) {
+            model.state.page?.args?.text("scope") == "staged" && !model.state.pageLoading && model.state.pageData?.rows("files")?.isEmpty() == true
+        }
+        assertReviewQuery("")
+        reviewNode("review-filter-all").assertIsSelected()
+        assertReviewMatchCount(0, 0)
+        reviewNode("review-empty").assertIsDisplayed()
+        compose.onNodeWithTag("review-no-matches").assertDoesNotExist()
+
+        reviewNode("choice-范围").performClick()
+        compose.onNodeWithTag("choice-option-working").performClick()
+        compose.waitUntil(10000) {
+            model.state.page?.args?.text("scope") == "working" && !model.state.pageLoading && model.state.pageData?.rows("files")?.size == 13
+        }
+        assertReviewQuery("")
+        reviewNode("review-filter-all").assertIsSelected()
+        assertReviewMatchCount(13, 13)
+        compose.runOnIdle {
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+        }
+    }
+
+    @Test fun newChatDraftSurvivesThreeRapidWorkspaceRoundTrips() {
+        login()
+        compose.onNodeWithContentDescription("新建对话").performClick()
+        compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
+        val draft = "快速往返三次也不能丢失这份本机草稿"
+        compose.onNodeWithTag("composer").performTextInput(draft)
+        compose.onNodeWithTag("composer").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(draft)))
+        compose.runOnIdle {
+            assertEquals("往返前必须确认模型已经接收输入", draft, model.state.composer.content)
+            assertNull(model.state.selectedId)
+        }
+        dismissKeyboard()
+        val requestsBefore = gateway.requests.toList()
+
+        repeat(3) {
+            compose.onNodeWithTag("tab-Workspace").performClick()
+            compose.onNodeWithTag("workspace-back-to-chat").performClick()
+        }
+
+        compose.runOnIdle {
+            assertEquals(HomeTab.Chat, model.state.homeTab)
+            assertNull(model.state.selectedId)
+            assertEquals("三次快速往返后模型草稿必须完整保留", draft, model.state.composer.content)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+            assertEquals("无任务标签往返不得触发 API 请求", requestsBefore, gateway.requests.toList())
+        }
+        compose.onNodeWithTag("composer").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(draft)))
+    }
+
+    @Test fun workspaceWithoutTaskReturnsToDraftWithoutCreatingConversation() {
+        login()
+        compose.onNodeWithContentDescription("新建对话").performClick()
+        compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
+        val draft = "尚未创建任务时也要保留这份草稿"
+        val checkpoints = mutableListOf<String>()
+
+        fun assertDraftCheckpoint(stage: String, expectedTab: HomeTab) {
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val snapshot = model.state
+                val composer = snapshot.composer
+                val imeVisible = androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
+                checkpoints += "$stage: matches=${composer.content == draft}, length=${composer.content.length}, revision=${composer.revision}, " +
+                    "dirty=${composer.dirty}, tab=${snapshot.homeTab}, selectedId=${snapshot.selectedId}, page=${snapshot.page?.kind}, " +
+                    "busy=${snapshot.busy}, operation=${snapshot.operation}, draftStatus=${snapshot.draftStatus}, ime=$imeVisible, " +
+                    "requests=${gateway.requests.size}, sends=${gateway.sends}, creates=${gateway.creates}"
+                val trace = checkpoints.joinToString("\n")
+                assertEquals("$stage：模型草稿变化；此前检查点如下\n$trace", draft, composer.content)
+                assertEquals("$stage：导航落点不符\n$trace", expectedTab, snapshot.homeTab)
+                assertNull("$stage：意外选中或创建任务\n$trace", snapshot.selectedId)
+                assertEquals("$stage：意外发送\n$trace", 0, gateway.sends)
+                assertEquals("$stage：意外创建任务\n$trace", 0, gateway.creates)
+            }
+            if (expectedTab == HomeTab.Chat) {
+                try {
+                    compose.onNodeWithTag("composer").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(draft)))
+                } catch (reason: AssertionError) {
+                    throw AssertionError("$stage：模型草稿检查通过，但输入框显示不一致\n${checkpoints.joinToString("\n")}", reason)
+                }
+            }
+        }
+
+        compose.onNodeWithTag("composer").performTextInput(draft)
+        assertDraftCheckpoint("输入后", HomeTab.Chat)
+        dismissKeyboard()
+        assertDraftCheckpoint("hideIME后", HomeTab.Chat)
+        val requestsBefore = gateway.requests.toList()
+        val workspaceTab = compose.onNodeWithTag("tab-Workspace").assertContentDescriptionEquals("工作台").assertIsDisplayed()
+        checkpoints += "点击目标 tab-Workspace: ${screenRect(workspaceTab)}"
+        assertDraftCheckpoint("进入workspace前", HomeTab.Chat)
+        workspaceTab.performClick()
+        assertDraftCheckpoint("进入workspace后", HomeTab.Workspace)
+        compose.onNodeWithTag("workspace-no-task").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-task-tools").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-review").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-global-tools").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("workspace-directories").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("workspace-billing").performScrollTo().assertIsDisplayed()
+        assertDraftCheckpoint("workspace滚动后", HomeTab.Workspace)
+        val returnToChat = compose.onNodeWithTag("workspace-back-to-chat").performScrollTo().assertIsEnabled().assertTextContains("返回对话")
+        checkpoints += "点击目标 workspace-back-to-chat: ${screenRect(returnToChat)}"
+        assertDraftCheckpoint("点击返回前", HomeTab.Workspace)
+        returnToChat.performClick()
+        compose.waitForIdle()
+        assertDraftCheckpoint("回chat后", HomeTab.Chat)
+        compose.onNodeWithTag("composer").assertTextContains(draft)
+        compose.runOnIdle {
+            assertEquals(HomeTab.Chat, model.state.homeTab)
+            assertNull(model.state.selectedId)
+            assertEquals(draft, model.state.composer.content)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+            assertEquals(requestsBefore, gateway.requests.toList())
+        }
     }
 
     @Test fun reviewDistinguishesEmptyDiffFromReadFailure() {
@@ -1057,6 +1537,12 @@ class NativeUiTest {
         compose.waitUntil(5000) { model.state.selectedId == null && !model.state.busy }
         compose.onNodeWithTag("welcome-chat").assertIsDisplayed()
         compose.onNodeWithTag("composer").assertIsDisplayed()
+        val send = compose.onNodeWithTag("send")
+        send.assertIsDisplayed().assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
+        val sendBounds = send.getUnclippedBoundsInRoot()
+        val rootBounds = compose.onRoot().getUnclippedBoundsInRoot()
+        assertTrue("发送按钮必须完整处于当前窗口内", sendBounds.left >= rootBounds.left && sendBounds.right <= rootBounds.right &&
+            sendBounds.top >= rootBounds.top && sendBounds.bottom <= rootBounds.bottom)
         screenshot("native-new-chat")
         compose.onNodeWithTag("composer").performTextInput("从新对话发送")
         compose.onNodeWithTag("send").performClick()
