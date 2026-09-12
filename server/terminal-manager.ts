@@ -22,7 +22,7 @@ export class TerminalBuffer {
 }
 type Session = {
   id: string; userId: string; conversationId: string; worker: ChildProcess;
-  output: TerminalBuffer; touched: number; started: boolean; exited: boolean; exitCode: number | null; ready: Promise<void>; stopping?: Promise<void>;
+  output: TerminalBuffer; touched: number; started: boolean; exited: boolean; exitCode: number | null; ready: Promise<void>; stopping?: Promise<void>; readers: Set<() => void>;
 };
 export class TerminalManager {
   private readonly sessions = new Map<string, Session>();
@@ -32,7 +32,8 @@ export class TerminalManager {
     this.timer = setInterval(() => this.expire(), Math.min(idleMs, 60_000));
     this.timer.unref();
   }
-  async execute(context: TerminalContext, rawCommand: TerminalCommand): Promise<TerminalResult> {
+  async execute(context: TerminalContext, rawCommand: TerminalCommand, signal?: AbortSignal): Promise<TerminalResult> {
+    signal?.throwIfAborted();
     if (this.disposed) throw new TerminalError("终端服务已停止。", 503);
     const parsed = terminalCommand.safeParse(rawCommand);
     if (!parsed.success) throw new TerminalError("无效的终端参数。");
@@ -46,7 +47,11 @@ export class TerminalManager {
     const session = this.sessions.get(command.terminalId);
     if (!session || session.userId !== context.userId || session.conversationId !== context.conversationId) throw new TerminalError("终端已关闭或不存在。", 404);
     session.touched = Date.now();
-    if (command.action === "read") return { terminalId: session.id, ...session.output.read(command.after), exited: session.exited, exitCode: session.exitCode };
+    if (command.action === "read") {
+      if (!session.output.read(command.after).data && !session.exited && command.waitMs) await this.waitForOutput(session, command.waitMs, signal);
+      if (!this.sessions.has(session.id)) throw new TerminalError("终端已关闭或不存在。", 404);
+      return { terminalId: session.id, ...session.output.read(command.after), exited: session.exited, exitCode: session.exitCode };
+    }
     if (command.action === "close") { await this.remove(session); return { ok: true }; }
     if (session.exited || !session.worker.stdin?.writable) throw new TerminalError("终端进程已退出。", 409);
     if (session.worker.stdin.writableLength > 65536) throw new TerminalError("终端输入过快，请稍后重试。", 429);
@@ -54,9 +59,22 @@ export class TerminalManager {
     return { ok: true };
   }
   dispose(): void { this.disposed = true; clearInterval(this.timer); for (const session of this.sessions.values()) this.remove(session); }
+  private waitForOutput(session: Session, waitMs: number, signal?: AbortSignal): Promise<void> {
+    if (session.readers.size >= 8) return Promise.reject(new TerminalError("终端连接过多。", 429));
+    return new Promise((resolve, reject) => {
+      const finish = () => { clearTimeout(timer); session.readers.delete(finish); signal?.removeEventListener("abort", abort); resolve(); };
+      const abort = () => { clearTimeout(timer); session.readers.delete(finish); signal?.removeEventListener("abort", abort); reject(signal?.reason); };
+      const timer = setTimeout(finish, waitMs);
+      session.readers.add(finish);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+    });
+  }
+  private wakeReaders(session: Session): void { for (const wake of session.readers) wake(); }
   private expire(): void { for (const session of this.sessions.values()) if (session.started && Date.now() - session.touched > this.idleMs) this.remove(session); }
   private remove(session: Session): Promise<void> {
     this.sessions.delete(session.id);
+    this.wakeReaders(session);
     if (session.stopping) return session.stopping;
     if (!session.worker.pid || session.worker.exitCode !== null || session.worker.signalCode !== null) return Promise.resolve();
     session.stopping = new Promise((resolve) => {
@@ -79,7 +97,7 @@ export class TerminalManager {
       uid: context.uid, gid: context.gid, stdio: ["pipe", "pipe", "pipe"],
       env: { HOME: context.home, PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", SHELL: "/bin/bash" },
     });
-    const session: Session = { id: crypto.randomUUID(), userId: context.userId, conversationId: context.conversationId, worker, output: new TerminalBuffer(), touched: Date.now(), started: false, exited: false, exitCode: null, ready: Promise.resolve() };
+    const session: Session = { id: crypto.randomUUID(), userId: context.userId, conversationId: context.conversationId, worker, output: new TerminalBuffer(), touched: Date.now(), started: false, exited: false, exitCode: null, ready: Promise.resolve(), readers: new Set() };
     this.sessions.set(session.id, session);
     session.ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { reject(new TerminalError("终端启动超时。", 503)); this.remove(session); }, 10_000);
@@ -90,13 +108,13 @@ export class TerminalManager {
         try {
           const event = JSON.parse(line);
           if (event.type === "ready") { clearTimeout(timer); session.started = true; session.touched = Date.now(); resolve(); }
-          if (event.type === "data" && typeof event.data === "string") session.output.append(event.data);
-          if (event.type === "exit") { session.exited = true; session.exitCode = event.exitCode; }
+          if (event.type === "data" && typeof event.data === "string") { session.output.append(event.data); this.wakeReaders(session); }
+          if (event.type === "exit") { session.exited = true; session.exitCode = event.exitCode; this.wakeReaders(session); }
           if (event.type === "error") { clearTimeout(timer); reject(new TerminalError(String(event.error), 503)); this.remove(session); }
         } catch {}
       });
       worker.once("error", () => { clearTimeout(timer); reject(new TerminalError("无法以目标用户启动终端。", 503)); this.remove(session); });
-      worker.once("exit", (code) => { clearTimeout(timer); session.exited = true; session.exitCode ??= code; output.close(); reject(new TerminalError("终端启动失败。", 503)); });
+      worker.once("exit", (code) => { clearTimeout(timer); session.exited = true; session.exitCode ??= code; this.wakeReaders(session); output.close(); reject(new TerminalError("终端启动失败。", 503)); });
       worker.stdin!.write(`${JSON.stringify({ ...context, cols: size.cols, rows: size.rows, action: "start" })}\n`);
     });
     try { await session.ready; return { terminalId: session.id }; }

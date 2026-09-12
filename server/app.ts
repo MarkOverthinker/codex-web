@@ -2154,7 +2154,7 @@ export function createApp(overrides: AppOverrides = {}) {
         home: host?.home ?? storageFor(userId).root, uid: host?.uid ?? -1, gid: host?.gid ?? -1,
         ...(!host || !conversation.working_dir ? { restrictRoot: tenantPaths(config.tenantRoot, userId).root } : {}) };
     },
-    execute: (context, command) => terminalClient ? terminalClient.execute(context.userId, context.conversationId, command) : terminals.execute(context, command),
+    execute: (context, command, signal) => terminalClient ? terminalClient.execute(context.userId, context.conversationId, command, signal) : terminals.execute(context, command, signal),
   });
 
   api.get("/conversations/:id/review", async (req, res) => {
