@@ -9,5 +9,13 @@ export type GitReview = {
   files: ReviewFile[];
   patch?: string;
   truncated?: boolean;
+  head?: string | null;
+  upstream?: string | null;
+  remotes?: string[];
+  ahead?: number | null;
+  behind?: number | null;
+  stagedFiles?: string[];
+  conflictedFiles?: string[];
+  preview?: { content: string | null; revision: string; truncated: boolean; reason?: string };
 };
 export type GitReviewRequest = { workingDir: string; restrictRoot: boolean; scope: ReviewScope; base?: string; file?: string };

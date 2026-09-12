@@ -1,16 +1,11 @@
 import { Fragment, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import rehypeHighlight from "rehype-highlight";
+import { RenderedPreview } from "./source-preview";
 import {
   ChevronDown, ChevronRight, Download, File as FileIcon, FileImage, FileText, Folder, FolderOpen, FolderTree,
   LoaderCircle, RefreshCw, TriangleAlert, X,
 } from "lucide-react";
 import { api, type FileTreeEntry, type FileTreeListing, type FileTreePreview, type FileTreeRoot } from "./api";
 import { CopyPathButton } from "./copy-path";
-import { normalizeMathDelimiters } from "./markdown-math";
 import { isTextPreviewMime } from "./text-preview";
 
 const FILE_TREE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
@@ -46,12 +41,13 @@ function entryIcon(entry: FileTreeEntry) {
   return <FileIcon size={15} />;
 }
 
-export function FileExplorerPane({ conversationId, width, onResizeStart, onResizeKeyDown, onClose }: {
+export function FileExplorerPane({ conversationId, width, onResizeStart, onResizeKeyDown, onClose, embedded = false }: {
   conversationId: string;
   width: number;
   onResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
   onResizeKeyDown: (event: KeyboardEvent) => void;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const [roots, setRoots] = useState<FileTreeRoot[]>([]);
   const [listings, setListings] = useState<Record<string, FileTreeListing>>({});
@@ -201,8 +197,8 @@ export function FileExplorerPane({ conversationId, width, onResizeStart, onResiz
   const selectedSource = selectedFile ? api.fileTreeFileUrl(conversationId, selectedFile.rootId, selectedFile.entry.path) : "";
   const selectedDownload = selectedFile ? api.fileTreeFileUrl(conversationId, selectedFile.rootId, selectedFile.entry.path, true) : "";
 
-  return <aside className="file-explorer-pane" style={{ width }} aria-label="文件浏览器">
-    <div
+  return <aside className={`file-explorer-pane ${embedded ? "embedded" : ""}`} style={embedded ? undefined : { width }} aria-label="文件浏览器">
+    {!embedded && <div
       className="file-explorer-resizer"
       role="separator"
       aria-orientation="vertical"
@@ -213,12 +209,12 @@ export function FileExplorerPane({ conversationId, width, onResizeStart, onResiz
       tabIndex={0}
       onPointerDown={onResizeStart}
       onKeyDown={onResizeKeyDown}
-    />
+    />}
     <header className="file-explorer-header">
       <div><FolderTree size={18} /><span><strong>文件</strong><small>当前会话可访问的目录</small></span></div>
       <span className="file-explorer-actions">
         <button type="button" className="icon-button" aria-label="刷新文件树" title="刷新" onClick={() => setReloadVersion((value) => value + 1)} disabled={loading}><RefreshCw size={16} /></button>
-        <button type="button" className="icon-button" aria-label="关闭文件浏览器" title="关闭" onClick={onClose}><X size={18} /></button>
+        {!embedded && <button type="button" className="icon-button" aria-label="关闭文件浏览器" title="关闭" onClick={onClose}><X size={18} /></button>}
       </span>
     </header>
     {error && <div className="file-explorer-error" role="alert"><TriangleAlert size={15} />{error}</div>}
@@ -251,8 +247,8 @@ export function FileExplorerPane({ conversationId, width, onResizeStart, onResiz
           <div className={`file-explorer-preview-body ${selectedKind === "image" || selectedKind === "pdf" ? "fit" : ""}`}>
             {selectedKind === "image" && <img className="file-explorer-preview-image" src={selectedSource} alt={selectedFile.entry.name} />}
             {selectedKind === "pdf" && <iframe className="file-explorer-preview-frame" src={selectedSource} title={selectedFile.entry.name} />}
-            {selectedKind === "markdown" && (previewError ? <FileExplorerPreviewError error={previewError} /> : preview === null ? <FileExplorerPreviewLoading /> : <div className="markdown file-explorer-preview-markdown"><ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeHighlight]}>{normalizeMathDelimiters(preview.content)}</ReactMarkdown></div>)}
-            {selectedKind === "text" && (previewError ? <FileExplorerPreviewError error={previewError} /> : preview === null ? <FileExplorerPreviewLoading /> : <pre className="file-explorer-preview-plain">{preview.content}</pre>)}
+            {selectedKind === "markdown" && (previewError ? <FileExplorerPreviewError error={previewError} /> : preview === null ? <FileExplorerPreviewLoading /> : <RenderedPreview content={preview.content} filename={selectedFile.entry.name} />)}
+            {selectedKind === "text" && (previewError ? <FileExplorerPreviewError error={previewError} /> : preview === null ? <FileExplorerPreviewLoading /> : <RenderedPreview content={preview.content} filename={selectedFile.entry.name} />)}
             {!selectedKind && <FileExplorerPreviewError error={selectedFile.entry.previewable ? "该文件格式暂不支持页内预览。" : "文件过大或格式不支持页内预览，请下载后查看。"} />}
           </div>
         </>}

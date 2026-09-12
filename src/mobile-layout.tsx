@@ -113,9 +113,9 @@ export function installMobileBack() {
     return result;
   };
   const back = () => {
-    const overlays = [...document.querySelectorAll<HTMLElement>('[role="dialog"], .file-preview-pane, .side-chat-pane, .file-explorer-pane, .code-snippet-pane')].filter(visible).reverse().sort((left, right) => layer(right) - layer(left));
+    const overlays = [...document.querySelectorAll<HTMLElement>('[role="dialog"], .file-preview-pane, .side-chat-pane, .file-explorer-pane:not(.embedded), .repository-pane, .code-snippet-pane')].filter(visible).reverse().sort((left, right) => layer(right) - layer(left));
     for (const overlay of overlays) {
-      const expanded = [...overlay.querySelectorAll<HTMLButtonElement>('button[aria-expanded="true"]')].filter(visible).at(-1);
+      const expanded = overlay.matches(".repository-pane") ? undefined : [...overlay.querySelectorAll<HTMLButtonElement>('button[aria-expanded="true"]')].filter(visible).at(-1);
       if (expanded) { expanded.click(); return true; }
       const close = [...overlay.querySelectorAll<HTMLButtonElement>("button")].find((button) => visible(button) && /^(关闭|返回)/.test(button.getAttribute("aria-label") ?? button.title));
       if (close) { close.click(); return true; }

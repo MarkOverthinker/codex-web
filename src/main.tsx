@@ -7,6 +7,7 @@ import { applyThemePreference, readStoredThemePreference } from "./theme";
 import { installMobileBack } from "./mobile-layout";
 import "./styles.css";
 import "./mobile.css";
+import "./repository.css";
 
 installClientErrorReporting();
 installMobileBack();

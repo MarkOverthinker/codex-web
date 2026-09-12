@@ -26,6 +26,12 @@ export async function readGitReview(request: GitReviewRequest): Promise<GitRevie
   if (request.restrictRoot && root !== cwd && !root.startsWith(`${cwd}${path.sep}`)) throw new Error("独立工作区不能查看父目录仓库，请在工作区内初始化 Git。");
   cwd = root;
   const branch = (await git(["symbolic-ref", "--short", "-q", "HEAD"]).catch(() => "HEAD (detached)")).trim();
+  const head = (await git(["rev-parse", "--verify", "HEAD"]).catch(() => "")).trim() || null;
+  const upstream = (await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => "")).trim() || null;
+  const divergence = upstream ? (await git(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]).catch(() => "")).trim().split(/\s+/).map(Number) : [];
+  const remotes = (await git(["remote"])).split("\n").filter(Boolean);
+  const stagedFiles = (await git(["diff", "--cached", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--"])).split("\0").filter(Boolean);
+  const conflictedFiles = [...new Set((await git(["diff", "--name-only", "--diff-filter=U", "-z", "--"])).split("\0").filter(Boolean))];
   const bases = (await git(["for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/"])).trim().split("\n").filter(Boolean).filter((ref) => !ref.endsWith("/HEAD"));
   let base: string | null = request.base ?? ["refs/remotes/origin/main", "refs/heads/main", "refs/remotes/origin/master", "refs/heads/master"].find((ref) => bases.includes(ref) && ref !== `refs/heads/${branch}`) ?? bases.find((ref) => ref !== `refs/heads/${branch}`) ?? null;
   let comparison = "HEAD 与工作区（包含已暂存和未暂存）";
@@ -60,10 +66,13 @@ export async function readGitReview(request: GitReviewRequest): Promise<GitRevie
       files.push({ path: filename, status: "?", additions: null, deletions: null });
     }
   }
-  const result: GitReview = { root, branch, bases, base, comparison, files };
+  const result: GitReview = { root, branch, bases, base, comparison, files, head, upstream, remotes, stagedFiles, conflictedFiles,
+    ahead: divergence.length === 2 ? divergence[0] : null, behind: divergence.length === 2 ? divergence[1] : null };
   if (request.file !== undefined) {
     const file = files.find((entry) => entry.path === request.file);
     if (!file) throw new Error("该文件已不在当前变更列表中，请刷新。");
+    const previewRevision = request.scope === "working" ? "工作区当前文件" : request.scope === "staged" ? "暂存区版本" : "HEAD 已提交版本";
+    result.preview = { content: null, revision: previewRevision, truncated: false };
     if (file.status === "?") {
       const target = path.resolve(root, file.path);
       const real = await fs.realpath(target);
@@ -77,6 +86,8 @@ export async function readGitReview(request: GitReviewRequest): Promise<GitRevie
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
           result.truncated = bytesRead > MAX_PATCH_BYTES;
           const content = buffer.subarray(0, Math.min(bytesRead, MAX_PATCH_BYTES));
+          result.preview = { content: content.includes(0) ? null : content.toString("utf8"), revision: previewRevision, truncated: result.truncated,
+            ...(content.includes(0) ? { reason: "二进制文件，请在全部文件中预览或下载。" } : {}) };
           result.patch = content.includes(0) ? "二进制文件，不提供文本 diff。" : `@@ 新文件 @@\n${content.toString("utf8").split("\n").map((line) => `+${line}`).join("\n")}`;
         } finally { await handle.close(); }
       }
@@ -84,6 +95,33 @@ export async function readGitReview(request: GitReviewRequest): Promise<GitRevie
       const patch = await git([...diff, "--patch", "--", file.path]);
       result.truncated = Buffer.byteLength(patch) > MAX_PATCH_BYTES;
       result.patch = Buffer.from(patch).subarray(0, MAX_PATCH_BYTES).toString("utf8");
+      try {
+        let content: Buffer;
+        let truncated = false;
+        if (request.scope === "working") {
+          const target = path.resolve(root, file.path);
+          const real = await fs.realpath(target);
+          if (!real.startsWith(`${root}${path.sep}`)) throw new Error("不能预览指向仓库外的文件。");
+          const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          try {
+            if (!(await handle.stat()).isFile()) throw new Error("符号链接或特殊文件，不提供内容预览。");
+            const buffer = Buffer.alloc(MAX_PATCH_BYTES + 1);
+            const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+            truncated = bytesRead > MAX_PATCH_BYTES;
+            content = buffer.subarray(0, Math.min(bytesRead, MAX_PATCH_BYTES));
+          } finally { await handle.close(); }
+        } else {
+          const object = (await git(["rev-parse", "--verify", request.scope === "staged" ? `:${file.path}` : `HEAD:${file.path}`])).trim();
+          if (!/^[a-f0-9]{40,64}$/.test(object)) throw new Error("此版本无可预览的文件。");
+          const size = Number((await git(["cat-file", "-s", object])).trim());
+          if (size > MAX_PATCH_BYTES) throw new Error("此版本文件超过 256 KiB，请使用差异视图。");
+          content = Buffer.from(await git(["cat-file", "blob", object]));
+        }
+        result.preview = { content: content.includes(0) ? null : content.toString("utf8"), revision: previewRevision, truncated,
+          ...(content.includes(0) ? { reason: "二进制文件，请在全部文件中预览或下载。" } : {}) };
+      } catch {
+        result.preview.reason = file.status === "D" ? "该文件已在此版本中删除，可在差异视图查看原内容。" : "该文件过大、已移动或属于符号链接/特殊文件，无法提供完整预览。";
+      }
     }
   }
   return result;

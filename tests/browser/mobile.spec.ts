@@ -34,9 +34,9 @@ for (const width of [360, 390, 430]) {
     for (const name of ["打开文件浏览器", "查看 Git 分支变更", "查看 API 计费统计", "目录"]) await expect(tools.getByRole("button", { name, exact: true })).toBeVisible();
     await tools.getByRole("button", { name: "查看 Git 分支变更" }).click();
     await expect(tools).toBeHidden();
-    await expect(page.locator(".review-dialog")).toBeVisible();
+    await expect(page.locator(".repository-pane")).toBeVisible();
     await page.evaluate(() => (window as unknown as { codexMobileBack: () => boolean }).codexMobileBack());
-    await expect(page.locator(".review-dialog")).toBeHidden();
+    await expect(page.locator(".repository-pane")).toBeHidden();
     await expect(page.locator(".shell")).not.toHaveAttribute("inert");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(errors).toEqual([]);

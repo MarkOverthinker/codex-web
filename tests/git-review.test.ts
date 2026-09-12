@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { readGitReview } from "../server/git-review.js";
 import { runGitReviewWorker } from "../server/git-review-client.js";
-import { diffLines } from "../src/review-panel.js";
+import { diffLines } from "../src/repository-model.js";
 
 function fixture(context: { after(callback: () => void): void }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-review-"));
@@ -90,7 +90,42 @@ test("compiled review worker returns structured results", async (context) => {
 
 test("diff lines have independent old and new line numbers", () => {
   const lines = diffLines("--- a/file\n+++ b/file\n@@ -2,2 +4,2 @@\n keep\n-old\n+new");
-  assert.equal(lines[1].kind, "context");
+  assert.equal(lines[1].kind, "meta");
   assert.deepEqual(lines.slice(3).map((line) => [line.old, line.next]), [[2, 4], [3, null], [null, 5]]);
   assert.equal(diffLines("@@ 新文件 @@\n+new")[1].kind, "add");
+});
+
+test("environment reports upstream divergence and staged/conflict metadata without fetching", async (context) => {
+  const { git, write, request } = fixture(context);
+  write("file.md", "# First\n"); git("add", "."); git("commit", "-m", "first");
+  git("remote", "add", "origin", "https://credential:secret@example.invalid/private.git");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  git("branch", "--set-upstream-to=origin/main", "main");
+  write("file.md", "# Second\n"); git("add", "."); git("commit", "-m", "second");
+  write("file.md", "# Staged\n"); git("add", ".");
+  const result = await readGitReview(request);
+  assert.equal(result.upstream, "origin/main");
+  assert.equal(result.ahead, 1);
+  assert.equal(result.behind, 0);
+  assert.deepEqual(result.remotes, ["origin"]);
+  assert.deepEqual(result.stagedFiles, ["file.md"]);
+  assert.deepEqual(result.conflictedFiles, []);
+  assert.equal(result.head, git("rev-parse", "HEAD").trim());
+  assert.ok(!JSON.stringify(result).includes("credential"));
+});
+
+test("preview content follows working, staged and HEAD versions instead of conflating them", async (context) => {
+  const { root, git, write, request } = fixture(context);
+  write("README.md", "# Base\n"); git("add", "."); git("commit", "-m", "base");
+  git("branch", "base");
+  write("README.md", "# Committed\n"); git("add", "."); git("commit", "-m", "head");
+  write("README.md", "# Staged\n"); git("add", ".");
+  write("README.md", "# Working\n");
+  assert.equal((await readGitReview({ ...request, file: "README.md" })).preview?.content, "# Working\n");
+  assert.equal((await readGitReview({ ...request, scope: "staged", file: "README.md" })).preview?.content, "# Staged\n");
+  assert.equal((await readGitReview({ ...request, scope: "branch", base: "refs/heads/base", file: "README.md" })).preview?.content, "# Committed\n");
+  fs.unlinkSync(path.join(root, "README.md"));
+  assert.equal((await readGitReview({ ...request, file: "README.md" })).preview?.content, null);
+  fs.symlinkSync("/etc/passwd", path.join(root, "README.md"));
+  assert.equal((await readGitReview({ ...request, file: "README.md" })).preview?.content, null);
 });
