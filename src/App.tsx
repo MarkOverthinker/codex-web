@@ -44,7 +44,7 @@ import { SideChatPane, type SideChatForkRequest, type SideChatReferenceRequest }
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
 import type { RepositoryTab } from "./repository-model";
-import { TerminalWindow } from "./terminal-pane";
+import { TerminalDock } from "./terminal-pane";
 import { RepositoryPane, ReviewButton } from "./review-panel";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
@@ -3131,6 +3131,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <PathBrowserDialog request={pathBrowser} onClose={() => setPathBrowser(null)} />
 
+    <div className="workspace-stack">
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="desktop-header"><div className="desktop-header-leading"><button type="button" className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} onClick={toggleDesktopSidebar}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></div></header>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开任务列表" aria-controls="primary-sidebar" aria-expanded={sidebarOpen}><Menu size={22} /></button><div className="mobile-title"><strong>{currentDetail?.conversation.title ?? "Codex Web"}</strong><small>{sending ? "任务执行中 · 可继续排队" : "你的 AI 工作台"}</small></div><button type="button" className="icon-button" onClick={() => void newConversation()} aria-label="新建任务"><Plus size={22} /></button><div id="mobile-chat-tools" /></header>
@@ -3148,6 +3149,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
+    {terminalOpen && currentDetail && <TerminalDock key={currentDetail.conversation.id} conversationId={currentDetail.conversation.id} onClose={() => setTerminalOpen(false)} />}
+    </div>
     {sideChatOpen && sideChatCurrentConversation && <SideChatPane
       voiceModels={session.voiceModels ?? []}
       voicePreferenceKey={session.username ?? ""}
@@ -3167,7 +3170,6 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onResizeStart={(event) => beginPaneResize(event, sideChatWidth, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX, "grow-left", setSideChatWidth, (width) => commitPaneWidth(SIDE_CHAT_WIDTH_KEY, width))}
       onResizeKeyDown={(event) => handlePaneResizerKey(event, "side-chat")}
     />}
-    {terminalOpen && currentDetail && <TerminalWindow key={currentDetail.conversation.id} conversationId={currentDetail.conversation.id} onClose={() => setTerminalOpen(false)} />}
     {fileExplorerOpen && currentDetail && <RepositoryPane
       key={`${currentDetail.conversation.id}:${currentDetail.conversation.working_dir}`}
       tab={repositoryTab}
