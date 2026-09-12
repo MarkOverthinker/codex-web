@@ -44,7 +44,7 @@ import { SideChatPane, type SideChatForkRequest, type SideChatReferenceRequest }
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
 import type { RepositoryTab } from "./repository-model";
-import { TerminalDock } from "./terminal-pane";
+import { TerminalSidebar } from "./terminal-pane";
 import { RepositoryPane, ReviewButton } from "./review-panel";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
@@ -71,6 +71,10 @@ const PREVIEW_WIDTH_MAX = 960;
 const SIDE_CHAT_WIDTH_DEFAULT = 410;
 const SIDE_CHAT_WIDTH_MIN = 320;
 const SIDE_CHAT_WIDTH_MAX = 720;
+const TERMINAL_WIDTH_KEY = "codex-web:terminal-width";
+const TERMINAL_WIDTH_DEFAULT = 520;
+const TERMINAL_WIDTH_MIN = 320;
+const TERMINAL_WIDTH_MAX = 960;
 const FILE_EXPLORER_WIDTH_DEFAULT = 820;
 const FILE_EXPLORER_WIDTH_MIN = 340;
 const FILE_EXPLORER_WIDTH_MAX = 1120;
@@ -522,6 +526,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [sidebarWidth, setSidebarWidth] = useState(() => readPaneWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX));
   const [previewWidth, setPreviewWidth] = useState(() => readPaneWidth(PREVIEW_WIDTH_KEY, defaultPreviewWidth(), PREVIEW_WIDTH_MIN, PREVIEW_WIDTH_MAX));
   const [sideChatWidth, setSideChatWidth] = useState(() => readPaneWidth(SIDE_CHAT_WIDTH_KEY, SIDE_CHAT_WIDTH_DEFAULT, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX));
+  const [terminalWidth, setTerminalWidth] = useState(() => readPaneWidth(TERMINAL_WIDTH_KEY, TERMINAL_WIDTH_DEFAULT, TERMINAL_WIDTH_MIN, TERMINAL_WIDTH_MAX));
   const [fileExplorerWidth, setFileExplorerWidth] = useState(() => readPaneWidth(FILE_EXPLORER_WIDTH_KEY, FILE_EXPLORER_WIDTH_DEFAULT, FILE_EXPLORER_WIDTH_MIN, FILE_EXPLORER_WIDTH_MAX));
   const [manualWorkingDir, setManualWorkingDir] = useState("");
   const [favoritePathInput, setFavoritePathInput] = useState("");
@@ -603,16 +608,22 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setPreviewFile(null);
     setSnippetPreview(null);
     setFileExplorerOpen(false);
+    setTerminalOpen(false);
     setSideChatOpen((open) => !open);
   }, []);
 
   const toggleFileExplorer = useCallback((tab: RepositoryTab | "terminal" = "files") => {
-    if (tab === "terminal") { setTerminalOpen(true); return; }
     setPreviewFile(null);
     setSnippetPreview(null);
     setSideChatOpen(false);
     setSideChatReferenceRequest(null);
     setSideChatForkRequest(null);
+    if (tab === "terminal") {
+      setFileExplorerOpen(false);
+      setTerminalOpen(true);
+      return;
+    }
+    setTerminalOpen(false);
     setRepositoryTab(tab);
     setFileExplorerOpen(true);
   }, []);
@@ -624,6 +635,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setPreviewFile(null);
     setSnippetPreview(null);
     setFileExplorerOpen(false);
+    setTerminalOpen(false);
     setSideChatOpen(true);
     sideChatReferenceSequenceRef.current += 1;
     setSideChatReferenceRequest({ id: sideChatReferenceSequenceRef.current, sourceConversation, sourceMessageId: messageId, excerpt });
@@ -635,19 +647,21 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setPreviewFile(null);
     setSnippetPreview(null);
     setFileExplorerOpen(false);
+    setTerminalOpen(false);
     setSideChatOpen(true);
     setSideChatReferenceRequest(null);
     sideChatForkSequenceRef.current += 1;
     setSideChatForkRequest({ id: sideChatForkSequenceRef.current, sourceConversation, sourceMessageId: messageId });
   }, []);
 
-  const openFilePreview = useCallback((file: WorkFile) => { setFileExplorerOpen(false); setSideChatOpen(false); setPreviewFile(file); }, []);
+  const openFilePreview = useCallback((file: WorkFile) => { setFileExplorerOpen(false); setSideChatOpen(false); setTerminalOpen(false); setPreviewFile(file); }, []);
   const closeFilePreview = useCallback(() => setPreviewFile(null), []);
   const openCodeSnippet = useCallback((target: FileLineRef) => {
     const conversation = detailRef.current;
     if (!conversation) return;
     setFileExplorerOpen(false);
     setSideChatOpen(false);
+    setTerminalOpen(false);
     setPreviewFile(null);
     setSnippetPreview({ conversationId: conversation.conversation.id, path: target.path, line: target.line });
   }, []);
@@ -2161,13 +2175,14 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     />;
   }
 
-  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview" | "side-chat" | "file-explorer") {
+  function handlePaneResizerKey(event: KeyboardEvent, kind: "sidebar" | "preview" | "side-chat" | "terminal" | "file-explorer") {
     const isSidebar = kind === "sidebar";
     const isSideChat = kind === "side-chat";
+    const isTerminal = kind === "terminal";
     const isFileExplorer = kind === "file-explorer";
-    const min = isSidebar ? SIDEBAR_WIDTH_MIN : isSideChat ? SIDE_CHAT_WIDTH_MIN : isFileExplorer ? FILE_EXPLORER_WIDTH_MIN : PREVIEW_WIDTH_MIN;
-    const max = isSidebar ? SIDEBAR_WIDTH_MAX : isSideChat ? SIDE_CHAT_WIDTH_MAX : isFileExplorer ? FILE_EXPLORER_WIDTH_MAX : PREVIEW_WIDTH_MAX;
-    const current = isSidebar ? sidebarWidth : isSideChat ? sideChatWidth : isFileExplorer ? fileExplorerWidth : previewWidth;
+    const min = isSidebar ? SIDEBAR_WIDTH_MIN : isSideChat ? SIDE_CHAT_WIDTH_MIN : isTerminal ? TERMINAL_WIDTH_MIN : isFileExplorer ? FILE_EXPLORER_WIDTH_MIN : PREVIEW_WIDTH_MIN;
+    const max = isSidebar ? SIDEBAR_WIDTH_MAX : isSideChat ? SIDE_CHAT_WIDTH_MAX : isTerminal ? TERMINAL_WIDTH_MAX : isFileExplorer ? FILE_EXPLORER_WIDTH_MAX : PREVIEW_WIDTH_MAX;
+    const current = isSidebar ? sidebarWidth : isSideChat ? sideChatWidth : isTerminal ? terminalWidth : isFileExplorer ? fileExplorerWidth : previewWidth;
     const step = event.shiftKey ? 40 : 16;
     let next: number | null = null;
     if (event.key === "ArrowLeft") next = isSidebar ? current - step : current + step;
@@ -2179,9 +2194,10 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const clamped = clampPaneWidth(next, min, max);
     if (isSidebar) setSidebarWidth(clamped);
     else if (isSideChat) setSideChatWidth(clamped);
+    else if (isTerminal) setTerminalWidth(clamped);
     else if (isFileExplorer) setFileExplorerWidth(clamped);
     else setPreviewWidth(clamped);
-    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : isSideChat ? SIDE_CHAT_WIDTH_KEY : isFileExplorer ? FILE_EXPLORER_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
+    commitPaneWidth(isSidebar ? SIDEBAR_WIDTH_KEY : isSideChat ? SIDE_CHAT_WIDTH_KEY : isTerminal ? TERMINAL_WIDTH_KEY : isFileExplorer ? FILE_EXPLORER_WIDTH_KEY : PREVIEW_WIDTH_KEY, clamped);
   }
 
   function renderCategoryView(category: TaskListCategoryView, style?: CSSProperties) {
@@ -3131,7 +3147,6 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
 
     <PathBrowserDialog request={pathBrowser} onClose={() => setPathBrowser(null)} />
 
-    <div className="workspace-stack">
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
       <header className="desktop-header"><div className="desktop-header-leading"><button type="button" className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} onClick={toggleDesktopSidebar}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></div></header>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开任务列表" aria-controls="primary-sidebar" aria-expanded={sidebarOpen}><Menu size={22} /></button><div className="mobile-title"><strong>{currentDetail?.conversation.title ?? "Codex Web"}</strong><small>{sending ? "任务执行中 · 可继续排队" : "你的 AI 工作台"}</small></div><button type="button" className="icon-button" onClick={() => void newConversation()} aria-label="新建任务"><Plus size={22} /></button><div id="mobile-chat-tools" /></header>
@@ -3149,8 +3164,16 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       {agentOptions && agentOptions.codexConfigured === false && <div className="codex-config-banner"><TriangleAlert size={15} /><span>{agentOptions.codexConfigHint || "你的 Codex 尚未配置，请先完成 codex 登录配置。"}</span></div>}
       {(!selectedId || (currentDetail && !currentDetail.conversation.archived_at)) && composerElement}
     </main>
-    {terminalOpen && currentDetail && <TerminalDock key={currentDetail.conversation.id} conversationId={currentDetail.conversation.id} onClose={() => setTerminalOpen(false)} />}
-    </div>
+    {terminalOpen && currentDetail && <TerminalSidebar
+      key={currentDetail.conversation.id}
+      conversationId={currentDetail.conversation.id}
+      width={terminalWidth}
+      widthMin={TERMINAL_WIDTH_MIN}
+      widthMax={TERMINAL_WIDTH_MAX}
+      onResizeStart={(event) => beginPaneResize(event, terminalWidth, TERMINAL_WIDTH_MIN, TERMINAL_WIDTH_MAX, "grow-left", setTerminalWidth, (width) => commitPaneWidth(TERMINAL_WIDTH_KEY, width))}
+      onResizeKeyDown={(event) => handlePaneResizerKey(event, "terminal")}
+      onClose={() => setTerminalOpen(false)}
+    />}
     {sideChatOpen && sideChatCurrentConversation && <SideChatPane
       voiceModels={session.voiceModels ?? []}
       voicePreferenceKey={session.username ?? ""}
