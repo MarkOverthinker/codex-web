@@ -5,6 +5,9 @@ import { runGitReviewWorker } from "./git-review-client.js";
 import { WEB_IDENTITY, tenantIdentityForUser } from "./tenant-identities.js";
 import type { SupervisorToWebMessage, TenantWorkerEvent, TenantWorkerInput, WebToSupervisorMessage } from "./tenant-worker-protocol.js";
 
+import { TerminalManager, TerminalError } from "./terminal-manager.js";
+
+const terminals = new TerminalManager();
 const projectRoot = process.cwd();
 const workers = new Map<string, ChildProcess>();
 const cancellationTimers = new Map<string, NodeJS.Timeout[]>();
@@ -20,6 +23,18 @@ const web = spawn(process.execPath, [path.join(projectRoot, "dist-server", "serv
 
 web.on("message", (message: WebToSupervisorMessage) => {
   if (!message || typeof message !== "object") return;
+  if (message.kind === "terminal") {
+    if (stopping) return sendToWeb({ kind: "terminal_result", requestId: message.requestId, error: "终端服务正在停止。", status: 503 });
+    const identity = tenantIdentityForUser(message.userId);
+    if (!identity || identity.uid === WEB_IDENTITY.uid || !/^[0-9a-f-]{36}$/i.test(message.conversationId)) return sendToWeb({ kind: "terminal_result", requestId: message.requestId, error: "无效的租户终端身份。", status: 403 });
+    const home = path.resolve(process.env.TENANT_ROOT ?? path.join(projectRoot, "tenants"), identity.userId);
+    const cwd = path.join(home, "conversations", message.conversationId);
+    void terminals.execute({ userId: message.userId, conversationId: message.conversationId, uid: identity.uid, gid: identity.gid, home, cwd, restrictRoot: home }, message.command).then(
+      (result) => sendToWeb({ kind: "terminal_result", requestId: message.requestId, result }),
+      (error: unknown) => sendToWeb({ kind: "terminal_result", requestId: message.requestId, error: error instanceof Error ? error.message : "终端不可用。", status: error instanceof TerminalError ? error.status : 503 }),
+    );
+    return;
+  }
   if (message.kind === "git_review") {
     const identity = tenantIdentityForUser(message.userId);
     if (!identity) return sendToWeb({ kind: "git_review_result", requestId: message.requestId, error: "该用户没有配置 Unix 身份。" });
@@ -153,6 +168,7 @@ function sendToWeb(message: SupervisorToWebMessage): void {
 
 function stopAll(signal: NodeJS.Signals): void {
   stopping = true;
+  terminals.dispose();
   if (!web.killed) web.kill(signal);
   for (const [jobId, worker] of workers) signalWorkerTree(jobId, worker, signal);
 }

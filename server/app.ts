@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { TerminalManager, TerminalError } from "./terminal-manager.js";
+import { TerminalClient } from "./terminal-client.js";
+import { registerTerminalRoutes } from "./terminal-routes.js";
 import { requestIsolatedGitReview, runGitReviewWorker } from "./git-review-client.js";
 import type { GitReviewRequest } from "../src/git-review.js";
 import fs from "node:fs";
@@ -138,6 +141,8 @@ export function createApp(overrides: AppOverrides = {}) {
   migrateExistingOutputFiles(config, db);
   migrateUploadFileMimes(db);
   const subscribers = new Map<string, Set<Response>>();
+  const terminals = new TerminalManager();
+  const terminalClient = config.tenantWorkerIsolation ? new TerminalClient() : null;
 
   function optionsForUser(userId: string): AgentOptions {
     return db.getProviderManagementEnabled(userId)
@@ -2130,6 +2135,28 @@ export function createApp(overrides: AppOverrides = {}) {
     res.status(201).json({ conversation, agentSelection });
   });
 
+  async function closeTaskTerminal(userId: string, conversationId: string): Promise<void> {
+    if (terminalClient) await terminalClient.execute(userId, conversationId, { action: "close-task" });
+    else await terminals.execute({ userId, conversationId, cwd: "", home: "", uid: -1, gid: -1 }, { action: "close-task" });
+  }
+
+  registerTerminalRoutes(api, {
+    exists: (userId, conversationId) => !deletingConversations.has(conversationId) && Boolean(db.getConversationForUser(conversationId, userId)),
+    shuttingDown: () => shuttingDown,
+    context: (userId, conversationId, command) => {
+      const conversation = db.getConversationForUser(conversationId, userId)!;
+      if (conversation.archived_at && command.action !== "close") throw new TerminalError("请先恢复已归档的会话。", 409);
+      if (command.action !== "open") return { userId, conversationId, cwd: "", home: "", uid: -1, gid: -1 };
+      const workspace = workspaceFor(userId, conversationId);
+      const host = config.hostMode ? hostTenantFor(config, db, userId) : null;
+      if (!config.tenantWorkerIsolation && (!host || host.uid === 0 || host.uid === process.getuid?.())) throw new TerminalError("终端需要独立于 Web 服务的非 root 系统账户映射或租户隔离服务。", 503);
+      return { userId, conversationId, cwd: host && conversation.working_dir ? resolveSubmittedWorkingDir(conversation.working_dir) : workspace,
+        home: host?.home ?? storageFor(userId).root, uid: host?.uid ?? -1, gid: host?.gid ?? -1,
+        ...(!host || !conversation.working_dir ? { restrictRoot: tenantPaths(config.tenantRoot, userId).root } : {}) };
+    },
+    execute: (context, command) => terminalClient ? terminalClient.execute(context.userId, context.conversationId, command) : terminals.execute(context, command),
+  });
+
   api.get("/conversations/:id/review", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
@@ -2189,7 +2216,7 @@ export function createApp(overrides: AppOverrides = {}) {
     return res.json({ conversation: db.getConversationForUser(conversation.id, session.user_id) });
   });
 
-  api.post("/conversations/:id/archive", (req, res) => {
+  api.post("/conversations/:id/archive", async (req, res) => {
     const session = res.locals.session as SessionRow;
     const conversation = db.getConversationForUser(String(req.params.id), session.user_id);
     if (!conversation) return res.status(404).json({ error: "会话不存在。" });
@@ -2201,8 +2228,17 @@ export function createApp(overrides: AppOverrides = {}) {
       || db.listPendingPrompts(item.id).length > 0
       || db.listPendingPrompts(item.id, "editing").length > 0);
     if (hasWork) return res.status(409).json({ error: "会话仍在运行或有待发送任务，请处理完成后再归档。" });
-    const archived = db.archiveConversationForUser(conversation.id, session.user_id);
-    return archived ? res.json({ conversation: archived }) : res.status(409).json({ error: "会话归档状态已经变化。" });
+    if (family.some((item) => deletingConversations.has(item.id))) return res.status(409).json({ error: "会话正在处理中。" });
+    for (const item of family) deletingConversations.add(item.id);
+    try {
+      for (const item of family) await closeTaskTerminal(session.user_id, item.id);
+      const archived = db.archiveConversationForUser(conversation.id, session.user_id);
+      return archived ? res.json({ conversation: archived }) : res.status(409).json({ error: "会话归档状态已经变化。" });
+    } catch (error) {
+      return res.status(503).json({ error: error instanceof Error ? error.message : "关闭终端失败。" });
+    } finally {
+      for (const item of family) deletingConversations.delete(item.id);
+    }
   });
 
   api.post("/conversations/:id/restore", async (req, res) => {
@@ -2446,6 +2482,7 @@ export function createApp(overrides: AppOverrides = {}) {
       // Remove drafts before awaiting cancellation. A running job finishes its
       // queue pump during cancellation, so leaving drafts here could promote one
       // into a real message/job while the conversation is being deleted.
+      for (const item of family) await closeTaskTerminal(session.user_id, item.id);
       for (const item of family) await stopConversationJobs(item.id, false);
       const tenant = tenantPaths(config.tenantRoot, session.user_id);
       const familyIds = family.map((item) => item.id);
@@ -3249,7 +3286,7 @@ export function createApp(overrides: AppOverrides = {}) {
   if (config.queueAutoStart) setImmediate(() => void pumpQueue());
   return {
     app, db, runner, config, logger, pumpQueue,
-    beginShutdown: () => { shuttingDown = true; },
+    beginShutdown: () => { shuttingDown = true; terminals.dispose(); terminalClient?.dispose(); },
   };
 }
 
