@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.ChatBubble
@@ -36,7 +38,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -44,7 +45,7 @@ val BrandAmber = Color(0xfff0aa3c)
 
 @Composable
 fun BrandMark(modifier: Modifier = Modifier) {
-    Surface(modifier.size(38.dp), shape = RoundedCornerShape(12.dp), color = BrandAmber, contentColor = Color(0xff0f1120)) {
+    Surface(modifier.size(38.dp), shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer) {
         Box(contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Terminal, null, Modifier.size(24.dp)) }
     }
 }
@@ -59,6 +60,10 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
     val focus = LocalFocusManager.current
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val child = state.page != null
+    val titleHeight = with(LocalDensity.current) {
+        MaterialTheme.typography.titleLarge.lineHeight.toDp() +
+            if (!child && state.homeTab == HomeTab.Chat) MaterialTheme.typography.labelMedium.lineHeight.toDp() else 0.dp
+    }
     val closeDrawer = { scope.launch { drawer.close() }; Unit }
     LaunchedEffect(drawer.targetValue) {
         if (drawer.targetValue == DrawerValue.Open) { keyboard?.hide(); focus.clearFocus() }
@@ -71,11 +76,11 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
         }
     }
     ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = !modalOpen && !child,
-        scrimColor = Color(0xff0f1120).copy(alpha = .42f),
+        scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = .42f),
         drawerContent = {
             ModalDrawerSheet(modifier = Modifier.width((LocalConfiguration.current.screenWidthDp * .88f).coerceAtMost(380f).dp).testTag("task-drawer"),
                 drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)) {
+                drawerShape = MaterialTheme.shapes.extraLarge.copy(topStart = CornerSize(0.dp), bottomStart = CornerSize(0.dp))) {
                 TaskDrawer(model, closeDrawer)
             }
         }) {
@@ -84,10 +89,10 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
                 TopAppBar(title = {
                     Column {
                         Text(state.page?.title ?: if (state.homeTab == HomeTab.Chat) state.conversation.text("title", "新对话") else state.homeTab.title,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge)
                         if (!child && state.homeTab == HomeTab.Chat) Text(
                             if (state.detailFromCache) state.connection else state.conversation.text("working_dir").trimEnd('/').substringAfterLast('/').ifBlank { "你的 AI 工作台" },
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }, navigationIcon = {
                     IconButton(onClick = { if (child || state.parentAvailable && state.homeTab == HomeTab.Chat) model.back() else scope.launch { drawer.open() } }) {
@@ -106,7 +111,8 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
                         }
                         IconButton(onClick = tools, enabled = state.selectedId != null) { Icon(Icons.Outlined.MoreHoriz, "任务工具") }
                     }
-                }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
+                }, expandedHeight = maxOf(64.dp, titleHeight + 16.dp),
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
             }, bottomBar = {
                 Column(Modifier.navigationBarsPadding()) {
                     if (!child && state.homeTab == HomeTab.Chat) composer()
@@ -122,9 +128,9 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
             Column(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxWidth()) { content() }
                 state.notice?.let { notice ->
-                    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
                         Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(notice, Modifier.weight(1f), fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
                             IconButton(onClick = model::dismissError) { Icon(Icons.Outlined.Close, "关闭提示") }
                         }
                     }
@@ -160,7 +166,7 @@ private fun TaskStatusBadge(task: JSONObject) {
             "已完成" -> Icon(Icons.Outlined.CheckCircle, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> Icon(Icons.Outlined.RadioButtonUnchecked, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text(label, Modifier.padding(start = 5.dp), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Text(label, Modifier.padding(start = 5.dp), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
             color = if (label == "需关注") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = if (label == "需关注") FontWeight.SemiBold else FontWeight.Normal)
     }
@@ -182,16 +188,16 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
     Column(Modifier.fillMaxSize().testTag("drawer-content")) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             BrandMark()
-            Text("任务", Modifier.weight(1f).padding(start = 12.dp), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("任务", Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.titleLarge)
             IconButton(onClick = close) { Icon(Icons.Outlined.Close, "关闭任务列表") }
         }
         Button(onClick = { model.startNewChat(); close() }, enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(48.dp), shape = RoundedCornerShape(14.dp)) {
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
             Icon(Icons.Outlined.Add, null, Modifier.size(20.dp)); Text("新建对话", Modifier.padding(start = 10.dp))
         }
         OutlinedTextField(search, { search = it }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).testTag("task-search"),
-            placeholder = { Text("搜索任务或项目", fontSize = 13.sp) }, leadingIcon = { Icon(Icons.Outlined.Search, null, Modifier.size(20.dp)) },
-            singleLine = true, shape = RoundedCornerShape(14.dp))
+            placeholder = { Text("搜索任务或项目", style = MaterialTheme.typography.bodyMedium) }, leadingIcon = { Icon(Icons.Outlined.Search, null, Modifier.size(20.dp)) },
+            singleLine = true, shape = MaterialTheme.shapes.medium)
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = !byStatus, onClick = { byStatus = false }, label = { Text("按项目") }, modifier = Modifier.weight(1f), leadingIcon = { Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp)) })
             FilterChip(selected = byStatus, onClick = { byStatus = true }, label = { Text("按状态") }, modifier = Modifier.weight(1f), leadingIcon = { Icon(Icons.Outlined.Tune, null, Modifier.size(17.dp)) })
@@ -215,8 +221,8 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
                             collapsed = if (isCollapsed) collapsed - expandKey else collapsed + expandKey
                         }.heightIn(min = 48.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (byStatus) Icons.Outlined.RadioButtonChecked else Icons.Outlined.FolderOpen, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                        Text(group.title, Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Text(group.tasks.size.toString(), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(group.title, Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
+                        Text(group.tasks.size.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Icon(if (isCollapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
                             if (isCollapsed) "展开分类" else "折叠分类", Modifier.padding(start = 8.dp).size(18.dp))
                     }
@@ -225,19 +231,19 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
                     val selected = task.text("id") == state.selectedId
                     Surface(onClick = { model.openConversation(task.text("id")); close() }, enabled = !state.busy,
                         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                        shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().testTag("task-${task.text("id")}")) {
+                        shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth().testTag("task-${task.text("id")}")) {
                         Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(task.text("title", "新任务"), maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                                Text(task.text("title", "新任务"), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
                                 TaskStatusBadge(task)
                             }
-                            if (task.optInt("has_unread_result") > 0) Box(Modifier.padding(start = 8.dp).size(7.dp).background(BrandAmber, CircleShape))
+                            if (task.optInt("has_unread_result") > 0) Box(Modifier.padding(start = 8.dp).size(7.dp).background(MaterialTheme.colorScheme.tertiary, CircleShape))
                         }
                     }
                 }
                 if (!isCollapsed && group.tasks.size > 4 && search.isBlank()) item(key = "expand:${group.key}") {
                     TextButton(onClick = { expanded = if (all) expanded - expandKey else expanded + expandKey }, modifier = Modifier.fillMaxWidth().testTag("expand-${group.key}")) {
-                        Text(if (all) "仅显示前 4 个任务" else "展开其余 ${group.tasks.size - 4} 个任务", fontSize = 12.sp)
+                        Text(if (all) "仅显示前 4 个任务" else "展开其余 ${group.tasks.size - 4} 个任务", style = MaterialTheme.typography.labelMedium)
                         Icon(if (all) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
                     }
                 }
@@ -245,7 +251,7 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { close(); model.navigate(ToolPage("任务分类", "categories", "/task-categories")) }) { Icon(Icons.Outlined.Tune, null, Modifier.size(18.dp)); Text("管理分类", Modifier.padding(start = 8.dp), fontSize = 12.sp) }
+            TextButton(onClick = { close(); model.navigate(ToolPage("任务分类", "categories", "/task-categories")) }) { Icon(Icons.Outlined.Tune, null, Modifier.size(18.dp)); Text("管理分类", Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelMedium) }
             Spacer(Modifier.weight(1f))
             IconButton(onClick = model::refresh, enabled = !state.busy) {
                 if (state.operation == "refresh") CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Outlined.Refresh, "刷新任务列表")
@@ -254,15 +260,33 @@ private fun TaskDrawer(model: ClientModel, close: () -> Unit) {
     }
 }
 
+internal fun canUseWelcomeSuggestion(state: NativeState, recording: Boolean = false): Boolean =
+    state.authenticated && state.selectedId == null && !state.connecting && !state.busy &&
+        !state.sendUncertain && !state.detailFromCache && !recording &&
+        state.composer.content.isEmpty() && state.composer.quote.isEmpty() &&
+        state.composer.source == null && state.composer.files.isEmpty()
+
 @Composable
-fun WelcomeChat(model: ClientModel) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 28.dp).testTag("welcome-chat"), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+fun WelcomeChat(model: ClientModel, recording: Boolean = false) {
+    WelcomeSuggestions(model.state, recording) { prompt ->
+        if (canUseWelcomeSuggestion(model.state, recording)) model.changeText(prompt)
+    }
+}
+
+@Composable
+internal fun WelcomeSuggestions(state: NativeState, recording: Boolean = false, onSuggestion: (String) -> Unit) {
+    val enabled = canUseWelcomeSuggestion(state, recording)
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp)
+        .testTag("welcome-chat"), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         BrandMark(Modifier.size(46.dp))
-        Text("今天想完成什么？", Modifier.padding(top = 20.dp), fontSize = 25.sp, fontWeight = FontWeight.SemiBold)
-        Text("从一个问题开始，把任务交给 Codex。", Modifier.padding(top = 10.dp, bottom = 22.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("今天想完成什么？", Modifier.padding(top = 20.dp), style = MaterialTheme.typography.titleLarge)
+        Text("从一个问题开始，把任务交给 Codex。", Modifier.padding(top = 10.dp, bottom = 22.dp),
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             listOf("检查代码" to "请检查当前项目的代码，", "整理文件" to "请帮我整理当前项目的文件，", "继续工作" to "请先查看项目进度，再继续完成任务。").forEach { (label, prompt) ->
-                SuggestionChip(onClick = { model.changeText(prompt) }, label = { Text(label, fontSize = 12.sp) }, enabled = !model.state.busy)
+                SuggestionChip(onClick = { if (canUseWelcomeSuggestion(state, recording)) onSuggestion(prompt) },
+                    label = { Text(label, style = MaterialTheme.typography.labelLarge) }, enabled = enabled,
+                    modifier = Modifier.heightIn(min = 48.dp))
             }
         }
     }
@@ -272,16 +296,18 @@ fun WelcomeChat(model: ClientModel) {
 fun WorkspaceHome(model: ClientModel, queue: () -> Unit) {
     val state = model.state
     ToolColumn {
-        Text("让工具围绕当前对话", fontSize = 23.sp, fontWeight = FontWeight.SemiBold)
-        Text(state.conversation.text("title", "先从对话开始，再打开任务工具"), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Text("让工具围绕当前对话", style = MaterialTheme.typography.titleLarge)
+        Text(state.conversation.text("title", "先从对话开始，再打开任务工具"), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         if (state.selectedId != null) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            OutlinedCard(shape = MaterialTheme.shapes.medium,
+                colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 ToolRow("任务与队列", "查看执行过程、调整排队指令", onClick = queue)
                 listOf(Triple("项目文件", "files", "${state.conversationPath}/file-tree"), Triple("代码 Review", "review", "${state.conversationPath}/review?scope=working"),
                     Triple("侧边线程", "side", "${state.conversationPath}/side-chats")).forEach { (title, kind, path) -> ToolRow(title) { model.navigate(ToolPage(title, kind, path)) } }
             }
         }
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        OutlinedCard(shape = MaterialTheme.shapes.medium,
+                colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             ToolRow("工作目录", "沿用 Web 端收藏和项目设置") { model.navigate(ToolPage("工作目录", "directories", "/working-dirs")) }
             ToolRow("API 统计", "用量、费用与模型统计") { model.navigate(ToolPage("API 统计", "billing", "/billing?days=30")) }
         }
