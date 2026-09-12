@@ -9,6 +9,7 @@ for (const width of [390, 1280]) test(`billing filters dates and inactive rates 
     rangeDays: 30, from: "2026-08-12T00:00:00.000Z", to: "2026-09-11T00:00:00.000Z",
     summary: { calls: 2, inputTokens: 100, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 0, cacheHitRate: 0, estimatedCost: 0, currency: "USD", unpricedCalls: 2 },
     byProvider: [], byModel: [], rules: [],
+    byClient: [{ sourceKind: "rollout", originator: "codex-tui", clientName: "Codex CLI", calls: 1, inputTokens: 50, outputTokens: 25, estimatedCost: null, currency: "USD" }],
     models: [
       { providerId: "source", providerName: "Source", modelId: "active", displayName: "Active Model", enabled: true },
       { providerId: "source", providerName: "Source", modelId: "inactive", displayName: "Inactive Model", enabled: false },
@@ -18,13 +19,18 @@ for (const width of [390, 1280]) test(`billing filters dates and inactive rates 
     const url = new URL(route.request().url());
     requests.push(url);
     const result = { ...state, from: url.searchParams.get("from") ?? state.from, to: url.searchParams.get("to") ?? state.to };
-    await route.fulfill({ json: url.pathname.endsWith("sync-pricing") ? { imported: 0, results: [], billing: result } : result });
+    await route.fulfill({ json: url.pathname.endsWith("sync-pricing")
+      ? { imported: 0, results: [], billing: result }
+      : url.pathname.endsWith("sync-usage")
+        ? { result: { filesScanned: 1, inserted: 1, updated: 0, unchanged: 0 }, billing: result }
+        : result });
   });
   if (width < 768) await page.getByRole("button", { name: "会话工具", exact: true }).click();
   await page.getByRole("button", { name: "查看 API 计费统计", exact: true }).click();
   const panel = page.getByRole("dialog", { name: "API 调用计费统计" });
   await expect(panel.getByLabel("Active Model 谷时输出费率")).toBeVisible();
   await expect(panel.getByLabel("Inactive Model 谷时输出费率")).toHaveCount(0);
+  await expect(panel.getByText("Codex CLI", { exact: true })).toBeVisible();
   await panel.getByLabel(/显示未启用模型/).check();
   await expect(panel.getByLabel("Inactive Model 谷时输出费率")).toBeVisible();
   await panel.getByLabel(/显示未启用模型/).uncheck();
@@ -46,6 +52,9 @@ for (const width of [390, 1280]) test(`billing filters dates and inactive rates 
   expect(requests.at(-1)!.searchParams.toString()).toBe(applied.toString());
   await panel.getByRole("button", { name: "同步远程费率", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("已同步");
+  expect(requests.at(-1)!.searchParams.toString()).toBe(applied.toString());
+  await panel.getByRole("button", { name: "同步本机用量", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("补记 1 条");
   expect(requests.at(-1)!.searchParams.toString()).toBe(applied.toString());
   await panel.getByLabel("开始日期").fill("2026-08-02");
   const count = requests.length;

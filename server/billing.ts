@@ -11,6 +11,12 @@ export type TokenUsage = {
   reasoning_output_tokens: number;
 };
 
+export type TokenUsageIdentity = {
+  threadId: string;
+  turnId: string;
+  createdAt?: string;
+};
+
 type BillingAmount = { amount: number | null; currency: string; priced: boolean };
 
 export type BillingState = {
@@ -49,6 +55,16 @@ export type BillingState = {
     cachedInputTokens: number;
     outputTokens: number;
     cacheHitRate: number;
+    estimatedCost: number | null;
+    currency: string;
+  }>;
+  byClient: Array<{
+    sourceKind: ApiUsageRow["source_kind"];
+    originator: string;
+    clientName: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
     estimatedCost: number | null;
     currency: string;
   }>;
@@ -146,6 +162,15 @@ function modelDisplayName(providerId: string, modelId: string, models: ProviderM
   return models.find((model) => model.provider_id === providerId && (model.model_id === modelId || model.slug === modelId))?.display_name ?? modelId;
 }
 
+function clientName(sourceKind: ApiUsageRow["source_kind"], originator: string): string {
+  if (sourceKind === "web") return "Codex Web";
+  if (["codex-tui", "codex_cli_rs"].includes(originator)) return "Codex CLI";
+  if (originator === "codex_exec") return "Codex Exec";
+  if (originator === "codex_vscode") return "Codex VS Code";
+  if (originator === "Codex Desktop") return "Codex Desktop";
+  return originator || "Codex rollout";
+}
+
 export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 30, options: { useCurrentPricing?: boolean; from?: string; to?: string } = {}): BillingState {
   const days = rangeDays === 0 ? 0 : Math.min(3650, Math.max(1, Math.trunc(rangeDays) || 30));
   const to = options.to ? new Date(options.to).toISOString() : new Date(Date.now() + 1).toISOString();
@@ -189,6 +214,19 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
       currency: groupCosts.find((cost) => cost.priced)?.currency ?? "USD",
     };
   }).sort((left, right) => right.calls - left.calls);
+  const byClient = [...groups((row) => `${row.source_kind}:${row.originator ?? ""}`)].map(([key, group]) => {
+    const [sourceKind, ...originatorParts] = key.split(":");
+    const originator = originatorParts.join(":");
+    const usage = sumUsage(group);
+    const groupCosts = group.map((row) => calculateCost(row, ruleForUsage(row)));
+    return {
+      sourceKind: sourceKind as ApiUsageRow["source_kind"], originator,
+      clientName: clientName(sourceKind as ApiUsageRow["source_kind"], originator), calls: usage.calls,
+      inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
+      estimatedCost: groupCosts.every((cost) => cost.priced) ? groupCosts.reduce((sum, cost) => sum + (cost.amount ?? 0), 0) : null,
+      currency: groupCosts.find((cost) => cost.priced)?.currency ?? "USD",
+    };
+  }).sort((left, right) => right.calls - left.calls);
   const knownModels = new Map<string, BillingState["models"][number]>();
   for (const model of models) knownModels.set(`${model.provider_id}:${model.model_id}`, { providerId: model.provider_id, providerName: providerName(model.provider_id, providers), modelId: model.model_id, displayName: model.display_name, enabled: Boolean(model.visible && providers.find((provider) => provider.id === model.provider_id)?.enabled) });
   for (const row of rows) {
@@ -207,7 +245,7 @@ export function buildBillingState(db: AppDatabase, userId: string, rangeDays = 3
       cacheHitRate: cacheHitRate(total), estimatedCost: currencies.size <= 1 ? pricedCosts.reduce((sum, cost) => sum + (cost.amount ?? 0), 0) : null, currency,
       unpricedCalls: costs.filter((cost) => !cost.priced).length,
     },
-    byProvider, byModel, rules, models: [...knownModels.values()].sort((left, right) => `${left.providerName}:${left.modelId}`.localeCompare(`${right.providerName}:${right.modelId}`)),
+    byProvider, byModel, byClient, rules, models: [...knownModels.values()].sort((left, right) => `${left.providerName}:${left.modelId}`.localeCompare(`${right.providerName}:${right.modelId}`)),
   };
 }
 
@@ -341,7 +379,12 @@ export async function syncProviderPricing(
   throw new Error(lastError);
 }
 
-export function recordTokenUsage(db: AppDatabase, input: { userId: string; jobId: string; conversationId: string; providerId?: string | null; modelId: string; usage: TokenUsage }): void {
+export function recordTokenUsage(db: AppDatabase, input: { userId: string; jobId: string; conversationId: string; providerId?: string | null; modelId: string; usage: TokenUsage; identity?: TokenUsageIdentity }): void {
   const values = Object.fromEntries(Object.entries(input.usage).map(([key, value]) => [key, Math.max(0, Math.trunc(Number(value) || 0))])) as TokenUsage;
-  db.addApiUsage({ id: crypto.randomUUID(), user_id: input.userId, job_id: input.jobId, conversation_id: input.conversationId, provider_id: input.providerId || BUILTIN_PROVIDER_ID, model_id: input.modelId, ...values });
+  db.upsertApiUsage({
+    id: crypto.randomUUID(), user_id: input.userId, job_id: input.jobId, conversation_id: input.conversationId,
+    provider_id: input.providerId || BUILTIN_PROVIDER_ID, model_id: input.modelId,
+    source_kind: "web", originator: "codex-web", thread_id: input.identity?.threadId ?? null,
+    turn_id: input.identity?.turnId ?? null, created_at: input.identity?.createdAt ?? new Date().toISOString(), ...values,
+  });
 }

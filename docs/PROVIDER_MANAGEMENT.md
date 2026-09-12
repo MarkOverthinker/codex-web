@@ -56,7 +56,11 @@ Codex app-server 的 reasoning 摘要通过 `item/reasoning/summaryTextDelta` �
 
 ## 用量与计费统计
 
-电脑版顶栏的“API 计费统计”会在每个 Codex turn 完成后，汇总该 turn 期间 `thread/tokenUsage/updated` 推送的 `last` 增量并持久化输入、缓存读取、缓存写入、输出与推理输出 token；同时兼容旧版完成事件中直接携带的 usage。面板按用户隔离，按 API 源和模型分别展示调用次数、输入/输出 token、缓存命中率和费用；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
+电脑版顶栏的“API 计费统计”会在每个 Codex turn 完成后，汇总该 turn 期间 `thread/tokenUsage/updated` 推送的 `last` 增量并持久化输入、缓存读取、缓存写入、输出与推理输出 token；同时兼容旧版完成事件中直接携带的 usage。实时记录携带 thread/turn 唯一身份，是 Web 任务的权威记录。后台每分钟增量读取 `sessions/` 与 `archived_sessions/` 的完整 JSONL 行，从 `session_meta`、`turn_context` 和 `token_count.info.last_token_usage` 恢复其余用量；相同 thread/turn 已有 Web 记录时绝不覆盖，只有 rollout 记录时按各 token 字段的累计最大值幂等补记。扫描游标持久化，因此重启、文件追加和移入归档目录不会重复计数；面板的“同步本机用量”可立即触发当前用户扫描。
+
+宿主模式同时扫描系统用户 `~/.codex` 与隔离的 `TENANT_ROOT/<user-id>/host-codex-home`，从而覆盖 CLI、Exec、VS Code、Desktop 和 Web 异常中断产生的 rollout；普通租户模式只扫描该租户的执行器 Codex Home。上线前已存在的 `originator=codex-web` rollout 不做历史回填，因为旧实时记录没有 thread/turn 去重键；其他客户端的历史记录可以回填。扫描器只把来源、thread/turn、模型、provider、时间和 token 数写入账本，不复制 prompt 或回复内容。被扫描前已删除、位于其他未配置 `CODEX_HOME`、或没有写出 token_count 的调用仍无法补记。
+
+面板按用户隔离，按 API 源、模型和客户端分别展示调用次数、输入/输出 token、缓存命中率和费用；缓存命中率按 `cached_input_tokens / input_tokens` 计算。
 
 费率规则以每 1,000,000 tokens 为单位，分别设置未缓存输入（input）、缓存读取（cache read）、缓存写入（cache write）和输出（output）的单价与三位货币代码。Codex 用量事件中的 `input_tokens` 是总输入量，未缓存输入按 `max(input_tokens - cached_input_tokens - cache_write_input_tokens, 0)` 计算，避免把缓存子项重复计入普通输入。数据库中的 `cached_input_per_million` 是历史兼容列，语义为 cache read。保存新费率时会保留旧费率的生效区间，按每次调用的 `created_at` 选择对应版本并累加费用；“强制重算历史费用”会清除这些版本记录，让当前费率重新应用到全部历史用量，适合修正最初设置错误的费率。费用为估算值；没有规则的调用不会计入费用。内置 Codex 源使用 `Codex 内置源` 单独归类，外部源使用实际 provider 与上游模型 ID，避免别名影响定价。
 
