@@ -5,13 +5,12 @@ package app.codexweb.mobile
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +18,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -109,13 +111,10 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
                 Column(Modifier.navigationBarsPadding()) {
                     if (!child && state.homeTab == HomeTab.Chat) composer()
                     if (!child && !keyboardVisible) {
-                        Surface(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp).widthIn(max = 480.dp).fillMaxWidth().align(Alignment.CenterHorizontally),
-                            shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f)), shadowElevation = 2.dp) {
-                            Row(Modifier.fillMaxWidth().selectableGroup().padding(5.dp).testTag("bottom-navigation"),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                HomeTab.entries.forEach { tab -> BottomNavItem(tab, state.homeTab == tab, Modifier.weight(1f)) { keyboard?.hide(); focus.clearFocus(); model.selectTab(tab) } }
-                            }
+                        Row(Modifier.widthIn(max = 480.dp).fillMaxWidth().align(Alignment.CenterHorizontally)
+                            .padding(horizontal = 16.dp).selectableGroup().testTag("bottom-navigation"),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            HomeTab.entries.forEach { tab -> BottomNavItem(tab, state.homeTab == tab, Modifier.weight(1f)) { keyboard?.hide(); focus.clearFocus(); model.selectTab(tab) } }
                         }
                     }
                 }
@@ -137,16 +136,16 @@ fun ChatFirstShell(model: ClientModel, modalOpen: Boolean, tools: () -> Unit,
 
 @Composable
 private fun BottomNavItem(tab: HomeTab, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val icon = when (tab) { HomeTab.Chat -> Icons.Outlined.ChatBubbleOutline; HomeTab.Workspace -> Icons.Outlined.GridView; HomeTab.Profile -> Icons.Outlined.PersonOutline }
-    val container by animateColorAsState(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, tween(180), label = "navigation-container")
-    val foreground by animateColorAsState(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, tween(180), label = "navigation-content")
-    Column(modifier.heightIn(min = 58.dp).clip(RoundedCornerShape(19.dp)).background(container)
-        .selectable(selected = selected, role = Role.Tab, onClick = onClick).testTag("tab-${tab.name}").padding(vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Icon(icon, null, Modifier.size(21.dp), tint = foreground)
-        Text(tab.title, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 1,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = foreground)
-        Box(Modifier.size(width = 12.dp, height = 2.dp).background(if (selected) foreground else Color.Transparent, CircleShape))
+    val icon = when (tab) {
+        HomeTab.Chat -> if (selected) Icons.Filled.ChatBubble else Icons.Outlined.ChatBubbleOutline
+        HomeTab.Workspace -> if (selected) Icons.Filled.GridView else Icons.Outlined.GridView
+        HomeTab.Profile -> if (selected) Icons.Filled.Person else Icons.Outlined.PersonOutline
+    }
+    val foreground by animateColorAsState(if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant, tween(180), label = "navigation-content")
+    Box(modifier.height(48.dp).selectable(selected = selected, role = Role.Tab, onClick = onClick,
+        interactionSource = remember { MutableInteractionSource() }, indication = ripple(bounded = false, radius = 24.dp)).testTag("tab-${tab.name}"),
+        contentAlignment = Alignment.Center) {
+        Icon(icon, tab.title, Modifier.size(24.dp), tint = foreground)
     }
 }
 

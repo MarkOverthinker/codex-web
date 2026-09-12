@@ -3,12 +3,16 @@ package app.codexweb.mobile
 import android.graphics.Rect
 import android.os.SystemClock
 import android.view.MotionEvent
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -238,11 +242,11 @@ class NativeUiTest {
         compose.waitUntil(5000) { !model.state.authenticated && !model.state.busy }
     }
 
-    private fun screenshot(name: String) {
+    private fun screenshot(name: String, tag: String? = null) {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val directory = File(instrumentation.targetContext.filesDir, "native-screenshots").apply { mkdirs() }
-        val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        val bitmap = if (tag == null) instrumentation.uiAutomation.takeScreenshot() else compose.onNodeWithTag(tag).captureToImage().asAndroidBitmap()
         File(directory, "$name.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
 
@@ -284,13 +288,20 @@ class NativeUiTest {
         assertTrue("Expected status '$expected' in $tag, found: $texts", expected in texts)
     }
 
-    @Test fun bottomNavigationExposesSelectionAndPreservesDraft() {
+    @Test fun bottomNavigationIsCompactIconOnlyAndPreservesDraft() {
         login()
         compose.runOnUiThread { model.changeText("导航切换保留草稿") }
         HomeTab.entries.forEach { tab ->
-            compose.onNodeWithTag("tab-${tab.name}").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick().assertIsSelected()
+            compose.onNodeWithTag("bottom-navigation").assertHeightIsEqualTo(48.dp).onChildren().assertCountEquals(3)
+            compose.onAllNodes(hasAnyAncestor(hasTestTag("bottom-navigation")) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Text),
+                useUnmergedTree = true).assertCountEquals(0)
+            compose.onNodeWithTag("tab-${tab.name}").assertHeightIsEqualTo(48.dp).assertWidthIsAtLeast(48.dp)
+                .assertContentDescriptionEquals(tab.title).assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab))
+                .performClick().assertIsSelected()
             HomeTab.entries.filter { it != tab }.forEach { other -> compose.onNodeWithTag("tab-${other.name}").assertIsNotSelected() }
+            Thread.sleep(400)
             screenshot("native-navigation-${tab.name}")
+            screenshot("native-navigation-bar-${tab.name}", "bottom-navigation")
         }
         compose.onNodeWithTag("tab-Chat").performClick()
         compose.onNodeWithTag("composer").assertTextContains("导航切换保留草稿")
@@ -311,6 +322,23 @@ class NativeUiTest {
         assertEquals(0, gateway.sends)
         compose.onNodeWithContentDescription("添加附件").performClick()
         assertEquals(1, picks)
+    }
+
+    @Test fun bottomNavigationHidesWhileTypingAndReturnsAfterKeyboardDismissal() {
+        login()
+        compose.onNodeWithTag("bottom-navigation").assertIsDisplayed()
+        compose.onNodeWithTag("composer").performClick().performTextInput("键盘收起后保留草稿")
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("bottom-navigation").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag("composer").assertIsDisplayed()
+        screenshot("native-navigation-keyboard")
+        compose.runOnUiThread {
+            compose.activity.getSystemService(InputMethodManager::class.java)
+                .hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("bottom-navigation").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("bottom-navigation").assertHeightIsEqualTo(48.dp).assertIsDisplayed()
+        compose.onNodeWithTag("composer").assertTextContains("键盘收起后保留草稿")
+        assertEquals(0, gateway.sends)
     }
 
     @Test fun optionsAndReviewUseIndependentNativeSurfaces() {
@@ -334,6 +362,7 @@ class NativeUiTest {
         compose.onNodeWithContentDescription("任务工具").performClick()
         compose.onNodeWithText("代码 Review").performClick()
         compose.waitUntil(5000) { model.state.pageData != null && !model.state.pageLoading }
+        compose.onNodeWithTag("bottom-navigation").assertDoesNotExist()
         // 紧凑摘要：分支、比较范围与统计；文件行展示类型与增删
         compose.onNodeWithText("main").assertIsDisplayed()
         compose.onNodeWithText("HEAD 与工作区（包含已暂存和未暂存）").assertIsDisplayed()
@@ -480,10 +509,7 @@ class NativeUiTest {
         compose.onNodeWithTag("messages").performScrollToIndex(0)
         compose.onNodeWithTag("message-user-one").assertIsDisplayed()
         compose.runOnUiThread { model.changeText("切换页面也保留这份草稿") }
-        // 底栏三项始终有可见文字标签
-        compose.onNodeWithText("对话").assertIsDisplayed()
-        compose.onNodeWithText("工作台").assertIsDisplayed()
-        compose.onNodeWithText("我的").assertIsDisplayed()
+        HomeTab.entries.forEach { tab -> compose.onNodeWithTag("tab-${tab.name}").assertContentDescriptionEquals(tab.title).assertIsDisplayed() }
         compose.onNodeWithTag("tab-Profile").performClick()
         compose.onNodeWithText("test-account").assertIsDisplayed()
         compose.onNodeWithText("example.org").assertIsDisplayed()
