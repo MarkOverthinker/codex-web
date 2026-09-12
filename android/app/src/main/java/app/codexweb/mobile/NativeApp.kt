@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -52,17 +51,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-private val LightColors = lightColorScheme(primary = Color(0xff354381), onPrimary = Color.White,
-    secondary = Color(0xff48569d), background = Color(0xfffafbff), surface = Color.White,
-    onSurface = Color(0xff0f1120), onBackground = Color(0xff0f1120), onSurfaceVariant = Color(0xff575760),
-    surfaceContainer = Color(0xffeef0f8), surfaceContainerLow = Color(0xfff6f7fb), surfaceContainerHigh = Color(0xffe9ecf5),
-    outlineVariant = Color(0xffdfe2ec), secondaryContainer = Color(0xffeef0f8), onSecondaryContainer = Color(0xff354381))
-private val DarkColors = darkColorScheme(primary = Color(0xffaeb9f5), onPrimary = Color(0xff181c34),
-    secondary = Color(0xffb4bde6), background = Color(0xff17181c), surface = Color(0xff1d1e25),
-    onSurface = Color(0xffe2e3e8), onBackground = Color(0xffe2e3e8), onSurfaceVariant = Color(0xffa4a7b5),
-    surfaceContainer = Color(0xff272b40), surfaceContainerLow = Color(0xff1d1e25), surfaceContainerHigh = Color(0xff303448),
-    outlineVariant = Color(0xff40434d), secondaryContainer = Color(0xff2c324d), onSecondaryContainer = Color(0xffd8defb))
-
 data class FileRequest(val path: String, val name: String, val mime: String = "application/octet-stream")
 
 @Composable
@@ -79,7 +67,7 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
             }
         }
     }
-    MaterialTheme(colorScheme = if (dark) DarkColors else LightColors) {
+    NativeTheme(darkTheme = dark) {
         Surface(Modifier.fillMaxSize()) {
             if (!state.authenticated) {
                 LoginScreen(state, model::connect)
@@ -106,7 +94,7 @@ fun CodexApp(model: ClientModel, pickFiles: () -> Unit = {}, download: (FileRequ
                             state.page != null -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action })
                             state.homeTab == HomeTab.Profile -> ToolsScreen(model, download, { prompt -> edit = prompt to true }, { message, action -> confirm = message to action }, profilePage)
                             state.homeTab == HomeTab.Workspace -> WorkspaceHome(model) { sheet = "queue" }
-                            state.selectedId == null -> WelcomeChat(model)
+                            state.selectedId == null -> WelcomeChat(model, recording)
                             else -> chatStates.SaveableStateProvider("chat:${state.server}:${state.session?.text("username")}:${state.selectedId}") {
                                 ChatScreen(state, model, download, openLink, { prompt -> edit = prompt to false },
                                     { message, action -> confirm = message to action }, { sheet = "queue" })
@@ -251,14 +239,14 @@ private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRe
         }
         items(messages, key = { it.text("id") }) { message ->
             val user = message.text("role") == "user"
+            val messageColors = nativeMessageColors(MaterialTheme.colorScheme, user)
             var menu by remember { mutableStateOf(false) }
             Column(Modifier.fillMaxWidth().testTag("message-${message.text("id")}"), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
-                Surface(color = if (user) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    contentColor = if (user) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.fillMaxWidth(if (user) .9f else 1f), shape = RoundedCornerShape(18.dp)) {
+                Surface(color = messageColors.container, contentColor = messageColors.content,
+                    modifier = Modifier.fillMaxWidth(if (user) .9f else 1f), shape = MaterialTheme.shapes.medium) {
                     Column(Modifier.padding(if (user) 14.dp else 0.dp).widthIn(max = 680.dp)) {
                         if (message.text("quote_excerpt").isNotBlank()) Text("引用 · ${message.text("quote_excerpt")}", maxLines = 3,
-                            overflow = TextOverflow.Ellipsis, color = LocalContentColor.current.copy(alpha = .75f), fontSize = 13.sp, modifier = Modifier.padding(bottom = 8.dp))
+                            overflow = TextOverflow.Ellipsis, color = messageColors.quote, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 8.dp))
                         message.optJSONObject("source_reference")?.let { source -> Text("关联上下文 · ${source.text("sourceConversationTitle", "来源任务")}", fontSize = 12.sp) }
                         MarkdownText(message.text("content"), state.fontSize, openLink,
                             quote = { excerpt -> model.quote(message, excerpt) }, side = { excerpt ->
@@ -268,7 +256,7 @@ private fun ChatScreen(state: NativeState, model: ClientModel, download: (FileRe
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (user) "你" else if (message.text("role") == "system") "系统" else "Codex", fontSize = 11.sp,
+                    Text(if (user) "你" else if (message.text("role") == "system") "系统" else "Codex", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Box {
                         IconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.MoreHoriz, "消息操作", Modifier.size(18.dp)) }
@@ -392,12 +380,12 @@ private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> U
                     Modifier.weight(1f).padding(horizontal = 8.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Start)
                 Icon(Icons.Outlined.ExpandLess, "展开队列", Modifier.size(18.dp))
             }
-            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface,
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
             Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
             TextField(value = state.composer.content, onValueChange = model::changeText,
                 modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composer"), enabled = !state.connecting && (!state.busy || state.operation == "voice") && !state.sendUncertain,
-                placeholder = { Text(if (recording) "正在聆听…" else "给 Agent 发消息…", fontSize = 15.sp) }, maxLines = 5,
+                placeholder = { Text(if (recording) "正在聆听…" else "给 Agent 发消息…", style = MaterialTheme.typography.bodyLarge) }, maxLines = 5,
                 colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                     disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -424,7 +412,7 @@ private fun ComposerBar(state: NativeState, model: ClientModel, options: () -> U
             }
             }
             }
-            if (state.draftStatus.isNotBlank()) Text(state.draftStatus, fontSize = 10.sp,
+            if (state.draftStatus.isNotBlank()) Text(state.draftStatus, style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -470,7 +458,7 @@ private fun OptionsSheet(model: ClientModel, close: () -> Unit = {}) {
                 Text(preset.text("name"), Modifier.weight(1f))
             }
         }
-        if (state.presets.isEmpty()) Text("暂无预设；可在设置中创建。", fontSize = 13.sp)
+        if (state.presets.isEmpty()) Text("暂无预设；可在设置中创建。", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(20.dp))
     }
 }
