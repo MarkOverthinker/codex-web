@@ -1,6 +1,6 @@
 import type { GitReview, ReviewFile } from "./git-review.js";
 
-export type RepositoryTab = "changes" | "files";
+export type RepositoryTab = "changes" | "files" | "terminal";
 export type RepositoryAction = "commit" | "push";
 export type DiffLine = { text: string; content: string; kind: "hunk" | "add" | "delete" | "context" | "meta"; old: number | null; next: number | null };
 

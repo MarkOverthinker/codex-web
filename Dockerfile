@@ -1,6 +1,9 @@
 FROM node:22-bookworm-slim AS source
 
 WORKDIR /app
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html tsconfig*.json vite.config.ts ./

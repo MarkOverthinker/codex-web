@@ -1,0 +1,10 @@
+.terminal-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; height: 100%; background: #15171c; color: #e5e7eb; }
+.terminal-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px; flex-wrap: wrap; font-size: 12px; }
+.terminal-toolbar > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.terminal-toolbar button { padding: 5px 8px; border: 1px solid #454b58; border-radius: 5px; background: #252933; color: #e5e7eb; font-size: 12px; cursor: pointer; }
+.terminal-toolbar button:disabled { opacity: .5; cursor: default; }
+.terminal-toolbar button:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+.terminal-notice, .terminal-error { margin: 0; padding: 0 10px 10px; line-height: 1.5; font-size: 12px; color: #b4bdcc; }
+.terminal-error { color: #fda4af; }
+.terminal-screen { flex: 1; min-height: 120px; min-width: 0; padding: 0 8px 8px; overflow: hidden; }
+.terminal-screen .xterm { height: 100%; }

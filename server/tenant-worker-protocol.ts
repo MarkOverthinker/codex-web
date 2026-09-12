@@ -56,12 +56,14 @@ export type TenantWorkerEvent =
   | { type: "failed"; message: string; cancelled?: boolean };
 
 export type WebToSupervisorMessage =
+  | { kind: "terminal"; requestId: string; userId: string; conversationId: string; command: import("../src/terminal-protocol.js").TerminalCommand }
   | { kind: "git_review"; requestId: string; userId: string; request: import("../src/git-review.js").GitReviewRequest }
   | { kind: "tenant_run"; jobId: string; userId: string; request: TenantWorkerRunRequest }
   | { kind: "tenant_steer"; jobId: string; requestId: string; prompt: string; imagePaths: string[] }
   | { kind: "tenant_cancel"; jobId: string };
 
 export type SupervisorToWebMessage =
+  | { kind: "terminal_result"; requestId: string; result?: import("../src/terminal-protocol.js").TerminalResult; error?: string; status?: number }
   | { kind: "git_review_result"; requestId: string; result?: import("../src/git-review.js").GitReview; error?: string }
   | { kind: "tenant_event"; jobId: string; event: TenantWorkerEvent }
   | { kind: "tenant_worker_exit"; jobId: string; message: string };

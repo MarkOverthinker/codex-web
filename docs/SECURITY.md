@@ -17,6 +17,11 @@
   point at Codex Web's own data, tenant, or workspace roots; the worker
   revalidates the absolute path and the tenant system user's access before
   starting.
+- The interactive web terminal runs commands directly as the mapped non-root
+  system/tenant user, outside Codex sandbox/approval policy. Only allow trusted
+  accounts. It uses the existing login, CSRF, origin and task-ownership checks;
+  the initial shell environment excludes inherited service secrets. See
+  [Web terminal](TERMINAL.md) for limits, lifetime and residual account access.
 - Code preview reads are scoped to the signed-in user's conversation
   workspace, registered deliverables, tenant library, and (in host mode) the
   conversation's selected working directory; path traversal and arbitrary
