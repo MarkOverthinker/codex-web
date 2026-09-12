@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { SquareTerminal, X } from "lucide-react";
 import { api } from "./api.js";
@@ -25,13 +25,24 @@ function visible(signal: AbortSignal): Promise<void> {
   });
 }
 
-export function TerminalDock({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+type TerminalSidebarProps = {
+  conversationId: string;
+  width: number;
+  widthMin: number;
+  widthMax: number;
+  onResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResizeKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
+  onClose: () => void;
+};
+
+export function TerminalSidebar({ conversationId, width, widthMin, widthMax, onResizeStart, onResizeKeyDown, onClose }: TerminalSidebarProps) {
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
-  return <aside className="terminal-dock" aria-label="任务终端">
-    <header className="terminal-dock-header"><span title="命令以系统账户权限直接执行，不经过 Codex 审批；收起终端栏保留进程。"><SquareTerminal size={16} />终端</span><button type="button" className="icon-button" aria-label="关闭终端栏" title="收起终端栏，保留终端会话" onClick={onClose}><X size={18} /></button></header>
+  return <aside className="terminal-sidebar" style={{ width }} aria-label="任务终端">
+    <div className="terminal-resizer" role="separator" aria-label="调整终端栏宽度" aria-orientation="vertical" aria-valuemin={widthMin} aria-valuemax={widthMax} aria-valuenow={Math.round(width)} tabIndex={0} onPointerDown={onResizeStart} onKeyDown={onResizeKeyDown} />
+    <header className="terminal-sidebar-header"><span title="命令以系统账户权限直接执行，不经过 Codex 审批；关闭终端栏保留进程。"><SquareTerminal size={16} />终端</span><button type="button" className="icon-button" aria-label="关闭终端栏" title="关闭终端栏，保留终端会话" onClick={onClose}><X size={18} /></button></header>
     <TerminalPane conversationId={conversationId} />
   </aside>;
 }
@@ -87,14 +98,14 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
             if (result.data) await new Promise<void>((resolve) => instance!.write(result.data, resolve));
             signal.throwIfAborted();
             cursor = result.cursor;
-            if (result.exited && !result.data) { setStatus(`已退出（${result.exitCode ?? "未知"}），重新展开终端栏可启动新终端`); return; }
+            if (result.exited && !result.data) { setStatus(`已退出（${result.exitCode ?? "未知"}），重新打开终端栏可启动新终端`); return; }
           }
           signal.throwIfAborted();
         } catch (reason) {
           if (lifetime.signal.aborted) return;
           failures++;
           setError(reason instanceof Error ? reason.message : "终端连接失败");
-          setStatus(failures > 3 ? "连接失败，请收起终端栏后重新展开" : "连接中断，正在自动重连…");
+          setStatus(failures > 3 ? "连接失败，请关闭终端栏后重新打开" : "连接中断，正在自动重连…");
           if (failures > 3) return;
         } finally {
           input?.dispose(); input = undefined; resize = undefined; connection.abort();
@@ -102,7 +113,7 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
         }
         await delay(Math.min(250 * 2 ** (failures - 1), 2000), lifetime.signal);
       }
-    })().catch((reason) => { if (!lifetime.signal.aborted) { setStatus("连接失败，请收起终端栏后重新展开"); setError(reason instanceof Error ? reason.message : "终端加载失败"); } });
+    })().catch((reason) => { if (!lifetime.signal.aborted) { setStatus("连接失败，请关闭终端栏后重新打开"); setError(reason instanceof Error ? reason.message : "终端加载失败"); } });
     return () => { lifetime.abort(); input?.dispose(); clearTimeout(resizeTimer); observer?.disconnect(); instance?.dispose(); };
   }, [conversationId]);
   return <section className="terminal-pane" aria-label="终端会话" onKeyDown={(event) => event.stopPropagation()}>
