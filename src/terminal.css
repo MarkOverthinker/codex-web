@@ -1,13 +1,13 @@
-.terminal-window { width: min(1120px, calc(100vw - 32px)); height: min(760px, calc(100dvh - 48px)); max-width: none; max-height: none; padding: 0; border: 1px solid #454b58; border-radius: 12px; background: #15171c; color: #e5e7eb; box-shadow: 0 20px 80px #0006; overflow: hidden; z-index: 1400; }
-.terminal-window[open] { display: flex; flex-direction: column; }
-.terminal-window::backdrop { background: #0a0c1459; }
-.terminal-window-header { display: flex; flex: 0 0 44px; justify-content: space-between; align-items: center; padding: 0 12px; border-bottom: 1px solid #303540; }
-.terminal-window-header > span { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; }
-.terminal-window-header .icon-button { color: #cbd2de; }
-.terminal-window-header .icon-button:focus-visible { outline: 2px solid #a5b4fc; }
+.workspace-stack { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.workspace-stack > .workspace { min-height: 0; }
+.terminal-dock { display: flex; flex: 0 0 auto; flex-direction: column; height: clamp(160px, 34dvh, 360px); max-height: 50%; min-width: 0; min-height: 0; border-top: 1px solid #454b58; background: #15171c; color: #e5e7eb; overflow: hidden; }
+.terminal-dock-header { display: flex; flex: 0 0 36px; justify-content: space-between; align-items: center; padding: 0 12px; border-bottom: 1px solid #303540; }
+.terminal-dock-header > span { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; }
+.terminal-dock-header .icon-button { color: #cbd2de; }
+.terminal-dock-header .icon-button:focus-visible { outline: 2px solid #a5b4fc; }
 .terminal-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; background: #15171c; color: #e5e7eb; }
 .terminal-status { padding: 7px 12px; color: #a4b0c2; font-size: 11px; }
 .terminal-error { margin: 0; padding: 0 12px 8px; line-height: 1.5; font-size: 12px; color: #fda4af; }
 .terminal-screen { flex: 1; min-height: 0; min-width: 0; padding: 0 12px 10px; overflow: hidden; }
 .terminal-screen .xterm { height: 100%; }
-@media (max-width: 600px) { .terminal-window { width: 100vw; height: 100dvh; margin: 0; border: 0; border-radius: 0; } }
+@media (max-width: 600px) { .terminal-dock-header { flex-basis: 40px; } .terminal-dock-header .icon-button { min-width: 40px; min-height: 40px; } }

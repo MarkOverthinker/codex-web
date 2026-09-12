@@ -425,7 +425,9 @@ test("side chat keeps history available while primary tasks change", () => {
   assert.match(serverSource, /api\.post\("\/conversations\/:id\/side-chats"/);
   assert.match(serverSource, /buildConversationContextExcerpt\(messages\)/);
   assert.match(appSource, /sideChatOpen && sideChatCurrentConversation && <SideChatPane/);
-  assert.doesNotMatch(appSource, /key=\{currentDetail\.conversation\.id\}[\s\S]*currentConversation=/);
+  const sideChatMount = appSource.match(/<SideChatPane\b[\s\S]*?\/>/)?.[0];
+  assert.ok(sideChatMount);
+  assert.doesNotMatch(sideChatMount, /key=\{currentDetail\.conversation\.id\}/);
 });
 
 test("side chat exposes promotion into the primary task list", () => {

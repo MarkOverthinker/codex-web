@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { Terminal } from "@xterm/xterm";
 import { SquareTerminal, X } from "lucide-react";
 import { api } from "./api.js";
@@ -26,18 +25,15 @@ function visible(signal: AbortSignal): Promise<void> {
   });
 }
 
-export function TerminalWindow({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
+export function TerminalDock({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    const window = dialog.current!;
-    window.showModal();
-    return () => { window.close(); if (previous?.isConnected) previous.focus(); };
+    return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
-  return createPortal(<dialog ref={dialog} className="terminal-window" role="dialog" aria-modal="true" aria-label="任务终端" onCancel={(event) => event.preventDefault()}>
-    <header className="terminal-window-header"><span title="命令以系统账户权限直接执行，不经过 Codex 审批；关闭窗口保留进程。"><SquareTerminal size={16} />终端</span><button type="button" className="icon-button" aria-label="关闭终端窗口" title="关闭窗口，保留终端会话" onClick={onClose}><X size={18} /></button></header>
+  return <aside className="terminal-dock" aria-label="任务终端">
+    <header className="terminal-dock-header"><span title="命令以系统账户权限直接执行，不经过 Codex 审批；收起终端栏保留进程。"><SquareTerminal size={16} />终端</span><button type="button" className="icon-button" aria-label="关闭终端栏" title="收起终端栏，保留终端会话" onClick={onClose}><X size={18} /></button></header>
     <TerminalPane conversationId={conversationId} />
-  </dialog>, document.body);
+  </aside>;
 }
 
 export function TerminalPane({ conversationId }: { conversationId: string }) {
@@ -91,14 +87,14 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
             if (result.data) await new Promise<void>((resolve) => instance!.write(result.data, resolve));
             signal.throwIfAborted();
             cursor = result.cursor;
-            if (result.exited && !result.data) { setStatus(`已退出（${result.exitCode ?? "未知"}），重新打开窗口可启动新终端`); return; }
+            if (result.exited && !result.data) { setStatus(`已退出（${result.exitCode ?? "未知"}），重新展开终端栏可启动新终端`); return; }
           }
           signal.throwIfAborted();
         } catch (reason) {
           if (lifetime.signal.aborted) return;
           failures++;
           setError(reason instanceof Error ? reason.message : "终端连接失败");
-          setStatus(failures > 3 ? "连接失败，请关闭窗口后重试" : "连接中断，正在自动重连…");
+          setStatus(failures > 3 ? "连接失败，请收起终端栏后重新展开" : "连接中断，正在自动重连…");
           if (failures > 3) return;
         } finally {
           input?.dispose(); input = undefined; resize = undefined; connection.abort();
@@ -106,7 +102,7 @@ export function TerminalPane({ conversationId }: { conversationId: string }) {
         }
         await delay(Math.min(250 * 2 ** (failures - 1), 2000), lifetime.signal);
       }
-    })().catch((reason) => { if (!lifetime.signal.aborted) { setStatus("连接失败，请关闭窗口后重试"); setError(reason instanceof Error ? reason.message : "终端加载失败"); } });
+    })().catch((reason) => { if (!lifetime.signal.aborted) { setStatus("连接失败，请收起终端栏后重新展开"); setError(reason instanceof Error ? reason.message : "终端加载失败"); } });
     return () => { lifetime.abort(); input?.dispose(); clearTimeout(resizeTimer); observer?.disconnect(); instance?.dispose(); };
   }, [conversationId]);
   return <section className="terminal-pane" aria-label="终端会话" onKeyDown={(event) => event.stopPropagation()}>
