@@ -326,6 +326,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  terminalOpen: (id: string, size: { cols: number; rows: number }) => request<{ terminalId: string }>(`/conversations/${id}/terminal`, { method: "POST", body: JSON.stringify(size) }),
+  terminalRead: (id: string, terminalId: string, after: number, signal?: AbortSignal) => request<import("./terminal-protocol.js").TerminalSnapshot>(`/conversations/${id}/terminal/${terminalId}?after=${after}`, { signal }),
+  terminalUpdate: (id: string, terminalId: string, command: { action: "write"; data: string } | { action: "resize"; cols: number; rows: number }, signal?: AbortSignal) => request<{ ok: true }>(`/conversations/${id}/terminal/${terminalId}`, { method: "POST", body: JSON.stringify(command), signal }),
+  terminalClose: (id: string, terminalId: string) => request<{ ok: true }>(`/conversations/${id}/terminal/${terminalId}`, { method: "DELETE" }),
   review: (id: string, scope: ReviewScope, base?: string, file?: string, signal?: AbortSignal) => {
     const query = new URLSearchParams({ scope });
     if (base) query.set("base", base);

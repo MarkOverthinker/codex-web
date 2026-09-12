@@ -8,6 +8,8 @@ import { installMobileBack } from "./mobile-layout";
 import "./styles.css";
 import "./mobile.css";
 import "./repository.css";
+import "@xterm/xterm/css/xterm.css";
+import "./terminal.css";
 
 installClientErrorReporting();
 installMobileBack();

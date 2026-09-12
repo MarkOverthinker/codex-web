@@ -218,3 +218,7 @@ stateDiagram-v2
 公网部署请配置 HTTPS；浏览器通常只允许在 HTTPS 或 localhost 页面调用麦克风。
 
 更多信息请参阅 [部署说明](docs/DEPLOYMENT.md)、[架构说明](docs/ARCHITECTURE.md) 与 [安全说明](docs/SECURITY.md)。
+
+## 交互式终端
+
+任务工具栏和仓库面板新增**终端**入口，可在任务目录启动真实 Bash PTY，支持 Ctrl+C、Tab、交互程序与断线重连。命令以映射的非 root 系统/租户账户直接执行，**不经过 Codex 沙箱审批**。收起面板保留会话，显式关闭或 30 分钟无请求后回收；服务重启不保留 shell 状态。安全边界、限制和部署要求见 [Web 终端](docs/TERMINAL.md)。

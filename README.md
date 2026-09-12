@@ -335,3 +335,7 @@ Codex runs as a dedicated non-root Unix user. The web process can coordinate tha
 ## Offline portable upgrades
 
 See [Offline upgrade guide](docs/OFFLINE_UPGRADE.md) for packaging, in-place upgrades, full backups, and deployment boundaries.
+
+## Interactive terminal
+
+The task toolbar and repository panel include a **Terminal** tab. Start a real Bash PTY in the task directory, use Ctrl+C/Tab and interactive programs, and reconnect while the server remains running. Commands execute directly as the mapped non-root system/tenant account, **without Codex sandbox approval**. Closing the panel preserves the session; explicit close or 30 minutes without requests reclaims it. See [Web terminal](docs/TERMINAL.md) for security boundaries, limits and deployment requirements.
