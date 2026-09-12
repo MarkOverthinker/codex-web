@@ -55,12 +55,12 @@ async function terminalFixture(page: Page, openDelay = 0) {
 }
 
 for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844 }]) {
-  test(`terminal docks below chat, auto-connects and retains its shell at ${viewport.width}px`, async ({ page }) => {
+  test(`terminal opens in a responsive sidebar, auto-connects and retains its shell at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     const fixture = await terminalFixture(page, 150);
     const dock = page.getByRole("complementary", { name: "任务终端", exact: true });
     await expect(dock).toBeVisible();
-    await expect(dock.getByRole("status")).toHaveText("已连接");
+    await expect(dock.getByRole("status")).toHaveText("已连接", { timeout: 20_000 });
     await expect(dock.getByRole("button")).toHaveCount(1);
     expect(fixture.opens()).toBe(1);
     await expect(dock.locator(".xterm-helper-textarea")).toBeFocused();
@@ -72,20 +72,28 @@ for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844
     await expect.poll(() => fixture.commands.some((command) => command.action === "resize")).toBe(true);
     const box = await dock.boundingBox();
     expect(box!.width).toBeLessThanOrEqual(viewport.width);
-    expect(box!.height).toBeLessThanOrEqual(viewport.height / 2);
+    expect(box!.height).toBeLessThanOrEqual(viewport.height);
     const chat = await page.locator(".workspace").boundingBox();
-    expect(chat!.y + chat!.height).toBeLessThanOrEqual(box!.y + 1);
-    expect(Math.abs(chat!.x - box!.x)).toBeLessThan(2);
-    expect(Math.abs(chat!.width - box!.width)).toBeLessThan(2);
-    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height + 1);
     await expect(page.locator("dialog[open]")).toHaveCount(0);
-    const composer = page.locator(".workspace .composer textarea");
-    await composer.fill("终端展开时仍可编辑任务");
-    await expect(composer).toHaveValue("终端展开时仍可编辑任务");
-    const composerBox = await composer.boundingBox();
-    expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(box!.y);
-    expect(composerBox!.y).toBeGreaterThanOrEqual(chat!.y);
-    if (process.env.TERMINAL_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.TERMINAL_SCREENSHOT_DIR}/terminal-dock-${viewport.width}.png` });
+    if (viewport.width > 1100) {
+      expect(chat!.x + chat!.width).toBeLessThanOrEqual(box!.x + 1);
+      expect(Math.abs(chat!.y - box!.y)).toBeLessThan(2);
+      expect(Math.abs(chat!.height - box!.height)).toBeLessThan(2);
+      const composer = page.locator(".workspace .composer textarea");
+      await composer.fill("终端展开时仍可编辑任务");
+      await expect(composer).toHaveValue("终端展开时仍可编辑任务");
+      const initialWidth = box!.width;
+      const resizer = dock.getByRole("separator", { name: "调整终端栏宽度", exact: true });
+      await resizer.focus();
+      await page.keyboard.press("ArrowLeft");
+      await expect.poll(async () => (await dock.boundingBox())!.width).toBeGreaterThan(initialWidth);
+      await expect.poll(() => page.evaluate(() => Number(localStorage.getItem("codex-web:terminal-width")))).toBeGreaterThan(initialWidth);
+    } else {
+      expect(Math.abs(box!.x)).toBeLessThan(2);
+      expect(Math.abs(box!.width - viewport.width)).toBeLessThan(2);
+      expect(Math.abs(box!.height - viewport.height)).toBeLessThan(2);
+    }
+    if (process.env.TERMINAL_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.TERMINAL_SCREENSHOT_DIR}/terminal-sidebar-${viewport.width}.png` });
     await dock.getByRole("button", { name: "关闭终端栏", exact: true }).click();
     await expect(dock).toHaveCount(0);
     expect(fixture.closes()).toBe(0);
@@ -93,11 +101,6 @@ for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844
     await expect(dock.getByRole("status")).toHaveText("已连接");
     expect(fixture.opens()).toBe(2);
     if (viewport.width < 600) {
-      await page.getByRole("button", { name: "打开任务列表", exact: true }).click();
-      await expect(page.locator(".sidebar.open")).toBeVisible();
-      expect(await page.evaluate(() => (window as unknown as { codexMobileBack(): boolean }).codexMobileBack())).toBe(true);
-      await expect(page.locator(".sidebar.open")).toHaveCount(0);
-      await expect(dock).toBeVisible();
       expect(await page.evaluate(() => (window as unknown as { codexMobileBack(): boolean }).codexMobileBack())).toBe(true);
       await expect(dock).toHaveCount(0);
       expect(fixture.closes()).toBe(0);

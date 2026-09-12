@@ -126,7 +126,7 @@ export function installMobileBack() {
       (settings ?? sidebar.querySelector<HTMLButtonElement>('[aria-label="关闭"]'))?.click();
       return true;
     }
-    const terminalClose = document.querySelector<HTMLButtonElement>('.terminal-dock [aria-label="关闭终端栏"]');
+    const terminalClose = document.querySelector<HTMLButtonElement>('.terminal-sidebar [aria-label="关闭终端栏"]');
     if (terminalClose && visible(terminalClose)) { terminalClose.click(); return true; }
     return false;
   };
