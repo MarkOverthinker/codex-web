@@ -418,6 +418,11 @@ class NativeUiTest {
         login()
         val requestsBefore = gateway.requests.toList()
 
+        swipeHome(left = true, distanceFraction = .22f, durationMillis = 80)
+        awaitHomeTab(HomeTab.Workspace)
+        swipeHome(left = false, distanceFraction = .22f, durationMillis = 80)
+        awaitHomeTab(HomeTab.Chat)
+
         swipeHome(left = true)
         awaitHomeTab(HomeTab.Workspace)
         swipeHome(left = true)
@@ -425,7 +430,7 @@ class NativeUiTest {
 
         swipeHome(left = true)
         awaitHomeTab(HomeTab.Profile)
-        swipeHome(left = false, distanceFraction = .12f, durationMillis = 600)
+        swipeHome(left = false, distanceFraction = .22f, durationMillis = 600)
         awaitHomeTab(HomeTab.Profile)
 
         swipeHome(left = false)
