@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProp
 import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, File, FileDiff, Folder, FolderTree, GitBranch, GitCommitHorizontal, Globe, LoaderCircle, Maximize2, Minimize2, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
 import { api } from "./api.js";
 import type { GitReview, ReviewFile, ReviewScope } from "./git-review.js";
-import { TerminalPane } from "./terminal-pane.js";
 import { FileExplorerPane } from "./file-explorer-pane.js";
 import { changeTree, diffLines, repositoryActionPrompt, reviewTotals, type ChangeTree, type RepositoryAction, type RepositoryTab } from "./repository-model.js";
 import { highlightLines, RenderedPreview, SourceTokens } from "./source-preview.js";
@@ -14,7 +13,7 @@ function ChangeCounts({ files }: { files: ReviewFile[] }) {
   return <span className="repository-counts"><span className="repository-add">+{totals.additions.toLocaleString()}</span><span className="repository-delete">−{totals.deletions.toLocaleString()}</span></span>;
 }
 
-export function ReviewButton({ conversationId, revision, open, onOpen }: { conversationId: string; revision: string; open: boolean; onOpen: (tab: RepositoryTab) => void }) {
+export function ReviewButton({ conversationId, revision, open, onOpen }: { conversationId: string; revision: string; open: boolean; onOpen: (tab: RepositoryTab | "terminal") => void }) {
   const [data, setData] = useState<GitReview | null>(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -34,7 +33,7 @@ export function ReviewButton({ conversationId, revision, open, onOpen }: { conve
     document.addEventListener("pointerdown", outside);
     return () => { window.removeEventListener("focus", focus); document.removeEventListener("pointerdown", outside); };
   }, []);
-  const show = (tab: RepositoryTab) => { if (details.current) details.current.open = false; onOpen(tab); };
+  const show = (tab: RepositoryTab | "terminal") => { if (details.current) details.current.open = false; onOpen(tab); };
   return <div className="repository-tools">
     <button type="button" className="chat-tool-trigger" onClick={() => show("terminal")} aria-label="打开任务终端" title="打开任务终端"><SquareTerminal size={16} /><span>终端</span></button>
     <button type="button" className={`chat-tool-trigger ${open ? "active" : ""}`} onClick={() => show("changes")} aria-label="查看 Git 分支变更" title="打开仓库审查"><FileDiff size={16} /><span>变更{data ? ` ${data.files.length}` : ""}</span>{data && <ChangeCounts files={data.files} />}</button>
@@ -79,16 +78,14 @@ export function RepositoryPane({ tab, onTabChange, revision, busy, onAction, ...
     <header className="repository-header"><div className="repository-tabs" role="tablist" aria-label="仓库视图" onKeyDown={(event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
-      const tabs: RepositoryTab[] = ["changes", "files", "terminal"];
-      const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[2] : tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : 2)) % tabs.length];
+      const next = event.key === "Home" ? "changes" : event.key === "End" ? "files" : tab === "changes" ? "files" : "changes";
       onTabChange(next);
       pane.current?.querySelector<HTMLButtonElement>(`#repository-tab-${next}`)?.focus();
     }}>
-      {(["changes", "files", "terminal"] as const).map((value) => <button key={value} id={`repository-tab-${value}`} role="tab" aria-controls={`repository-view-${value}`} aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} type="button" onClick={() => onTabChange(value)}>{value === "changes" ? <FileDiff size={16} /> : value === "files" ? <FolderTree size={16} /> : <SquareTerminal size={16} />}{value === "changes" ? "审查变更" : value === "files" ? "全部文件" : "终端"}</button>)}
+      {(["changes", "files"] as const).map((value) => <button key={value} id={`repository-tab-${value}`} role="tab" aria-controls={`repository-view-${value}`} aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} type="button" onClick={() => onTabChange(value)}>{value === "changes" ? <FileDiff size={16} /> : <FolderTree size={16} />}{value === "changes" ? "审查变更" : "全部文件"}</button>)}
     </div><div className="repository-header-actions"><button type="button" className="icon-button repository-expand" aria-label={expanded ? "还原仓库工作区" : "展开仓库工作区"} onClick={() => setExpanded((value) => !value)}>{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button type="button" className="icon-button" onClick={props.onClose} aria-label="关闭仓库工作区"><X size={18} /></button></div></header>
     <div id="repository-view-changes" className="repository-view" role="tabpanel" aria-labelledby="repository-tab-changes" hidden={tab !== "changes"}>{visited.has("changes") && <ReviewPanel conversationId={props.conversationId} revision={revision} busy={busy} onAction={onAction} />}</div>
     <div id="repository-view-files" className="repository-view" role="tabpanel" aria-labelledby="repository-tab-files" hidden={tab !== "files"}>{visited.has("files") && <FileExplorerPane {...props} embedded />}</div>
-    <div id="repository-view-terminal" className="repository-view" role="tabpanel" aria-labelledby="repository-tab-terminal" hidden={tab !== "terminal"}>{visited.has("terminal") && <TerminalPane key={props.conversationId} conversationId={props.conversationId} active={tab === "terminal"} />}</div>
   </aside>;
 }
 

@@ -6,7 +6,7 @@ import { TerminalError } from "./terminal-manager.js";
 type Dependencies = {
   context(userId: string, conversationId: string, command: TerminalCommand): TerminalContext;
   exists(userId: string, conversationId: string): boolean;
-  execute(context: TerminalContext, command: TerminalCommand): Promise<TerminalResult>;
+  execute(context: TerminalContext, command: TerminalCommand, signal?: AbortSignal): Promise<TerminalResult>;
   shuttingDown(): boolean;
 };
 export function registerTerminalRoutes(api: Router, dependencies: Dependencies): void {
@@ -18,19 +18,25 @@ export function registerTerminalRoutes(api: Router, dependencies: Dependencies):
     const conversationId = String(req.params.id);
     if (!dependencies.exists(userId, conversationId)) return res.status(404).json({ error: "会话不存在。" });
     if (dependencies.shuttingDown()) return res.status(503).json({ error: "服务正在重启，终端已停止。" });
+    if (req.method === "GET" && Object.keys(req.query).some((key) => key !== "after" && key !== "waitMs")) return res.status(400).json({ error: "无效的终端参数。" });
     const terminalId = req.params.terminalId;
     const raw = req.method === "GET"
-      ? { action: "read", terminalId, after: typeof req.query.after === "string" && /^\d+$/.test(req.query.after) ? Number(req.query.after) : NaN }
+      ? { action: "read", terminalId, after: typeof req.query.after === "string" && /^\d+$/.test(req.query.after) ? Number(req.query.after) : NaN, ...(req.query.waitMs === undefined ? {} : { waitMs: typeof req.query.waitMs === "string" && /^\d+$/.test(req.query.waitMs) ? Number(req.query.waitMs) : NaN }) }
       : req.method === "DELETE" ? { action: "close", terminalId }
         : terminalId ? { ...req.body, terminalId } : { ...req.body, action: "open" };
     const parsed = terminalCommand.safeParse(raw);
     if (!parsed.success || (req.method === "POST" && terminalId && !["write", "resize"].includes(parsed.data.action))) return res.status(400).json({ error: "无效的终端参数。" });
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    res.once("close", abort);
     try {
       const context = dependencies.context(userId, conversationId, parsed.data);
-      const result = await dependencies.execute(context, parsed.data);
+      const result = await dependencies.execute(context, parsed.data, controller.signal);
+      if (res.destroyed) return;
       return res.json(result);
     } catch (error) {
+      if (res.destroyed) return;
       return res.status(error instanceof TerminalError ? error.status : 503).json({ error: error instanceof Error ? error.message : "终端不可用。" });
-    }
+    } finally { res.off("close", abort); }
   });
 }

@@ -1,112 +1,117 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Terminal } from "@xterm/xterm";
+import { SquareTerminal, X } from "lucide-react";
 import { api } from "./api.js";
+import { TerminalInputQueue } from "./terminal-input.js";
 
-export function TerminalPane({ conversationId, active }: { conversationId: string; active: boolean }) {
-  const container = useRef<HTMLDivElement>(null);
-  const terminal = useRef<Terminal | null>(null);
-  const terminalId = useRef<string | null>(null);
-  const activeRef = useRef(active);
-  const sendInput = useRef<(data: string) => void>(() => {});
-  const [attempt, setAttempt] = useState(0);
-  const [status, setStatus] = useState("未连接");
-  const [error, setError] = useState("");
-  const [ready, setReady] = useState(false);
-  const [closing, setClosing] = useState(false);
-  useEffect(() => { activeRef.current = active; }, [active]);
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = () => { signal.removeEventListener("abort", abort); resolve(); };
+    const abort = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); reject(signal.reason); };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+function visible(signal: AbortSignal): Promise<void> {
+  if (!document.hidden) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { document.removeEventListener("visibilitychange", changed); signal.removeEventListener("abort", abort); };
+    const changed = () => { if (!document.hidden) { cleanup(); resolve(); } };
+    const abort = () => { cleanup(); reject(signal.reason); };
+    document.addEventListener("visibilitychange", changed);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
+export function TerminalWindow({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    if (!attempt || !container.current) return;
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let inputTimer: ReturnType<typeof setTimeout> | undefined;
+    const previous = document.activeElement as HTMLElement | null;
+    const window = dialog.current!;
+    window.showModal();
+    return () => { window.close(); if (previous?.isConnected) previous.focus(); };
+  }, []);
+  return createPortal(<dialog ref={dialog} className="terminal-window" role="dialog" aria-modal="true" aria-label="任务终端" onCancel={(event) => event.preventDefault()}>
+    <header className="terminal-window-header"><span title="命令以系统账户权限直接执行，不经过 Codex 审批；关闭窗口保留进程。"><SquareTerminal size={16} />终端</span><button type="button" className="icon-button" aria-label="关闭终端窗口" title="关闭窗口，保留终端会话" onClick={onClose}><X size={18} /></button></header>
+    <TerminalPane conversationId={conversationId} />
+  </dialog>, document.body);
+}
+
+export function TerminalPane({ conversationId }: { conversationId: string }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState("正在连接…");
+  const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
+  useEffect(() => {
+    const lifetime = new AbortController();
     let observer: ResizeObserver | undefined;
     let instance: Terminal | undefined;
-    let writable = false;
-    let queue = Promise.resolve();
-    let input = "";
+    let input: TerminalInputQueue | undefined;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let resize: (() => void) | undefined;
+    let terminalId = "";
     let cursor = 0;
-    const controller = new AbortController();
-    terminalId.current = null;
-    setReady(false); setError(""); setStatus("正在连接…");
-    const fail = (reason: unknown) => {
-      if (disposed) return;
-      writable = false; setReady(false); setStatus("连接中断");
-      setError(reason instanceof Error ? reason.message : "终端连接失败");
-    };
-    const enqueue = (command: { action: "write"; data: string } | { action: "resize"; cols: number; rows: number }) => {
-      queue = queue.then(async () => {
-        if (disposed || !writable || !terminalId.current) return;
-        await api.terminalUpdate(conversationId, terminalId.current, command, controller.signal);
-      }).catch(fail);
-    };
-    const flush = () => {
-      inputTimer = undefined;
-      while (input) { const chunk = input.slice(0, 4096); input = input.slice(4096); enqueue({ action: "write", data: chunk }); }
-    };
-    const write = (data: string) => {
-      if (!writable || disposed) return;
-      if (input.length + data.length > 32768) { setError("单次粘贴内容过长，请分段输入。"); return; }
-      input += data;
-      inputTimer ??= setTimeout(flush, 20);
-    };
-    sendInput.current = write;
+    let failures = 0;
     void (async () => {
       const [{ Terminal: XTerm }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
-      if (disposed || !container.current) return;
-      instance = new XTerm({ cursorBlink: true, fontSize: 13, scrollback: 5000, screenReaderMode: true, theme: { background: "#15171c", foreground: "#e5e7eb", cursor: "#d4d9e3" } });
+      if (lifetime.signal.aborted || !container.current) return;
+      instance = new XTerm({ cursorBlink: true, fontSize: 14, scrollback: 5000, screenReaderMode: true, theme: { background: "#15171c", foreground: "#e5e7eb", cursor: "#d4d9e3" } });
       const fit = new FitAddon();
-      instance.loadAddon(fit); instance.open(container.current); terminal.current = instance;
+      instance.loadAddon(fit); instance.open(container.current);
       const dimensions = () => ({ cols: Math.max(20, Math.min(300, instance!.cols)), rows: Math.max(5, Math.min(100, instance!.rows)) });
       if (container.current.clientWidth && container.current.clientHeight) fit.fit();
-      const opened = await api.terminalOpen(conversationId, dimensions());
-      if (disposed) return;
-      terminalId.current = opened.terminalId; writable = true; setReady(true); setStatus("已连接");
-      instance.onData(write);
-      instance.onResize(() => { if (writable) enqueue({ action: "resize", ...dimensions() }); });
-      enqueue({ action: "resize", ...dimensions() });
+      instance.onData((data) => { if (input && !input.write(data)) setWarning("输入积压过多，请等待发送完成或分段粘贴。"); });
+      instance.onResize(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => resize?.(), 40); });
       observer = new ResizeObserver(() => { if (container.current?.clientWidth && container.current.clientHeight) fit.fit(); });
-      observer.observe(container.current!);
-      if (activeRef.current) instance.focus();
-      const poll = async () => {
-        if (disposed) return;
-        if (!activeRef.current || document.hidden) { timer = setTimeout(() => void poll(), 1000); return; }
+      observer.observe(container.current);
+      while (!lifetime.signal.aborted) {
+        const connection = new AbortController();
+        const signal = AbortSignal.any([lifetime.signal, connection.signal]);
         try {
-          const result = await api.terminalRead(conversationId, opened.terminalId, cursor, controller.signal);
-          if (disposed) return;
-          if (result.truncated) instance!.reset();
-          if (result.data) await new Promise<void>((resolve) => instance!.write(result.data, resolve));
-          if (disposed) return;
-          cursor = result.cursor;
-          if (result.exited && !result.data) { writable = false; setReady(false); setStatus(`已退出（${result.exitCode ?? "未知"}）`); return; }
-          timer = setTimeout(() => void poll(), result.data ? 100 : 1000);
-        } catch (reason) { fail(reason); }
-      };
-      void poll();
-    })().catch(fail);
-    return () => {
-      disposed = true; writable = false; controller.abort(); clearTimeout(timer); clearTimeout(inputTimer);
-      observer?.disconnect(); instance?.dispose(); terminal.current = null; sendInput.current = () => {};
-    };
-  }, [conversationId, attempt]);
-  const close = async () => {
-    if (!terminalId.current || closing) return;
-    setClosing(true);
-    try {
-      await api.terminalClose(conversationId, terminalId.current);
-      terminalId.current = null; setAttempt(0); setReady(false); setError(""); setStatus("已关闭");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "关闭失败"); }
-    finally { setClosing(false); }
-  };
-  return <section className="terminal-pane" aria-label="任务终端" onKeyDown={(event) => event.stopPropagation()}>
-    <div className="terminal-toolbar"><span role="status">{status}</span><div>
-      {!ready && <button type="button" disabled={closing || status === "正在连接…"} onClick={() => setAttempt((value) => value + 1)}>{attempt ? "重新连接" : "启动终端"}</button>}
-      <button type="button" disabled={!ready || closing} onClick={() => { sendInput.current("\u0003"); terminal.current?.focus(); }}>Ctrl+C</button>
-      <button type="button" disabled={!ready || closing} onClick={() => { sendInput.current("\t"); terminal.current?.focus(); }}>Tab</button>
-      <button type="button" disabled={!attempt} onClick={() => terminal.current?.clear()}>清屏</button>
-      <button type="button" disabled={!terminalId.current || closing} onClick={() => void close()}>{closing ? "正在关闭…" : "关闭终端"}</button>
-    </div></div>
-    <p className="terminal-notice">命令直接使用系统账户权限执行，不经过 Codex 审批。收起面板不会停止进程；30 分钟无连接后回收，服务重启不保留。</p>
-    {error && <p className="terminal-error" role="alert">{error}</p>}
+          const opened = await api.terminalOpen(conversationId, dimensions(), AbortSignal.any([signal, AbortSignal.timeout(20000)]));
+          signal.throwIfAborted();
+          if (opened.terminalId !== terminalId) { instance.reset(); terminalId = opened.terminalId; cursor = 0; }
+          input = new TerminalInputQueue((data) => api.terminalUpdate(conversationId, terminalId, { action: "write", data }, AbortSignal.any([signal, AbortSignal.timeout(15000)])), (reason) => {
+            setWarning("输入发送失败，未自动重发；请核对终端中的实际执行结果。");
+            connection.abort(reason);
+          });
+          resize = () => { void api.terminalUpdate(conversationId, terminalId, { action: "resize", ...dimensions() }, signal).catch((reason) => connection.abort(reason)); };
+          resize();
+          instance.options.disableStdin = false; instance.focus();
+          setStatus("已连接"); setError("");
+          while (!signal.aborted) {
+            await visible(signal);
+            const result = await api.terminalRead(conversationId, terminalId, cursor, AbortSignal.any([signal, AbortSignal.timeout(20000)]));
+            signal.throwIfAborted();
+            failures = 0;
+            if (result.truncated) instance.reset();
+            if (result.data) await new Promise<void>((resolve) => instance!.write(result.data, resolve));
+            signal.throwIfAborted();
+            cursor = result.cursor;
+            if (result.exited && !result.data) { setStatus(`已退出（${result.exitCode ?? "未知"}），重新打开窗口可启动新终端`); return; }
+          }
+          signal.throwIfAborted();
+        } catch (reason) {
+          if (lifetime.signal.aborted) return;
+          failures++;
+          setError(reason instanceof Error ? reason.message : "终端连接失败");
+          setStatus(failures > 3 ? "连接失败，请关闭窗口后重试" : "连接中断，正在自动重连…");
+          if (failures > 3) return;
+        } finally {
+          input?.dispose(); input = undefined; resize = undefined; connection.abort();
+          instance.options.disableStdin = true;
+        }
+        await delay(Math.min(250 * 2 ** (failures - 1), 2000), lifetime.signal);
+      }
+    })().catch((reason) => { if (!lifetime.signal.aborted) { setStatus("连接失败，请关闭窗口后重试"); setError(reason instanceof Error ? reason.message : "终端加载失败"); } });
+    return () => { lifetime.abort(); input?.dispose(); clearTimeout(resizeTimer); observer?.disconnect(); instance?.dispose(); };
+  }, [conversationId]);
+  return <section className="terminal-pane" aria-label="终端会话" onKeyDown={(event) => event.stopPropagation()}>
+    <div className="terminal-status" role="status">{status}</div>
+    {(error || warning) && <p className="terminal-error" role="alert">{error || warning}</p>}
     <div ref={container} className="terminal-screen" aria-label="终端输入与输出" />
   </section>;
 }

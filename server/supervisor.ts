@@ -8,6 +8,7 @@ import type { SupervisorToWebMessage, TenantWorkerEvent, TenantWorkerInput, WebT
 import { TerminalManager, TerminalError } from "./terminal-manager.js";
 
 const terminals = new TerminalManager();
+const terminalReads = new Map<string, AbortController>();
 const projectRoot = process.cwd();
 const workers = new Map<string, ChildProcess>();
 const cancellationTimers = new Map<string, NodeJS.Timeout[]>();
@@ -23,16 +24,19 @@ const web = spawn(process.execPath, [path.join(projectRoot, "dist-server", "serv
 
 web.on("message", (message: WebToSupervisorMessage) => {
   if (!message || typeof message !== "object") return;
+  if (message.kind === "terminal_cancel_request") { terminalReads.get(message.requestId)?.abort(); return; }
   if (message.kind === "terminal") {
     if (stopping) return sendToWeb({ kind: "terminal_result", requestId: message.requestId, error: "终端服务正在停止。", status: 503 });
     const identity = tenantIdentityForUser(message.userId);
     if (!identity || identity.uid === WEB_IDENTITY.uid || !/^[0-9a-f-]{36}$/i.test(message.conversationId)) return sendToWeb({ kind: "terminal_result", requestId: message.requestId, error: "无效的租户终端身份。", status: 403 });
     const home = path.resolve(process.env.TENANT_ROOT ?? path.join(projectRoot, "tenants"), identity.userId);
     const cwd = path.join(home, "conversations", message.conversationId);
-    void terminals.execute({ userId: message.userId, conversationId: message.conversationId, uid: identity.uid, gid: identity.gid, home, cwd, restrictRoot: home }, message.command).then(
+    const controller = new AbortController();
+    if (message.command.action === "read") terminalReads.set(message.requestId, controller);
+    void terminals.execute({ userId: message.userId, conversationId: message.conversationId, uid: identity.uid, gid: identity.gid, home, cwd, restrictRoot: home }, message.command, controller.signal).then(
       (result) => sendToWeb({ kind: "terminal_result", requestId: message.requestId, result }),
       (error: unknown) => sendToWeb({ kind: "terminal_result", requestId: message.requestId, error: error instanceof Error ? error.message : "终端不可用。", status: error instanceof TerminalError ? error.status : 503 }),
-    );
+    ).finally(() => terminalReads.delete(message.requestId));
     return;
   }
   if (message.kind === "git_review") {

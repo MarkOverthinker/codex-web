@@ -42,6 +42,8 @@ test("terminal API requires login, CSRF, same origin, ownership and safe executi
   await agent.post(endpoint).set("X-CSRF-Token", csrf).send({ cols: 9000, rows: 24 }).expect(400);
   await agent.get(`${endpoint}/${terminalId}?after[]=0`).expect(400);
   await agent.get(`${endpoint}/${terminalId}?after=-1`).expect(400);
+  await agent.get(`${endpoint}/${terminalId}?after=0&waitMs=10001`).expect(400);
+  await agent.get(`${endpoint}/${terminalId}?after=0&waitMs[]=100`).expect(400);
   await agent.post(`${endpoint}/${terminalId}`).set("X-CSRF-Token", csrf).send({ action: "open", ...size }).expect(400);
   await agent.post(`${endpoint}/${terminalId}`).set("X-CSRF-Token", csrf).send({ action: "close-task" }).expect(400);
   const unavailable = await agent.post(endpoint).set("X-CSRF-Token", csrf).send(size).expect(503);
@@ -66,7 +68,8 @@ test("terminal routes forward only validated commands and server-derived context
   const endpoint = "/conversations/task/terminal";
   await request(app).post(endpoint).send({ cols: 80, rows: 24, uid: 0, cwd: "/etc", action: "write" }).expect(200);
   assert.deepEqual(commands[0], { action: "open", cols: 80, rows: 24 });
-  await request(app).get(`${endpoint}/${terminalId}?after=0`).expect(200);
+  await request(app).get(`${endpoint}/${terminalId}?after=0&waitMs=10000`).expect(200);
+  assert.deepEqual(commands[1], { action: "read", terminalId, after: 0, waitMs: 10000 });
   await request(app).post(`${endpoint}/${terminalId}`).send({ action: "write", data: "pwd\r" }).expect(200);
   await request(app).post(`${endpoint}/${terminalId}`).send({ action: "resize", cols: 90, rows: 30 }).expect(200);
   await request(app).delete(`${endpoint}/${terminalId}`).expect(200);
