@@ -14,6 +14,8 @@
 
 ## 现有 Caddy 主机部署
 
+需要时检查本机忽略目录 `tmp/android-toolchain/`：已有工具链可能不在 `PATH` 中。若存在，使用其中的 JDK 设置 `JAVA_HOME`，以 `sdk/` 设置 `ANDROID_HOME`，并将 `$JAVA_HOME/bin` 加入 `PATH`；继续复用原 Gradle 缓存和 `android/preview-signing.properties`，不要重新生成签名密钥。
+
 复用 Caddy `/html/` 静态站点空间，固定 slug `codex-native`，相对路径 `/html/codex-native/`。公网 origin 沿用已有 frp/Caddy 配置，不在公共仓库硬编码私人域名。
 
 首次可用 caddy-html-mount 技能的 `mount_html.py` 将发布目录复制到 `/srv/html-mounts/codex-native`。之后本机发布配置的 `output` 指向此持久目录，直接更新；不要重复使用 `--force` 清空历史。
