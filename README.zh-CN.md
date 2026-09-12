@@ -4,7 +4,7 @@ Web 的 API 统计支持全部历史及自定义起止日期/时间，按浏览�
 
 `android/` 已提供独立的 Kotlin / Jetpack Compose 安卓预览客户端。0.4.2 预览版将悬浮底栏改为 48dp 高的三图标导航，移除文字、外框与选中底色，保留无障碍名称、选中状态、草稿和阅读位置。以对话为首页，支持可折叠的右滑项目任务抽屉、输入框上方队列入口和加密近期浏览缓存；沿用 Web 的视觉与核心逻辑，以原生界面直接连接现有 API，复用服务端草稿、队列、附件和事件流，不使用 WebView 外壳。移动网页版继续独立保留。它不是 OpenAI 官方产品，也不是已完成全部真机与功能等价验收的商业版本。安装、构建、功能矩阵及尚存差异见 [Android 说明](docs/ANDROID.md)。
 
-**下一 Android 候选版：** `0.5.0-preview`（versionCode 12）已实现统一原生主题、欢迎建议草稿保护、输入状态与阅读优化、当前任务工作台和 Review 本地筛选。尚未公开发布，固定下载页仍为 0.4.2。见 [候选及验收记录](releases/android/0.5.0-preview.md) 和 [分版本更新计划、PRD、QA](tasks/prd-android-05.md)。
+**当前 Android 发布版：** `0.5.0-preview`（versionCode 12）已发布至维护中的固定下载页，包含统一原生主题、欢迎建议草稿保护、输入状态与阅读优化、当前任务工作台和 Review 本地筛选。安装文件为 `codex-native-android-0.5.0-preview.apk`，已安装同签名 0.4.2-preview 时可直接覆盖升级，无需卸载。见 [发布及验收记录](releases/android/0.5.0-preview.md) 和 [分版本更新计划、PRD、QA](tasks/prd-android-05.md)。
 
 Codex Web 是一个非官方、自托管的 OpenAI Codex CLI 网页工作台。它提供持久化会话、未发送草稿、附件与交付文件、结果文件并排页内预览、服务器端任务排队（排队任务可跳过队列直接执行）、实时引导、可续接的终止/中断记录、会话归档、按时间筛选的批量历史会话导入、完整工作记录、完成任务未读提示、引用提问、历史用户消息编辑并重发、自动命名、用户名与密码自助修改、字号与聊天区宽度调节、默认关闭且可按用户启用的多 API 源与“源 → 模型”二级菜单管理、按源和模型聚合的 token/缓存命中率/估算费用统计、通过内置任务级 `codex-relay` 接入仅支持 Chat Completions 的模型、预设 Prompt 管理与默认/按对话启用，以及可选的语音转写。源管理说明见 [docs/PROVIDER_MANAGEMENT.md](docs/PROVIDER_MANAGEMENT.md)。
 
