@@ -29,6 +29,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 
+private class ReviewUiState {
+    var query by mutableStateOf("")
+        private set
+    var filter by mutableStateOf(ReviewFilter.All)
+        private set
+    val listState = LazyListState()
+
+    fun update(filtersIndex: Int, query: String = this.query, filter: ReviewFilter = this.filter) {
+        if (query == this.query && filter == this.filter) return
+        this.query = query
+        this.filter = filter
+        listState.requestScrollToItem(filtersIndex)
+    }
+}
+
 @Composable
 fun ToolsScreen(model: ClientModel, download: (FileRequest) -> Unit, editPending: (JSONObject) -> Unit,
                 confirm: (String, () -> Unit) -> Unit, rootPage: ToolPage? = null) {
@@ -37,10 +52,9 @@ fun ToolsScreen(model: ClientModel, download: (FileRequest) -> Unit, editPending
     val data = state.pageData ?: JSONObject()
     var form by remember(page) { mutableStateOf<FormRequest?>(null) }
     var submitting by remember(page) { mutableStateOf(false) }
-    // Review 文件列表的滚动状态提升到 ToolsScreen：进入差异再返回时保留所选范围与列表位置。
-    // 用普通 remember（而非 rememberSaveable）：页面分支切换不销毁 ToolsScreen，位置得以保留。
-    val reviewListState = remember { LazyListState() }
-    var reviewSeenPath by remember { mutableStateOf<String?>(null) }
+    val reviewStates = remember(state.server, state.session?.text("username"), state.selectedId) {
+        mutableMapOf<Pair<String, String>, ReviewUiState>()
+    }
     LaunchedEffect(state.busy, submitting) {
         if (submitting && !state.busy) {
             if (state.error == null) form = null
@@ -53,11 +67,12 @@ fun ToolsScreen(model: ClientModel, download: (FileRequest) -> Unit, editPending
         "files" -> FileTreeScreen(model, data)
         "preview" -> NativePreview(model, page, download, confirm)
         "review" -> {
-            LaunchedEffect(page.path) {
-                if (reviewSeenPath != null && reviewSeenPath != page.path) reviewListState.scrollToItem(0)
-                reviewSeenPath = page.path
-            }
-            ReviewScreen(model, data, reviewListState)
+            val routeQuery = queryValues(page.path)
+            val scope = page.args.text("scope", routeQuery["scope"] ?: "working")
+            val base = routeQuery["base"]?.takeIf { it.isNotBlank() } ?: data.text("base")
+            val reviewKey = scope to base
+            val reviewState = reviewStates.getOrPut(reviewKey) { ReviewUiState() }
+            key(reviewKey) { ReviewScreen(model, data, reviewState) }
         }
         "patch" -> PatchScreen(model, page, data)
         else -> when {
@@ -261,7 +276,7 @@ private fun reviewStatusLabel(status: String): String = when (status) {
 private fun reviewStatusColor(status: String): Color = when (status) {
     "D" -> MaterialTheme.colorScheme.error
     "A" -> MaterialTheme.colorScheme.primary
-    "?" -> BrandAmber
+    "?" -> MaterialTheme.colorScheme.tertiary
     else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
@@ -476,7 +491,7 @@ private fun FileTreeScreen(model: ClientModel, data: JSONObject) {
 }
 
 @Composable
-private fun ReviewScreen(model: ClientModel, data: JSONObject, listState: LazyListState) {
+private fun ReviewScreen(model: ClientModel, data: JSONObject, reviewState: ReviewUiState) {
     val state = model.state
     val page = state.page ?: return
     val query = queryValues(page.path)
@@ -484,10 +499,19 @@ private fun ReviewScreen(model: ClientModel, data: JSONObject, listState: LazyLi
     val navigateScope: (String) -> Unit = { value ->
         model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=$value", json("scope" to value)), replace = true)
     }
-    if (state.pageLoading && state.pageData == null) { PageLoadingView("正在读取变更…"); return }
-    // 读取失败必须与“真正的空差异”区分：失败态给错误、重试与返回，不显示“没有变更”
-    if (state.pageError != null && state.pageData == null) { PageErrorView(model, "读取变更失败"); return }
+    if (state.pageData == null) {
+        if (state.pageError != null) Box(Modifier.fillMaxSize().testTag("review-error")) {
+            PageErrorView(model, "读取变更失败")
+        } else Box(Modifier.fillMaxSize().testTag("review-loading")) {
+            PageLoadingView("正在读取变更…")
+        }
+        return
+    }
     val files = data.rows("files")
+    val matchingFiles = filterReviewFiles(files, reviewState.query, reviewState.filter)
+    val hasFilters = reviewState.query.isNotEmpty() || reviewState.filter != ReviewFilter.All
+    val filtersIndex = 1 + (if (state.pageError != null) 1 else 0) + (if (state.pageLoading) 1 else 0)
+    val clearFilters = { reviewState.update(filtersIndex, query = "", filter = ReviewFilter.All) }
     val counted = files.filter { it.optLong("additions", -1) >= 0 }
     val additions = counted.sumOf { it.optLong("additions", 0) }
     val deletions = counted.sumOf { it.optLong("deletions", 0) }
@@ -496,61 +520,110 @@ private fun ReviewScreen(model: ClientModel, data: JSONObject, listState: LazyLi
         counted.size < files.size -> "${files.size} 个文件 · +$additions / -$deletions · 部分文件未统计行数"
         else -> "${files.size} 个文件 · +$additions / -$deletions"
     }
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("review-list"),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    LazyColumn(state = reviewState.listState, modifier = Modifier.fillMaxSize().testTag("review-list"),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item(key = "summary") {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.AccountTree, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Outlined.AccountTree, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                         Text(data.text("branch").ifBlank { "未知分支" }, Modifier.padding(start = 8.dp),
-                            fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                            style = MaterialTheme.typography.titleMedium)
                     }
-                    Text(data.text("comparison").ifBlank { "读取变更范围失败" }, Modifier.padding(top = 2.dp), fontSize = 12.sp,
+                    Text(data.text("comparison").ifBlank { "读取变更范围失败" }, style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (summaryLine.isNotBlank()) Text(summaryLine, Modifier.padding(top = 2.dp), fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (summaryLine.isNotBlank()) Text(summaryLine, style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("review-summary"))
                     ChoiceField("范围", scope, listOf("working" to "工作区", "staged" to "暂存区", "branch" to "分支对比"),
-                        Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp)) { navigateScope(it) }
+                        Modifier.padding(top = 8.dp)) { clearFilters(); navigateScope(it) }
                     if (scope == "branch") ChoiceField("基准分支", data.text("base"), data.strings("bases").map { it to it },
-                        Modifier.padding(top = 4.dp, start = 16.dp, end = 16.dp)) { base ->
+                        Modifier.padding(top = 4.dp)) { base ->
+                        clearFilters()
                         model.navigate(ToolPage("代码 Review", "review", "${state.conversationPath}/review?scope=branch&base=${base.segment()}", json("scope" to "branch")), replace = true)
                     }
                 }
             }
         }
         state.pageError?.let { message -> item(key = "stale-error") {
-            Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("刷新失败：${friendlyIoMessage(message)}", Modifier.weight(1f), fontSize = 12.sp, maxLines = 3)
-                    TextButton(onClick = { model.refresh() }, enabled = !state.busy) { Text("重试") }
+            Surface(modifier = Modifier.fillMaxWidth().testTag("review-stale-error"), shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("刷新失败：${friendlyIoMessage(message)}", style = MaterialTheme.typography.bodyMedium)
+                    Text("正在显示上次读取的数据，当前变更尚未确认。", style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { model.refresh() }, enabled = !state.busy && !state.pageLoading,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("review-retry")) { Text("重试") }
                 }
             }
         } }
-        if (files.isEmpty()) item(key = "empty-diff") {
-            Column(Modifier.fillMaxWidth().padding(vertical = 36.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (state.pageLoading) item(key = "refreshing") {
+            Column(Modifier.fillMaxWidth().testTag("review-refreshing"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("正在刷新，暂时显示上次读取的数据。", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item(key = "filters") {
+            Column(Modifier.fillMaxWidth().testTag("review-filters"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = reviewState.query, onValueChange = { reviewState.update(filtersIndex, query = it) },
+                    label = { Text("按路径搜索") }, singleLine = true,
+                    leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                    trailingIcon = if (reviewState.query.isEmpty()) null else ({
+                        IconButton(onClick = { reviewState.update(filtersIndex, query = "") },
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("review-clear-query")) {
+                            Icon(Icons.Outlined.Close, "清除路径搜索")
+                        }
+                    }), modifier = Modifier.fillMaxWidth().testTag("review-search"))
+                Text("仅筛选已加载文件，不会搜索服务器。", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ReviewFilter.entries.forEach { filter ->
+                        FilterChip(selected = reviewState.filter == filter, onClick = { reviewState.update(filtersIndex, filter = filter) },
+                            label = { Text(filter.label) }, modifier = Modifier.heightIn(min = 48.dp).testTag("review-filter-${filter.name.lowercase()}"))
+                    }
+                }
+                FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("匹配 ${matchingFiles.size} / ${files.size} 个文件", style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(vertical = 12.dp).testTag("review-match-count"))
+                    TextButton(onClick = clearFilters, enabled = hasFilters,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("review-clear-filters")) { Text("清除筛选") }
+                }
+            }
+        }
+        if (files.isEmpty() && state.pageError == null && !state.pageLoading) item(key = "empty-diff") {
+            Column(Modifier.fillMaxWidth().padding(vertical = 24.dp).testTag("review-empty"), horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Outlined.TaskAlt, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
                 Text("当前范围内没有变更", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
                 Text("对比已完成且没有差异。可切换范围或刷新后查看其他变更。", Modifier.padding(top = 8.dp),
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                OutlinedButton(onClick = { model.refresh() }, enabled = !state.busy, modifier = Modifier.padding(top = 18.dp)) { Text("刷新") }
+                OutlinedButton(onClick = { model.refresh() }, enabled = !state.busy,
+                    modifier = Modifier.padding(top = 18.dp).heightIn(min = 48.dp)) { Text("刷新") }
+            }
+        } else if (files.isNotEmpty() && matchingFiles.isEmpty()) item(key = "no-matches") {
+            Column(Modifier.fillMaxWidth().padding(vertical = 24.dp).testTag("review-no-matches"), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Outlined.Search, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("没有匹配文件", Modifier.padding(top = 16.dp), style = MaterialTheme.typography.titleMedium)
+                Text("已加载的 ${files.size} 个变更文件中没有匹配项，可调整路径或清除筛选。", Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                OutlinedButton(onClick = clearFilters,
+                    modifier = Modifier.padding(top = 18.dp).heightIn(min = 48.dp).testTag("review-clear-no-matches")) { Text("清除筛选") }
             }
         }
-        items(files, key = { "file:${it.text("path")}" }) { file ->
+        items(matchingFiles, key = { "file:${it.text("path")}" }) { file ->
             val status = file.text("status")
             ListItem(modifier = Modifier.clickable {
                 model.navigate(ToolPage(file.text("path"), "patch",
                     "${state.conversationPath}/review?scope=$scope&base=${data.text("base").segment()}&file=${file.text("path").segment()}",
                     json("scope" to scope)))
-            }.heightIn(min = 56.dp),
+            }.heightIn(min = 56.dp).testTag("review-file:${file.text("path")}"),
                 leadingContent = { Icon(reviewStatusIcon(status), null, Modifier.size(20.dp), tint = reviewStatusColor(status)) },
-                headlineContent = { Text(file.text("path"), fontFamily = FontFamily.Monospace, fontSize = 13.sp, maxLines = 2,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                headlineContent = { Text(file.text("path"), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium) },
                 supportingContent = {
                     val stat = file.optLong("additions", -1)
                     Text("${reviewStatusLabel(status)}" + if (stat >= 0) " · +${file.optLong("additions", 0)} / -${file.optLong("deletions", 0)}" else " · 行数未统计",
-                        fontSize = 12.sp)
+                        style = MaterialTheme.typography.bodyMedium)
                 },
                 trailingContent = { Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) })
         }
@@ -581,16 +654,16 @@ private fun PatchScreen(model: ClientModel, page: ToolPage, data: JSONObject) {
                     }
                 }
                 patch.isBlank() -> Text("此文件没有可显示的文本差异。", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                else -> CodeBlock(patch)
+                else -> CodeBlock(patch, Modifier.testTag("patch-horizontal-scroll"))
             }
         }
     }
 }
 
 @Composable
-fun CodeBlock(text: String) {
+fun CodeBlock(text: String, modifier: Modifier = Modifier) {
     SelectionContainer {
-        Text(text, modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp),
+        Text(text, modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp),
             fontFamily = FontFamily.Monospace, fontSize = 13.sp, softWrap = false)
     }
 }
