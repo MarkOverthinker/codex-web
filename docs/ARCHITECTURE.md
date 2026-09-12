@@ -50,6 +50,16 @@ the activity order after an upgrade. New explicit drags remain persistent.
 The working-dir feature is host-mode only; isolated tenants keep the
 per-conversation workspace model and the tenant boundary is unchanged.
 
+The resizable repository workspace unifies the conversation-scoped file explorer
+and Git change review. Environment metadata exposes branch/upstream status and
+local ahead/behind counts without fetching remote state. Per-file reviews share
+syntax highlighting and safe Markdown rendering with file browsing; staged and
+branch previews read the index/HEAD version rather than the working file.
+Explicit commit/push confirmations create ordinary durable Codex messages with
+selected paths and repository/HEAD preconditions. They do not introduce a Git
+write endpoint or bypass existing worker identity, sandbox, or approval rules;
+queue acknowledgement is not Git-operation success. See `docs/GIT_REVIEW.md`.
+
 The right-side file explorer is conversation-scoped. It exposes the conversation
 workspace and tenant library in every deployment, plus the selected host working
 directory in host mode. Directory contents are loaded lazily through the

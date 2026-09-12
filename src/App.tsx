@@ -43,8 +43,8 @@ import { BillingPanel } from "./billing-panel";
 import { SideChatPane, type SideChatForkRequest, type SideChatReferenceRequest } from "./side-chat-pane";
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
-import { FileExplorerPane } from "./file-explorer-pane";
-import { ReviewButton } from "./review-panel";
+import type { RepositoryTab } from "./repository-model";
+import { RepositoryPane, ReviewButton } from "./review-panel";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
 import { filterImportableSessionsByDateRange } from "./import-session-filter";
@@ -70,9 +70,9 @@ const PREVIEW_WIDTH_MAX = 960;
 const SIDE_CHAT_WIDTH_DEFAULT = 410;
 const SIDE_CHAT_WIDTH_MIN = 320;
 const SIDE_CHAT_WIDTH_MAX = 720;
-const FILE_EXPLORER_WIDTH_DEFAULT = 480;
+const FILE_EXPLORER_WIDTH_DEFAULT = 820;
 const FILE_EXPLORER_WIDTH_MIN = 340;
-const FILE_EXPLORER_WIDTH_MAX = 760;
+const FILE_EXPLORER_WIDTH_MAX = 1120;
 const COMPOSER_TEXT_HEIGHT_MIN = 72;
 const COMPOSER_TEXT_HEIGHT_MAX = 560;
 const RELOAD_STATUS_POLL_MS = 5_000;
@@ -427,6 +427,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readLocalStorageValue(SIDEBAR_COLLAPSED_KEY) === "true");
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
+  const [repositoryTab, setRepositoryTab] = useState<RepositoryTab>("changes");
   const [sideChatReferenceRequest, setSideChatReferenceRequest] = useState<SideChatReferenceRequest | null>(null);
   const [sideChatForkRequest, setSideChatForkRequest] = useState<SideChatForkRequest | null>(null);
   const [query, setQuery] = useState("");
@@ -602,13 +603,14 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setSideChatOpen((open) => !open);
   }, []);
 
-  const toggleFileExplorer = useCallback(() => {
+  const toggleFileExplorer = useCallback((tab: RepositoryTab = "files") => {
     setPreviewFile(null);
     setSnippetPreview(null);
     setSideChatOpen(false);
     setSideChatReferenceRequest(null);
     setSideChatForkRequest(null);
-    setFileExplorerOpen((open) => !open);
+    setRepositoryTab(tab);
+    setFileExplorerOpen(true);
   }, []);
 
   const askSideChatAbout = useCallback((selectedText: string, messageId: string) => {
@@ -2720,7 +2722,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     hostFilesAvailable, presetPrompts, presetSaving, removedEditingFileIds, selectedId, selectedModel, selectionSaving, sending, session.voiceEnabled, session.voiceModels, session.username, sourceReference, submitting,
   ]);
 
-  return <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+  return <div className={`shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`} style={{ "--repository-pane-max": `calc(100vw - ${sidebarCollapsed ? 0 : sidebarWidth}px - 400px)` } as CSSProperties}>
     {sidebarOpen && <button className="sidebar-backdrop" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
     <aside id="primary-sidebar" className={`sidebar ${sidebarOpen ? "open" : ""}`} style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
       <div className="sidebar-top">
@@ -3161,7 +3163,18 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onResizeStart={(event) => beginPaneResize(event, sideChatWidth, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX, "grow-left", setSideChatWidth, (width) => commitPaneWidth(SIDE_CHAT_WIDTH_KEY, width))}
       onResizeKeyDown={(event) => handlePaneResizerKey(event, "side-chat")}
     />}
-    {fileExplorerOpen && currentDetail && <FileExplorerPane
+    {fileExplorerOpen && currentDetail && <RepositoryPane
+      key={`${currentDetail.conversation.id}:${currentDetail.conversation.working_dir}`}
+      tab={repositoryTab}
+      onTabChange={setRepositoryTab}
+      revision={`${currentDetail.conversation.updated_at}:${currentDetail.conversation.status}`}
+      busy={sending || Boolean(currentDetail.activeJob) || currentDetail.pendingPrompts.length > 0 || Boolean(currentDetail.conversation.archived_at)}
+      onAction={async (prompt) => {
+        const id = currentDetail.conversation.id;
+        await api.sendMessage(id, prompt, []);
+        try { await reconcile(id); }
+        catch { setNotice("Git 操作请求已入队，但状态刷新失败；请刷新会话，不要重复提交。"); }
+      }}
       conversationId={currentDetail.conversation.id}
       width={fileExplorerWidth}
       onResizeStart={(event) => beginPaneResize(event, fileExplorerWidth, FILE_EXPLORER_WIDTH_MIN, FILE_EXPLORER_WIDTH_MAX, "grow-left", setFileExplorerWidth, (width) => commitPaneWidth(FILE_EXPLORER_WIDTH_KEY, width))}
@@ -3481,7 +3494,7 @@ function ContextUsageBadge({ usage }: { usage: ConversationDetail["contextUsage"
 }
 
 const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onEditMessage, onForkSideChat, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onToggleFileExplorer, fileExplorerOpen, onOpenBilling, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onForkSideChat: (messageId: string) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: () => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onForkSideChat: (messageId: string) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: (tab?: RepositoryTab) => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail.messages, detail.outputFiles]);
@@ -3603,7 +3616,7 @@ const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, s
         if (value === "__browse__") { onBrowseWorkingDir(detail.conversation.working_dir ?? undefined); return; }
         onWorkingDirChange(value || null);
       }}
-    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}{latestForkableMessage && <button type="button" className="chat-tool-trigger chat-fork-trigger" onClick={() => onForkSideChat(latestForkableMessage.id)} disabled={!forkEnabled} aria-label="从最新回答 Fork 到侧边聊天" title={forkEnabled ? "保留到最新回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={16} /><span>Fork 最新回答</span></button>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button type="button" className={`chat-tool-trigger ${fileExplorerOpen ? "active" : ""}`} onClick={onToggleFileExplorer} aria-pressed={fileExplorerOpen} aria-label="打开文件浏览器" title="打开文件浏览器"><FolderTree size={16} /><span>文件</span></button><ReviewButton key={`${detail.conversation.id}:${detail.conversation.working_dir}`} conversationId={detail.conversation.id} /><button type="button" className="chat-tool-trigger" onClick={onOpenBilling} aria-label="查看 API 计费统计" title="查看 API 计费统计"><BarChart3 size={16} /><span>API 统计</span></button></MobileTools></div></div>
+    />}{shouldWarnAboutRollout(detail.rolloutBytes) && <details className="rollout-warning"><summary className="icon-button" aria-label="会话历史容量提醒"><TriangleAlert size={19} /><span /></summary><div className="rollout-warning-panel"><strong>会话历史已达 {formatRolloutBytes(detail.rolloutBytes!)}</strong><p>超长会话会增加加载和续接成本。建议完成当前任务后归档，并新建任务继续。</p></div></details>}{latestForkableMessage && <button type="button" className="chat-tool-trigger chat-fork-trigger" onClick={() => onForkSideChat(latestForkableMessage.id)} disabled={!forkEnabled} aria-label="从最新回答 Fork 到侧边聊天" title={forkEnabled ? "保留到最新回答，Fork 到侧边聊天" : "请先完成当前任务和待发送任务"}><GitFork size={16} /><span>Fork 最新回答</span></button>}<button type="button" className={`side-chat-toggle ${sideChatOpen ? "active" : ""}`} onClick={onToggleSideChat} aria-pressed={sideChatOpen} title="打开侧边聊天"><Bot size={16} /><span>侧边聊天</span></button><button type="button" className={`chat-tool-trigger ${fileExplorerOpen ? "active" : ""}`} onClick={() => onToggleFileExplorer("files")} aria-pressed={fileExplorerOpen} aria-label="打开文件浏览器" title="打开文件浏览器"><FolderTree size={16} /><span>文件</span></button><ReviewButton key={`${detail.conversation.id}:${detail.conversation.working_dir}`} conversationId={detail.conversation.id} revision={`${detail.conversation.updated_at}:${detail.conversation.status}`} open={fileExplorerOpen} onOpen={onToggleFileExplorer} /><button type="button" className="chat-tool-trigger" onClick={onOpenBilling} aria-label="查看 API 计费统计" title="查看 API 计费统计"><BarChart3 size={16} /><span>API 统计</span></button></MobileTools></div></div>
     <OutputFilesPanel key={detail.conversation.id} files={orderedOutputFiles} onPreview={handlePreview} />
     <MessageList
       messages={detail.messages}
