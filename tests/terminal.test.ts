@@ -110,3 +110,48 @@ test("terminal rejects root, expires disconnected sessions and enforces per-user
   await pause(250);
   await assert.rejects(expiring.execute(identity, { action: "read", terminalId: session.terminalId, after: 0 }), (error: unknown) => error instanceof TerminalError && error.status === 404);
 });
+
+test("terminal long reads wake on output without a polling interval and release cancelled readers", { skip: process.platform !== "linux", timeout: 20000 }, async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-terminal-events-"));
+  fs.chmodSync(root, 0o777);
+  const manager = new TerminalManager();
+  context.after(() => { manager.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const identity: TerminalContext = { userId: "first", conversationId: "task", cwd: root, home: root, uid: process.getuid!() || 65534, gid: process.getgid!() || 65534 };
+  const opened = await manager.execute(identity, { action: "open", cols: 80, rows: 24 });
+  assert.ok("terminalId" in opened);
+  const terminalId = opened.terminalId;
+  let cursor = 0;
+  const quiet = async () => {
+    for (let attempts = 0; attempts < 30; attempts++) {
+      const result = await manager.execute(identity, { action: "read", terminalId, after: cursor, waitMs: 60 }) as TerminalSnapshot;
+      cursor = result.cursor;
+      if (!result.data) return;
+    }
+    assert.fail("terminal did not become idle");
+  };
+  await manager.execute(identity, { action: "write", terminalId, data: "stty -echo\n" });
+  await quiet();
+  let completed = false;
+  const pending = manager.execute(identity, { action: "read", terminalId, after: cursor, waitMs: 10000 }).then((result) => { completed = true; return result as TerminalSnapshot; });
+  await pause(40);
+  assert.equal(completed, false, "idle reads must wait rather than return an empty response");
+  const started = performance.now();
+  await manager.execute(identity, { action: "write", terminalId, data: "printf 'EVENT:%s\\n' ready\n" });
+  const output = await pending;
+  const latency = performance.now() - started;
+  assert.ok(output.data.length > 0);
+  assert.ok(latency < 500, `output wakeup took ${latency}ms`);
+  context.diagnostic(`PTY input-to-first-output wakeup: ${latency.toFixed(1)}ms (local, not network latency)`);
+  cursor = output.cursor;
+  await quiet();
+  const controller = new AbortController();
+  const readers = Array.from({ length: 8 }, () => assert.rejects(manager.execute(identity, { action: "read", terminalId, after: cursor, waitMs: 10000 }, controller.signal), { name: "AbortError" }));
+  await assert.rejects(manager.execute(identity, { action: "read", terminalId, after: cursor, waitMs: 10000 }), (error: unknown) => error instanceof TerminalError && error.status === 429);
+  controller.abort();
+  await Promise.all(readers);
+  const timeout = await manager.execute(identity, { action: "read", terminalId, after: cursor, waitMs: 30 }) as TerminalSnapshot;
+  assert.equal(timeout.data, "");
+  const closingRead = assert.rejects(manager.execute(identity, { action: "read", terminalId, after: cursor, waitMs: 10000 }), (error: unknown) => error instanceof TerminalError && error.status === 404);
+  await manager.execute(identity, { action: "close", terminalId });
+  await closingRead;
+});

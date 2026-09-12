@@ -56,6 +56,7 @@ export type TenantWorkerEvent =
   | { type: "failed"; message: string; cancelled?: boolean };
 
 export type WebToSupervisorMessage =
+  | { kind: "terminal_cancel_request"; requestId: string }
   | { kind: "terminal"; requestId: string; userId: string; conversationId: string; command: import("../src/terminal-protocol.js").TerminalCommand }
   | { kind: "git_review"; requestId: string; userId: string; request: import("../src/git-review.js").GitReviewRequest }
   | { kind: "tenant_run"; jobId: string; userId: string; request: TenantWorkerRunRequest }

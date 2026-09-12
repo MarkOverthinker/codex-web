@@ -44,6 +44,7 @@ import { SideChatPane, type SideChatForkRequest, type SideChatReferenceRequest }
 import { PresetPromptManagerDialog } from "./preset-prompt-manager";
 import { PathBrowserDialog, type PathBrowserRequest } from "./path-browser";
 import type { RepositoryTab } from "./repository-model";
+import { TerminalWindow } from "./terminal-pane";
 import { RepositoryPane, ReviewButton } from "./review-panel";
 import { formatRolloutBytes, shouldWarnAboutRollout } from "./rollout-capacity";
 import { formatElapsed, taskElapsedSeconds } from "./task-timing";
@@ -427,6 +428,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readLocalStorageValue(SIDEBAR_COLLAPSED_KEY) === "true");
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  useEffect(() => setTerminalOpen(false), [selectedId]);
   const [repositoryTab, setRepositoryTab] = useState<RepositoryTab>("changes");
   const [sideChatReferenceRequest, setSideChatReferenceRequest] = useState<SideChatReferenceRequest | null>(null);
   const [sideChatForkRequest, setSideChatForkRequest] = useState<SideChatForkRequest | null>(null);
@@ -603,7 +606,8 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setSideChatOpen((open) => !open);
   }, []);
 
-  const toggleFileExplorer = useCallback((tab: RepositoryTab = "files") => {
+  const toggleFileExplorer = useCallback((tab: RepositoryTab | "terminal" = "files") => {
+    if (tab === "terminal") { setTerminalOpen(true); return; }
     setPreviewFile(null);
     setSnippetPreview(null);
     setSideChatOpen(false);
@@ -3163,6 +3167,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onResizeStart={(event) => beginPaneResize(event, sideChatWidth, SIDE_CHAT_WIDTH_MIN, SIDE_CHAT_WIDTH_MAX, "grow-left", setSideChatWidth, (width) => commitPaneWidth(SIDE_CHAT_WIDTH_KEY, width))}
       onResizeKeyDown={(event) => handlePaneResizerKey(event, "side-chat")}
     />}
+    {terminalOpen && currentDetail && <TerminalWindow key={currentDetail.conversation.id} conversationId={currentDetail.conversation.id} onClose={() => setTerminalOpen(false)} />}
     {fileExplorerOpen && currentDetail && <RepositoryPane
       key={`${currentDetail.conversation.id}:${currentDetail.conversation.working_dir}`}
       tab={repositoryTab}
@@ -3494,7 +3499,7 @@ function ContextUsageBadge({ usage }: { usage: ConversationDetail["contextUsage"
 }
 
 const Chat = memo(function Chat({ detail, reasoningSteps, taskDurationSeconds, sending, loadingOlderMessages, messagesRef, onMessagesScroll, onJumpToUserMessage, onEditMessage, onForkSideChat, onAskAgent, onAskSideChat, onToggleSideChat, sideChatOpen, onToggleFileExplorer, fileExplorerOpen, onOpenBilling, onNewConversationFromSource, onOpenSnippet, onOpenSourceReference, userInitials, chatFontSize, workingDirSettings, workingDirSaving, onWorkingDirChange, onBrowseWorkingDir, onPreview, onSkipQueue, skipQueueBusy }: {
-  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onForkSideChat: (messageId: string) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: (tab?: RepositoryTab) => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
+  detail: ConversationDetail; reasoningSteps: ReasoningStep[]; taskDurationSeconds: number | null; sending: boolean; loadingOlderMessages: boolean; messagesRef: React.RefObject<HTMLDivElement | null>; onMessagesScroll: (event: React.UIEvent<HTMLDivElement>) => void; onJumpToUserMessage: (direction: JumpDirection) => void; onEditMessage: (message: Message) => void; onForkSideChat: (messageId: string) => void; onAskAgent: (selectedText: string, messageId: string) => void; onAskSideChat: (selectedText: string, messageId: string) => void; onToggleSideChat: () => void; sideChatOpen: boolean; onToggleFileExplorer: (tab?: RepositoryTab | "terminal") => void; fileExplorerOpen: boolean; onOpenBilling: () => void; onNewConversationFromSource: (messageId: string, excerpt: string) => void; onOpenSourceReference: (reference: MessageSourceReference) => void; userInitials: string; chatFontSize: number;
   workingDirSettings: WorkingDirSettings | null; workingDirSaving: boolean; onWorkingDirChange: (workingDir: string | null) => void; onBrowseWorkingDir: (initialPath?: string) => void; onPreview: (file: WorkFile) => void; onOpenSnippet: (target: FileLineRef) => void; onSkipQueue?: (jobId: string) => void; skipQueueBusy?: boolean;
 }) {
   const citationFiles = useMemo(() => [...detail.outputFiles, ...detail.messages.flatMap((message) => message.files)], [detail.messages, detail.outputFiles]);
