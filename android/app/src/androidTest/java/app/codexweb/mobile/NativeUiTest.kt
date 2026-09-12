@@ -367,6 +367,23 @@ class NativeUiTest {
         compose.waitForIdle()
     }
 
+    private fun swipeHome(left: Boolean, distanceFraction: Float = .7f, durationMillis: Long = 400) {
+        compose.onNodeWithTag("home-pager").assertIsDisplayed().performTouchInput {
+            val startX = if (left) width * .85f else width * .15f
+            val endX = if (left) startX - width * distanceFraction else startX + width * distanceFraction
+            swipe(Offset(startX, height * .5f), Offset(endX, height * .5f), durationMillis)
+        }
+        compose.waitForIdle()
+    }
+
+    private fun awaitHomeTab(tab: HomeTab) {
+        compose.waitUntil(5000) {
+            model.state.homeTab == tab && compose.onAllNodesWithTag("home-pager-settled-${tab.name}").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("tab-${tab.name}").assertIsSelected()
+        compose.onNodeWithTag("home-page-${tab.name}").assertIsDisplayed()
+    }
+
     private fun assertTaskStatus(tag: String, expected: String) {
         val node = compose.onNodeWithTag(tag).fetchSemanticsNode()
         val texts = generateSequence(listOf(node)) { level -> if (level.isEmpty()) null else level.flatMap { it.children } }
@@ -395,6 +412,93 @@ class NativeUiTest {
         compose.onNodeWithTag("tab-Chat").performClick()
         compose.onNodeWithTag("composer").assertTextContains("导航切换保留草稿")
         assertEquals(0, gateway.sends)
+    }
+
+    @Test fun homePagerSwipesBothDirectionsReboundsAndStopsAtEdges() {
+        login()
+        val requestsBefore = gateway.requests.toList()
+
+        swipeHome(left = true)
+        awaitHomeTab(HomeTab.Workspace)
+        swipeHome(left = true)
+        awaitHomeTab(HomeTab.Profile)
+
+        swipeHome(left = true)
+        awaitHomeTab(HomeTab.Profile)
+        swipeHome(left = false, distanceFraction = .12f, durationMillis = 600)
+        awaitHomeTab(HomeTab.Profile)
+
+        swipeHome(left = false)
+        awaitHomeTab(HomeTab.Workspace)
+        swipeHome(left = false)
+        awaitHomeTab(HomeTab.Chat)
+        swipeHome(left = false)
+        awaitHomeTab(HomeTab.Chat)
+
+        compose.runOnIdle {
+            assertEquals("一级页手势不得发送消息", 0, gateway.sends)
+            assertEquals("一级页手势不得创建任务", 0, gateway.creates)
+            assertEquals("一级页手势不得请求业务接口", requestsBefore, gateway.requests.toList())
+        }
+    }
+
+    @Test fun pagerAndBottomNavigationPreserveDraftAndReadingPosition() {
+        gateway.longMessages = true
+        login()
+        val draft = "横向切页后仍需保留的草稿"
+        compose.onNodeWithTag("composer").performTextInput(draft)
+        compose.runOnIdle { assertEquals("输入后模型应立即持有草稿", draft, model.state.composer.content) }
+        dismissKeyboard()
+        compose.runOnIdle { assertEquals("收起键盘不得清空草稿", draft, model.state.composer.content) }
+        compose.onNodeWithTag("messages").performScrollToIndex(0)
+        compose.waitForIdle()
+        compose.waitUntil(5000) { model.state.composer.content == draft && !model.state.composer.dirty }
+        val before = compose.onNodeWithTag("messages").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        val requestsBefore = gateway.requests.toList()
+
+        swipeHome(left = true)
+        awaitHomeTab(HomeTab.Workspace)
+        compose.runOnIdle { assertEquals("手势进入工作台不得清空草稿", draft, model.state.composer.content) }
+        compose.onNodeWithTag("tab-Profile").performClick()
+        awaitHomeTab(HomeTab.Profile)
+        compose.runOnIdle { assertEquals("底栏进入我的不得清空草稿", draft, model.state.composer.content) }
+        swipeHome(left = false)
+        awaitHomeTab(HomeTab.Workspace)
+        compose.runOnIdle { assertEquals("从我的右滑回工作台不得清空草稿", draft, model.state.composer.content) }
+        swipeHome(left = false)
+        awaitHomeTab(HomeTab.Chat)
+        compose.runOnIdle { assertEquals("从工作台右滑回对话不得清空草稿", draft, model.state.composer.content) }
+
+        compose.onNodeWithTag("composer")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(draft)))
+        val restoredRange = compose.onNodeWithTag("messages").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange]
+        assertEquals("切页往返后阅读位置应保持", before, restoredRange.value(), 1f)
+        assertTrue("测试必须从历史位置而非列表末端开始", restoredRange.value() < restoredRange.maxValue())
+        compose.runOnIdle {
+            assertEquals(draft, model.state.composer.content)
+            assertEquals(0, gateway.sends)
+            assertEquals(0, gateway.creates)
+            assertEquals(requestsBefore, gateway.requests.toList())
+        }
+    }
+
+    @Test fun toolDetailDoesNotExposeOrRespondAsHomePager() {
+        login()
+        compose.onNodeWithTag("tab-Workspace").performClick()
+        awaitHomeTab(HomeTab.Workspace)
+        compose.onNodeWithTag("workspace-review").performScrollTo().performClick()
+        compose.waitUntil(5000) { model.state.page?.kind == "review" && !model.state.pageLoading }
+        compose.onNodeWithTag("home-pager").assertDoesNotExist()
+        compose.onNodeWithTag("mobile-shell").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("详情页横滑不得切换一级页", HomeTab.Workspace, model.state.homeTab)
+            assertEquals("详情页横滑不得改变工具页", "review", model.state.page?.kind)
+            assertEquals(0, gateway.sends)
+        }
+        compose.onNodeWithTag("home-pager").assertDoesNotExist()
     }
 
     @Test fun loginAndChatAreNativeAndToolsPreserveComposer() {
@@ -705,7 +809,7 @@ class NativeUiTest {
     @Test fun swipeOpensProjectDrawerWithLimitedGroupsAndStatusSwitch() {
         login()
         compose.onNodeWithTag("mobile-shell").performTouchInput {
-            swipe(Offset(width * .12f, height * .2f), Offset(width * .9f, height * .2f), 500)
+            swipe(Offset(width * .04f, height * .2f), Offset(width * .9f, height * .2f), 500)
         }
         compose.onNodeWithTag("drawer-content").assertIsDisplayed()
         compose.onNodeWithText("Codex Web").assertIsDisplayed()
