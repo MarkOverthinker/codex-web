@@ -10,6 +10,8 @@
 
 当前发布记录、校验值及验收范围见 [0.4.2-preview](../releases/android/0.4.2-preview.md)。
 
+下一轮体验与视觉升级见 [0.5 分版本计划、PRD 与 QA](../tasks/prd-android-05.md)。规划和候选验收不等于已经发布；当前可下载版本以发布记录为准。
+
 ## 安装与连接
 
 1. 安装 `codex-native-android-0.4.2-preview.apk`，启动 **Codex Native**。已安装同签名 0.4.1/0.4.0/0.3.4/0.3.3/0.3.2/0.3.1/0.3.0-preview 预览版时直接覆盖升级，不要卸载。
