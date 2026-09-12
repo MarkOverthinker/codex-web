@@ -5,7 +5,7 @@ import { describeUpstreamError, isRetryableUpstreamError, upstreamErrorMessage }
 import { buildOptionalCapabilityConfig, type OptionalAgentCapabilities } from "./optional-capabilities.js";
 import { buildReasoningSteps } from "./reasoning-parts.js";
 import type { SandboxMode } from "./model-options.js";
-import type { TokenUsage } from "./billing.js";
+import type { TokenUsage, TokenUsageIdentity } from "./billing.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -59,7 +59,7 @@ type AppServerCallbacks = {
   onThreadStarted(threadId: string): void;
   onTurnStarted?(turnId: string): void;
   onProgress(payload: unknown): void;
-  onUsage?(usage: TokenUsage): void;
+  onUsage?(usage: TokenUsage, identity?: TokenUsageIdentity): void;
   onContextUsage?(usage: ContextUsage): void;
 };
 
@@ -495,7 +495,10 @@ class AppServerTurnClient {
     if (turn?.status === "completed") {
       const explicitUsage = parseTokenUsage(params.usage ?? (turn as JsonObject | undefined)?.usage);
       const usage = explicitUsage ?? (completedTurnId ? this.turnUsages.get(completedTurnId) : undefined);
-      if (usage) this.callbacks.onUsage?.(usage);
+      if (usage) {
+        const threadId = typeof params.threadId === "string" ? params.threadId : this.threadId;
+        this.callbacks.onUsage?.(usage, threadId && completedTurnId ? { threadId, turnId: completedTurnId } : undefined);
+      }
       if (completedTurnId) this.turnUsages.delete(completedTurnId);
       this.callbacks.onProgress({ kind: "status", label: "工作已完成，正在整理结果" });
       this.resolveCompletion(this.finalResponse);

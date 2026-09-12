@@ -67,6 +67,7 @@ import { createShareToken, parseShareToken, SHARE_LIFETIME_SECONDS } from "./sha
 import { MIME_BY_EXTENSION, mimeTypeForPath } from "./mime.js";
 import { buildUserCancellationSummary } from "./cancellation-summary.js";
 import { buildBillingState, BUILTIN_PROVIDER_ID, syncProviderPricing } from "./billing.js";
+import { RolloutUsageSynchronizer } from "./rollout-usage.js";
 import { discoverImportableSessions, importSessionThread, normalizeImportedWorkingDir, readCodexThreadWorkingDir } from "./session-importer.js";
 import { locateMessageInCodexRolloutEventually } from "./message-source-locator.js";
 import {
@@ -673,6 +674,7 @@ export function createApp(overrides: AppOverrides = {}) {
   }
 
   const runner = new CodexRunner(config, db, publish);
+  const rolloutUsage = new RolloutUsageSynchronizer(config, db, logger);
   const transcription = new TranscriptionService(config);
   const voiceEnabled = transcription.models.length > 0;
   const deletingConversations = new Set<string>();
@@ -1203,6 +1205,12 @@ export function createApp(overrides: AppOverrides = {}) {
   api.get("/billing", (_req, res) => {
     const session = res.locals.session as SessionRow;
     return res.json(buildBillingState(db, session.user_id, res.locals.billingRange.days, res.locals.billingRange));
+  });
+
+  api.post("/billing/sync-usage", async (_req, res) => {
+    const session = res.locals.session as SessionRow;
+    const result = await rolloutUsage.scanUser(session.user_id);
+    return res.json({ result, billing: buildBillingState(db, session.user_id, res.locals.billingRange.days, res.locals.billingRange) });
   });
 
   api.put("/billing/pricing-rules/:providerId/:modelId", (req, res) => {
@@ -3197,6 +3205,8 @@ export function createApp(overrides: AppOverrides = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>分享预览 · ${escapeHtml(file.original_name)}</title>
+<link rel="icon" href="${config.basePath.replace(/\/$/, "")}/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="${config.basePath.replace(/\/$/, "")}/favicon.svg">
 <style>
   body { margin: 0; color: #1f2333; background: #f4f5f9; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
   header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid #e0e3ec; background: #fff; }
@@ -3285,8 +3295,8 @@ export function createApp(overrides: AppOverrides = {}) {
 
   if (config.queueAutoStart) setImmediate(() => void pumpQueue());
   return {
-    app, db, runner, config, logger, pumpQueue,
-    beginShutdown: () => { shuttingDown = true; terminals.dispose(); terminalClient?.dispose(); },
+    app, db, runner, rolloutUsage, config, logger, pumpQueue,
+    beginShutdown: () => { shuttingDown = true; terminals.dispose(); terminalClient?.dispose(); void rolloutUsage.stop(); },
   };
 }
 

@@ -154,7 +154,7 @@ export class CodexRunner {
         onTurnStarted: () => undefined,
         onProgress: () => undefined,
         onContextUsage: () => undefined,
-        onUsage: (usage: TokenUsage) => {
+        onUsage: (usage: TokenUsage, identity?: import("./billing.js").TokenUsageIdentity) => {
           try {
             recordTokenUsage(this.db, {
               userId: conversation.user_id,
@@ -163,6 +163,7 @@ export class CodexRunner {
               providerId: selection.provider,
               modelId: usageModelId,
               usage,
+              identity,
             });
           } catch {
             // A deleted or closed main job must not turn title cleanup into a process error.
@@ -298,13 +299,14 @@ export class CodexRunner {
           this.publish(jobId, "context_usage", usage);
         },
         onProgress: (payload: unknown) => this.publish(jobId, "progress", payload),
-        onUsage: (usage: TokenUsage) => recordTokenUsage(this.db, {
+        onUsage: (usage: TokenUsage, identity?: import("./billing.js").TokenUsageIdentity) => recordTokenUsage(this.db, {
           userId: conversation.user_id,
           jobId,
           conversationId,
           providerId: selection.provider,
           modelId: usageModelId,
           usage,
+          identity,
         }),
       };
       const rawFinalResponse = await runWithTransientRetries(async (retryAttempt) => {
