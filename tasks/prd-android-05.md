@@ -1,6 +1,6 @@
 # Android 0.5：体验、视觉与交付规划
 
-日期：2026-09-12。基线：`0.4.2-preview` / versionCode 11，源码基线 `historical-reference-removed`。状态：0.5.0-preview 已完成实施与候选验收，用户确认后已公开发布；原发布轮次已停止。2026-09-13 另完成不改变发布状态的 [0.5.1 一级页面滑动源码里程碑](android-05/0.5.1.md)。公网浏览器导航限制见发布记录。
+日期：2026-09-12。基线：`0.4.2-preview` / versionCode 11，源码基线 `historical-reference-removed`。状态：0.5.0-preview 已完成实施与候选验收，用户确认后已公开发布；原发布轮次已停止。2026-09-13 完成 [0.5.1 一级页面滑动里程碑](android-05/0.5.1.md)，用户确认后以 versionCode 13 发布 `0.5.1-preview`。公网浏览器导航限制见发布记录。
 
 ## 目标与事实
 
@@ -79,7 +79,7 @@
 | 0.4.4 | Poincare 实施与退回修复；Hubble QA；主 agent 签收 | composer/布局纯逻辑 37/37；最终完整原生 36/36 | 合入 0.5 候选；未独立发布 |
 | 0.4.5 | Boyle 实施；Hubble QA；主 agent 签收 | 筛选单测 14/14；最终原生、矩阵与草稿往返通过 | 合入 0.5 候选；未独立发布 |
 | 0.5.0 | 签名候选已冻结；主 agent 最终签收并停止 | JVM 130/130；原生 36/36；三组布局各 3/3；按钮各 1/1；npm 315/315；覆盖升级成功 | 0.5.0-preview / code 12；用户确认后已发布 |
-| 0.5.1 后续 | 一级页面横向分页源码已由主 agent 签收 | JVM 130/130；原生 39/39；分页目标与独立复核通过；npm 328/328（系统 `/tmp`） | 内部源码里程碑；未提升版本、未构建签名候选、未发布 |
+| 0.5.1 | 一级页面横向分页源码已由主 agent 签收，用户确认后以 versionCode 13 重建并发布 | JVM 130/130；原生 39/39；分页目标与独立复核通过；npm 328/328（系统 `/tmp`）；发布轮 JVM 390/390、覆盖升级与公网核验通过 | 0.5.1-preview / code 13；用户确认后已发布 |
 
 需要时阅读：[客户端现状](../docs/ANDROID.md)、[发布流程](../docs/ANDROID_RELEASES.md)。
 
@@ -116,3 +116,8 @@
 2026-09-12，用户在候选签收后明确要求“发布”。主 agent 发布 `historical-reference-removed` 对应的原始签名 APK，公网 HTTPS 完整下载与哈希/签名、200/206、校验文件和历史保留通过；固定下载页现为 0.5.0，共保留 9 版。Hilbert 更新三份用户文档，主 agent 负责操作与最终审查。
 
 本环境 Chromium 公网导航 `ERR_EMPTY_RESPONSE`，复查未恢复；只签收与公网 HTML 完全相同的本地手机/桌面页面布局，不宣称公网浏览器验收通过。详见 [0.5.0 发布记录](../releases/android/0.5.0-preview.md#公开发布核验)。本次没有启动新版本。
+
+
+### 0.5.1 里程碑发布
+
+2026-09-13，用户要求重载网页端并发布 App。0.5.1 一级页面滑动里程碑（`historical-reference-removed`、`historical-reference-removed`）此前已通过实施与独立 QA；主 agent 提升 versionCode 12 → 13 后重建签名候选：preview/release 变体 JVM 260/260（合计 390 项 0 失败）、`lintPreview` 0 错误/18 既有警告、签名与包体校验通过；模拟器 0.5.0 → 0.5.1 覆盖安装与冷启动通过。`publish-android.mjs` 发布后公网完整重下载哈希一致，10 条公开记录保留全部旧版本；本地 390/1280px 页面截图无溢出，公网浏览器导航限制同上。网页端 favicon 改动同会话 `npm test` 328/328 并重载服务。证据见 [0.5.1 记录](android-05/0.5.1.md) 与 [0.5.1-preview 发布记录](../releases/android/0.5.1-preview.md#公开发布核验)。
