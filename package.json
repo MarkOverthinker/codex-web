@@ -11,6 +11,7 @@
     "start": "node dist-server/server/index.js",
     "reload": "node scripts/reload-codex-web.mjs",
     "init-providers": "node scripts/init-provider-sources.mjs",
+    "favicons": "node scripts/generate-favicons.mjs",
     "hash-password": "node scripts/hash-password.mjs",
     "test": "tsc -p tsconfig.server.json && node --import tsx --test tests/*.test.ts",
     "test:mobile": "playwright test",
