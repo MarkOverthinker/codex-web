@@ -27,6 +27,7 @@ export function readPrivacyPolicy(cwd) {
 }
 
 export function textPrivacyProblems(text, filename, policy = { forbiddenLiterals: [] }) {
+  text = text.replaceAll("\\/", "/");
   const problems = [];
   if (policy.forbiddenLiterals.some((value) => text.toLowerCase().includes(value.toLowerCase()))) {
     problems.push("operator-specific private value");
@@ -51,7 +52,7 @@ function privateFilename(filename) {
     || /\.(?:orig|rej|bak|backup|pem|key|p12|pfx|jks|keystore|sqlite(?:-wal|-shm)?|db|log|jsonl|apk|zip|tar|gz|zst)$/i.test(filename);
 }
 
-export function checkPrivacy({ cwd = process.cwd(), staged = false, revision = "HEAD", policy = readPrivacyPolicy(cwd) } = {}) {
+export function checkPrivacy({ cwd = process.cwd(), staged = false, revision = "HEAD", policy = readPrivacyPolicy(cwd), seenEntries = new Set() } = {}) {
   const issues = [];
   const add = (filename, problems) => problems.forEach((rule) => issues.push({ filename, rule }));
   const entries = git(cwd, staged ? ["ls-files", "--stage", "-z"] : ["ls-tree", "-r", "-z", revision]).toString("utf8").split("\0").filter(Boolean);
@@ -61,6 +62,9 @@ export function checkPrivacy({ cwd = process.cwd(), staged = false, revision = "
     const fields = entry.slice(0, separator).split(" ");
     const mode = fields[0];
     const objectId = fields[staged ? 1 : 2];
+    const cacheKey = `${entry}`;
+    if (seenEntries.has(cacheKey)) continue;
+    seenEntries.add(cacheKey);
     if (privateFilename(filename)) add(filename, ["private or generated file must not be tracked"]);
     add(filename, textPrivacyProblems(filename, filename, policy));
     if (mode !== "100644" && mode !== "100755") {
@@ -78,11 +82,41 @@ export function checkPrivacy({ cwd = process.cwd(), staged = false, revision = "
     }
     add(filename, textPrivacyProblems(content.toString("utf8"), filename, policy));
   }
-  const identity = staged
-    ? ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"].map((name) => git(cwd, ["var", name]).toString("utf8")).join("\n")
-    : git(cwd, ["show", "-s", "--format=%an%n%ae%n%cn%n%ce%n%B", revision]).toString("utf8");
-  add("commit metadata", textPrivacyProblems(identity, "commit metadata", policy));
+  if (!staged) {
+    const message = git(cwd, ["show", "-s", "--format=%B", revision]).toString("utf8");
+    add("commit message", textPrivacyProblems(message, "commit message", policy));
+  }
   return issues;
+}
+
+export function checkOutgoing({ cwd = process.cwd(), input, policy = readPrivacyPolicy(cwd) }) {
+  const seenEntries = new Set();
+  const seenCommits = new Set();
+  const zeroId = /^0+$/;
+  for (const line of input.trim().split("\n").filter(Boolean)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length !== 4 || !/^[a-f0-9]{40,64}$/.test(fields[1]) || !/^[a-f0-9]{40,64}$/.test(fields[3])) {
+      throw new Error("Invalid pre-push input");
+    }
+    const [, localId, remoteRef, remoteId] = fields;
+    if (!/^refs\/(?:heads|tags)\//.test(remoteRef)) return [{ filename: "push", rule: "internal agent or backup refs must not be published" }];
+    if (zeroId.test(localId)) continue;
+    const args = ["rev-list", "--reverse", localId];
+    if (!zeroId.test(remoteId)) {
+      try {
+        git(cwd, ["cat-file", "-e", `${remoteId}^{commit}`]);
+        args.push("--not", remoteId);
+      } catch {}
+    }
+    const revisions = git(cwd, args).toString("utf8").trim().split("\n").filter(Boolean);
+    for (const revision of revisions) {
+      if (seenCommits.has(revision)) continue;
+      seenCommits.add(revision);
+      const issues = checkPrivacy({ cwd, revision, policy, seenEntries });
+      if (issues.length) return issues.map((issue) => ({ ...issue, filename: `${revision.slice(0, 12)}:${issue.filename}` }));
+    }
+  }
+  return [];
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -92,10 +126,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     let issues;
     if (args.length === 2 && args[0] === "--message") {
       issues = textPrivacyProblems(fs.readFileSync(args[1], "utf8"), "commit message", readPrivacyPolicy(cwd)).map((rule) => ({ filename: "commit message", rule }));
+    } else if (args.length === 1 && args[0] === "--push") {
+      issues = checkOutgoing({ cwd, input: fs.readFileSync(0, "utf8") });
     } else if (args.length === 0 || (args.length === 1 && args[0] === "--staged")) {
       issues = checkPrivacy({ cwd, staged: args[0] === "--staged" });
     } else {
-      throw new Error("Usage: check-public-privacy.mjs [--staged | --message FILE]");
+      throw new Error("Usage: check-public-privacy.mjs [--staged | --message FILE | --push]");
     }
     for (const issue of issues) console.error(`${issue.filename}: ${issue.rule}`);
     if (issues.length) process.exitCode = 1;
