@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 const checkerModule = "../scripts/check-public-privacy.mjs";
-const { checkPrivacy, readPrivacyPolicy, textPrivacyProblems } = await import(checkerModule);
+const { checkPrivacy, checkOutgoing, readPrivacyPolicy, textPrivacyProblems } = await import(checkerModule);
 const checkerPath = path.resolve("scripts/check-public-privacy.mjs");
 const privateHome = ["/home", "sensitive-operator", "project"].join("/");
 const privateEmail = ["operator", "personal.test"].join("@");
@@ -32,6 +32,7 @@ test("privacy checks allow examples and retain third-party attribution", () => {
   assert.deepEqual(textPrivacyProblems(privateEmail, "licenses/vendor/NOTICE"), []);
   assert.deepEqual(textPrivacyProblems("noreply@github.com contributor@users.noreply.github.com", "commit metadata"), []);
   assert.deepEqual(textPrivacyProblems(privateHome, "README.md"), ["personal home-directory path"]);
+  assert.deepEqual(textPrivacyProblems(privateHome.replaceAll("/", "\\/"), "README.md"), ["personal home-directory path"]);
   assert.deepEqual(textPrivacyProblems(privateEmail, "README.md"), ["non-placeholder email address"]);
   const credential = "ghp_" + "A".repeat(30);
   assert.deepEqual(textPrivacyProblems(credential, "config.txt"), ["credential or private-key pattern"]);
@@ -59,14 +60,17 @@ test("private filenames and unreviewed binary assets are blocked", (context) => 
   assert.ok(issues.some((issue: { rule: string }) => issue.rule === "binary content requires explicit privacy review"));
 });
 
-test("commit metadata is checked independently of public file contents", (context) => {
+test("normal author and committer identities are preserved and accepted", (context) => {
   const project = fixture(context);
   project.write("README.md", "Public text");
   project.git("add", "README.md");
   project.git("config", "user.email", privateEmail);
   project.git("commit", "-m", "Public snapshot");
   const issues = checkPrivacy({ cwd: project.cwd });
-  assert.deepEqual(issues, [{ filename: "commit metadata", rule: "non-placeholder email address" }]);
+  assert.deepEqual(issues, []);
+  assert.deepEqual(checkPrivacy({ cwd: project.cwd, staged: true, policy: { forbiddenLiterals: [privateEmail] } }), []);
+  assert.equal(project.git("log", "-1", "--format=%ae"), privateEmail);
+  assert.equal(project.git("log", "-1", "--format=%ce"), privateEmail);
 });
 
 test("local forbidden terms stay local and malformed policy fails closed", (context) => {
@@ -98,4 +102,49 @@ test("commit-message hook rejects private values without echoing them", (context
   assert.ok(!result.stderr.includes(privateHome));
   project.git("commit", "-m", "Public snapshot");
   assert.deepEqual(checkPrivacy({ cwd: project.cwd }), []);
+});
+
+
+test("outgoing checks reject a private intermediate snapshot even after cleanup", (context) => {
+  const project = fixture(context);
+  project.write("README.md", "Public text");
+  project.git("add", "README.md");
+  project.git("commit", "-m", "Initial public snapshot");
+  const remoteId = project.git("rev-parse", "HEAD");
+  project.write("README.md", privateHome);
+  project.git("add", "README.md");
+  project.git("commit", "-m", "Intermediate snapshot");
+  project.write("README.md", "Public text again");
+  project.git("add", "README.md");
+  project.git("commit", "-m", "Clean final snapshot");
+  const localId = project.git("rev-parse", "HEAD");
+  assert.deepEqual(checkPrivacy({ cwd: project.cwd }), []);
+  const input = `refs/heads/main ${localId} refs/heads/main ${remoteId}\n`;
+  assert.ok(checkOutgoing({ cwd: project.cwd, input }).some((issue: { rule: string }) => issue.rule === "personal home-directory path"));
+});
+
+test("outgoing checks cover messages and reject internal refs", (context) => {
+  const project = fixture(context);
+  project.write("README.md", "Public text");
+  project.git("add", "README.md");
+  project.git("commit", "-m", "Initial public snapshot");
+  const remoteId = project.git("rev-parse", "HEAD");
+  project.git("commit", "--allow-empty", "-m", `Inspect ${privateHome}`);
+  const localId = project.git("rev-parse", "HEAD");
+  const input = `refs/heads/main ${localId} refs/heads/main ${remoteId}\n`;
+  assert.ok(checkOutgoing({ cwd: project.cwd, input }).some((issue: { filename: string }) => issue.filename.endsWith(":commit message")));
+  const internal = `refs/backup/local ${localId} refs/backup/local ${"0".repeat(40)}\n`;
+  assert.deepEqual(checkOutgoing({ cwd: project.cwd, input: internal }), [{ filename: "push", rule: "internal agent or backup refs must not be published" }]);
+});
+
+test("outgoing checks accept public changes with normal Git identities", (context) => {
+  const project = fixture(context);
+  project.git("config", "user.email", privateEmail);
+  project.write("README.md", "Public text");
+  project.git("add", "README.md");
+  project.git("commit", "-m", "Initial public snapshot");
+  const localId = project.git("rev-parse", "HEAD");
+  const input = `refs/heads/main ${localId} refs/heads/main ${"0".repeat(40)}\n`;
+  assert.deepEqual(checkOutgoing({ cwd: project.cwd, input }), []);
+  assert.throws(() => checkOutgoing({ cwd: project.cwd, input: "invalid input" }), /Invalid pre-push input/);
 });
