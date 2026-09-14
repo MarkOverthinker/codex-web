@@ -13,6 +13,7 @@
     "init-providers": "node scripts/init-provider-sources.mjs",
     "favicons": "node scripts/generate-favicons.mjs",
     "hash-password": "node scripts/hash-password.mjs",
+    "check:privacy": "node scripts/check-public-privacy.mjs",
     "test": "tsc -p tsconfig.server.json && node --import tsx --test tests/*.test.ts",
     "test:mobile": "playwright test",
     "lint": "tsc --noEmit"

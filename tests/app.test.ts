@@ -1121,7 +1121,7 @@ test("upstream failures get actionable diagnostics while unknowns pass through",
   assert.match(auth, /API Key 无效或已过期/);
   const model = describeUpstreamError("{\"error\":{\"message\":\"模型配置不存在: gpt-5.6-sol\",\"type\":\"invalid_request_error\"}}");
   assert.match(model, /^上游不识别所选模型/);
-  const config = describeUpstreamError("failed to load configuration: failed to parse model_catalog_json path `/home/user/.codex/models_cache.json` as JSON");
+  const config = describeUpstreamError("failed to load configuration: failed to parse model_catalog_json path `/home/test/.codex/models_cache.json` as JSON");
   assert.match(config, /^Codex 配置加载失败/);
   const compatibilityError = JSON.stringify({ error: { message: "include is not supported in Responses compatibility mode", code: "invalid_request" } });
   const compatibility = describeUpstreamError(compatibilityError);
