@@ -3,18 +3,25 @@ import { expect, type Page } from "@playwright/test";
 const conversation = { id: "mobile-demo", title: "检查项目与整理交付文件", title_source: "manual", status: "idle", has_unread_result: 0, has_pending_work: 0, rollout_bytes: 0, archived_at: null, created_at: "2026-09-01T08:00:00Z", updated_at: "2026-09-01T08:00:00Z", working_dir: null };
 const selection = { model: "demo-model", reasoningEffort: "medium", sandbox: "workspace-write" };
 
-export async function setup(page: Page, groupedModels = false, voiceEnabled = false) {
+type FixtureOptions = {
+  assistantContent?: string;
+  outputFiles?: Array<{ id: string; original_name: string; relative_path: string; host_path?: string; mime_type: string; size: number; kind: "upload" | "output" }>;
+  fileContents?: Record<string, string>;
+  codeSnippet?: { path: string; originalName: string; line: number; start: number; end: number; totalLines: number; lines: string[] };
+};
+
+export async function setup(page: Page, groupedModels = false, voiceEnabled = false, options: FixtureOptions = {}) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem("codex-web:selected-conversation", "mobile-demo"));
   const detail = {
-    conversation, agentSelection: selection, outputFiles: [], pendingPrompts: [], editingPrompt: null,
+    conversation, agentSelection: selection, outputFiles: options.outputFiles ?? [], pendingPrompts: [], editingPrompt: null,
     composerDraft: null as null | Record<string, unknown>, enabledPresetPromptIds: [], activeJob: null,
     latestJob: null, jobEvents: [], rolloutBytes: 0, contextUsage: { usedTokens: 1200, contextWindow: 128000, updatedAt: null },
     messagePage: { hasMore: false, nextCursor: null },
     messages: [
       { id: "user-demo", role: "user", content: "检查这个项目，整理结果，并保留现有功能。", files: [], can_edit: true, can_fork: true, created_at: "2026-09-01T08:00:00Z" },
-      { id: "assistant-demo", role: "assistant", content: "## 检查结果\n\n已保留会话、任务队列和附件。\n\n- 主界面专注于对话\n- 工具按需展开\n- 文件在单独页面预览\n\n```ts\nconst status = 'ready';\n```", files: [], created_at: "2026-09-01T08:01:00Z" },
+      { id: "assistant-demo", role: "assistant", content: options.assistantContent ?? "## 检查结果\n\n已保留会话、任务队列和附件。\n\n- 主界面专注于对话\n- 工具按需展开\n- 文件在单独页面预览\n\n```ts\nconst status = 'ready';\n```", files: [], created_at: "2026-09-01T08:01:00Z" },
     ],
   };
   const sideDetail = { ...detail, conversation: { ...conversation, id: "side-demo" }, messages: [] };
@@ -33,7 +40,11 @@ export async function setup(page: Page, groupedModels = false, voiceEnabled = fa
     else if (path === "/preset-prompts") body = { presetPrompts: [] };
     else if (path === "/reload-status") body = { available: false };
     else if (path.endsWith("/review")) body = { root: "/workspace", branch: "main", bases: ["main"], base: null, comparison: "工作区", files: [] };
-    else if (path.endsWith("/messages") && route.request().method() === "POST") { detail.composerDraft = null; body = {}; }
+    else if (path === "/conversations/mobile-demo/code-snippet" && options.codeSnippet) body = options.codeSnippet;
+    else if (path.startsWith("/files/") && options.fileContents?.[path.slice("/files/".length)] !== undefined) {
+      await route.fulfill({ contentType: "text/plain", body: options.fileContents[path.slice("/files/".length)] });
+      return;
+    } else if (path.endsWith("/messages") && route.request().method() === "POST") { detail.composerDraft = null; body = {}; }
     else if (path.endsWith("/draft") && route.request().method() === "PUT") {
       detail.composerDraft = { ...route.request().postDataJSON(), conversation_id: conversation.id, files: [], created_at: conversation.created_at, updated_at: conversation.updated_at };
       body = { composerDraft: detail.composerDraft };

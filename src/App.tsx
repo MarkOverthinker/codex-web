@@ -654,7 +654,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     setSideChatForkRequest({ id: sideChatForkSequenceRef.current, sourceConversation, sourceMessageId: messageId });
   }, []);
 
-  const openFilePreview = useCallback((file: WorkFile) => { setFileExplorerOpen(false); setSideChatOpen(false); setTerminalOpen(false); setPreviewFile(file); }, []);
+  const openFilePreview = useCallback((file: WorkFile) => { setFileExplorerOpen(false); setSideChatOpen(false); setTerminalOpen(false); setSnippetPreview(null); setPreviewFile(file); }, []);
   const closeFilePreview = useCallback(() => setPreviewFile(null), []);
   const openCodeSnippet = useCallback((target: FileLineRef) => {
     const conversation = detailRef.current;
