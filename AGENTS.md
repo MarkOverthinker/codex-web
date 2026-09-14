@@ -1,6 +1,7 @@
 # Repository guidance
 
 - Keep the public edition free of credentials, private hosts, personal account IDs, and production-only deployment details.
+- Use a non-personal Git identity, keep the privacy hooks enabled, and run `npm run check:privacy` before publishing. Keep operator-specific forbidden terms only in the ignored `.privacy.local.json`, never in source, tests, or commit messages. See `docs/PUBLIC_PRIVACY.md` when needed.
 - Preserve server-side persistence for queued prompts, attachments, messages, events, and Codex threads.
 - Maintain the separation between the web UID and the tenant worker UID.
 - Run `npm test` before submitting changes.

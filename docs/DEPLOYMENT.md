@@ -386,9 +386,9 @@ generated `README-OFFLINE.md` inside the bundle for details.
 
 Terminate TLS at your reverse proxy and forward `/codex-web/` to `http://127.0.0.1:37821/codex-web/`. Preserve the path prefix, pass the original host and protocol headers, disable response buffering for event streams, and use a long read timeout for active tasks.
 
-Set `PUBLIC_BASE_URL` to the final URL. When the frp server uses a non-80
-`vhostHTTPPort`, include that port in the URL (for example
-`http://proxy-html.example.com:8088/codex-web`). Do not publish container port
+Set `PUBLIC_BASE_URL` to the final HTTPS URL. When the reverse proxy uses a
+non-default HTTPS port, include that port in the URL (for example
+`https://codex.example.com:8443/codex-web`). Do not publish container port
 37821 directly to the internet.
 
 For optional cloud voice transcription (`TRANSCRIPTION_PROVIDER=dashscope`), keep `DASHSCOPE_API_KEY` only in `.env`. The default context budget is 500 approximate tokens, two images, and 2 MiB per image. Adjust `TRANSCRIPTION_CONTEXT_TOKEN_BUDGET`, `TRANSCRIPTION_CONTEXT_MAX_IMAGES`, and `TRANSCRIPTION_CONTEXT_MAX_IMAGE_BYTES` only after considering request cost and data exposure. Local voice transcription (`TRANSCRIPTION_PROVIDER=local`) does not use these cloud credentials or context settings; see [Local voice input](LOCAL_VOICE.md).
