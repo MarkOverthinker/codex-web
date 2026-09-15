@@ -41,6 +41,9 @@ Task-list categories are also persisted per user in `user_settings`: custom
 category names, which directories they contain, the pinned-category order, and
 hidden-category keys. Without an explicit task drag, conversations inside each
 category are ordered by `updated_at` with the most recently active task first.
+Automatic startup repair of unavailable model, provider, reasoning, or sandbox
+selections updates only those configuration fields and preserves `updated_at`, so
+an application upgrade cannot make inactive conversations appear recently active.
 The browser derives the grouped sidebar view from conversations, favorites, and
 that settings record; category expanded/collapsed state and desktop sidebar
 visibility are kept in `localStorage`.
