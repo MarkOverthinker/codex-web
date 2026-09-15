@@ -1281,6 +1281,20 @@ export class AppDatabase {
     if (fields.status !== undefined) this.sqlite.prepare("UPDATE conversations SET status=?, updated_at=? WHERE id=?").run(fields.status, new Date().toISOString(), id);
   }
 
+  repairConversationAgentSelection(id: string, selection: StoredAgentSelection): void {
+    this.sqlite.prepare(`
+      UPDATE conversations
+      SET agent_model=?, reasoning_effort=?, agent_provider=?, sandbox_mode=?
+      WHERE id=?
+    `).run(
+      selection.model,
+      selection.reasoningEffort,
+      selection.provider ?? null,
+      selection.sandbox ?? "workspace-write",
+      id,
+    );
+  }
+
   markConversationResultSeenForUser(id: string, userId: string): ConversationRow | undefined {
     const conversation = this.getConversationForUser(id, userId);
     if (!conversation) return undefined;

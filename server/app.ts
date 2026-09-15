@@ -226,7 +226,7 @@ export function createApp(overrides: AppOverrides = {}) {
     const selection = repairAgentSelection(options, fallback.model, fallback.reasoningEffort, fallback.sandbox);
     if (conversation.agent_model !== selection.model || conversation.reasoning_effort !== selection.reasoningEffort
       || conversation.agent_provider !== (selection.provider ?? null) || (conversation.sandbox_mode ?? "workspace-write") !== selection.sandbox) {
-      db.updateConversation(conversation.id, { agentSelection: selection });
+      db.repairConversationAgentSelection(conversation.id, selection);
     }
     return selection;
   }

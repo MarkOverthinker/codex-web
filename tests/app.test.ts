@@ -1549,6 +1549,33 @@ test("legacy databases gain durable selections and preserve existing titles", (c
   assert.equal(reopened.getConversation("legacy")?.sandbox_mode, "workspace-write");
 });
 
+test("startup agent selection repair preserves conversation activity timestamps", (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-selection-repair-timestamp-test-"));
+  const dataRoot = path.join(root, "data");
+  const tenantRoot = path.join(root, "tenants");
+  const originalUpdatedAt = "2026-01-02T03:04:05.000Z";
+  const initial = new AppDatabase(dataRoot, { username: "owner", passwordHash: "", displayName: "Owner" }, false);
+  initial.createConversation("old-task", "Old task", {
+    model: "retired-model",
+    reasoningEffort: "retired-effort",
+    sandbox: "workspace-write",
+  });
+  initial.sqlite.prepare("UPDATE conversations SET updated_at=? WHERE id='old-task'").run(originalUpdatedAt);
+  initial.close();
+
+  const instance = createApp({
+    projectRoot: process.cwd(), dataRoot, tenantRoot, queueAutoStart: false,
+    username: "owner", passwordHash: "",
+    sessionSecret: "test-session-secret-that-is-longer-than-thirty-two-characters",
+  });
+  context.after(() => { instance.db.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const repaired = instance.db.getConversation("old-task");
+  assert.notEqual(repaired?.agent_model, "retired-model");
+  assert.notEqual(repaired?.reasoning_effort, "retired-effort");
+  assert.equal(repaired?.updated_at, originalUpdatedAt);
+});
+
 test("legacy task category orders reset once and remain available after a new manual order", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cww-task-category-order-migration-test-"));
   const settings = { customCategories: [], pinned: [], hidden: [], conversationOrders: { "auto:standalone": ["old-task"] } };
