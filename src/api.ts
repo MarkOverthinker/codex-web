@@ -2,6 +2,7 @@ import type { TaskListCategorySettings } from "./task-categories.js";
 import type { GitReview, ReviewScope } from "./git-review.js";
 import type { MessageSourceReference } from "./message-source.js";
 import type { VoiceOptions } from "./voice-options.js";
+import type { Automation, AutomationInput, AutomationRun } from "./automation-types.js";
 import { billingQuery, type BillingRange } from "./billing-range.js";
 
 export type { MessageSourceReference } from "./message-source.js";
@@ -327,6 +328,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  automations: () => request<{ automations: Automation[] }>("/automations"),
+  saveAutomation: (input: AutomationInput, id?: string) => request<{ automation: Automation }>(id ? `/automations/${id}` : "/automations", { method: id ? "PUT" : "POST", body: JSON.stringify(input) }),
+  enableAutomation: (id: string, enabled: boolean) => request<{ automation: Automation }>(`/automations/${id}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
+  deleteAutomation: (id: string) => request<void>(`/automations/${id}`, { method: "DELETE" }),
+  runAutomation: (id: string) => request<{ runId: string }>(`/automations/${id}/run`, { method: "POST" }),
+  automationRuns: (automationId?: string, offset = 0) => request<{ runs: AutomationRun[] }>(`/automation-runs?${new URLSearchParams({ ...(automationId ? { automationId } : {}), offset: String(offset) })}`),
   terminalOpen: (id: string, size: { cols: number; rows: number }, signal?: AbortSignal) => request<{ terminalId: string }>(`/conversations/${id}/terminal`, { method: "POST", body: JSON.stringify(size), signal }),
   terminalRead: (id: string, terminalId: string, after: number, signal?: AbortSignal) => request<import("./terminal-protocol.js").TerminalSnapshot>(`/conversations/${id}/terminal/${terminalId}?after=${after}&waitMs=10000`, { signal }),
   terminalUpdate: (id: string, terminalId: string, command: { action: "write"; data: string } | { action: "resize"; cols: number; rows: number }, signal?: AbortSignal) => request<{ ok: true }>(`/conversations/${id}/terminal/${terminalId}`, { method: "POST", body: JSON.stringify(command), signal }),

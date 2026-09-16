@@ -1,5 +1,6 @@
 import { createContext, Fragment, memo, useCallback, useContext, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
+import { AutomationsPage } from "./automations-page";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -465,6 +466,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
   const [billingPanelOpen, setBillingPanelOpen] = useState(false);
+  const [automationsOpen, setAutomationsOpen] = useState(false);
   const [presetPromptManagerOpen, setPresetPromptManagerOpen] = useState(false);
   const [presetPrompts, setPresetPrompts] = useState<PresetPrompt[]>([]);
   const [presetSaving, setPresetSaving] = useState(false);
@@ -2785,6 +2787,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
           </div>
         : <button className="new-task" onClick={() => void newConversation()}><Plus size={17} />新建任务</button>}
       <button className="import-sessions-button" onClick={() => void openImportDialog()} title="导入本地 Codex 历史会话"><Download size={15} />导入历史会话</button>
+      <button className="import-sessions-button" onClick={() => { setAutomationsOpen(true); setSidebarOpen(false); }}><Timer size={15} />自动任务</button>
       <div className="search-box"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索任务" /></div>
       <div className="conversation-section">
         <div className="section-label"><span>任务</span><span className="section-label-actions"><strong>{visibleTaskCount}</strong>{workingDirSettings?.enabled && taskCategorySettings && <div className="task-view-toggle" role="group" aria-label="任务视图">
@@ -3212,6 +3215,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
       onClose={() => setFileExplorerOpen(false)}
     />}
     <BillingPanel open={billingPanelOpen} onClose={() => setBillingPanelOpen(false)} builtinModels={agentOptions?.models.filter((model) => !model.provider) ?? []} />
+    {automationsOpen && <AutomationsPage options={agentOptions} workingDirs={workingDirSettings} onClose={() => setAutomationsOpen(false)} onOpenConversation={(id) => { setSelectedId(id); setAutomationsOpen(false); }} />}
     {snippetPreview
       ? <CodeSnippetPane
           key={`${snippetPreview.conversationId}:${snippetPreview.path}:${snippetPreview.line}`}

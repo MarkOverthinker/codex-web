@@ -12,6 +12,8 @@ An unofficial, self-hosted web workspace for the OpenAI Codex CLI. It adds persi
 
 ## What it includes
 
+- Daily automations with a working directory, explicit time zone, model, reasoning effort, permission mode, and fixed prompt; dedicated management and run-history views create a fresh durable conversation for every run. See [Automations](docs/AUTOMATIONS.md) for catch-up, overlap, and deployment rules.
+
 - A unified repository workspace with branch/upstream status, change counts, a filterable file tree, syntax-highlighted diffs, rendered Markdown, and source previews. Compare working-tree, staged, or branch changes in a resizable desktop pane or mobile layout. Commit/push requests require explicit confirmation and run as durable Codex tasks under existing identity, sandbox, and approval rules—not as direct Git write endpoints. See [Repository workspace](docs/GIT_REVIEW.md) for behavior and limits.
 
 - A responsive React chat interface for Codex CLI

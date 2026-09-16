@@ -1,0 +1,48 @@
+.automations-page { --border: var(--line); --text: var(--ink); --bg: var(--paper); --accent: var(--indigo); width: min(1120px, calc(100vw - 48px)); height: min(860px, calc(100dvh - 48px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--border); border-radius: 16px; color: var(--text); background: var(--bg); }
+.automations-page[open] { display: flex; flex-direction: column; }
+.automations-page::backdrop { background: rgb(0 0 0 / 45%); }
+.automations-header, .automations-header > div, .automations-tabs, .automations-toolbar, .automation-card-heading, .automation-actions, .automation-pagination { display: flex; align-items: center; gap: 12px; }
+.automations-header { justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--border); }
+.automations-header h1 { margin: 0; font-size: 20px; }
+.automations-tabs { padding: 12px 24px; border-bottom: 1px solid var(--border); }
+.automations-page button { cursor: pointer; }
+.automations-tabs button, .automation-actions button:not(.primary-button), .automation-pagination button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface); }
+.automations-tabs button[aria-current="page"] { border-color: var(--accent); color: var(--accent); }
+.automations-content { overflow: auto; flex: 1; min-height: 0; padding: 24px; }
+.automations-toolbar { justify-content: space-between; align-items: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
+.automations-toolbar h2 { font-size: 18px; margin: 0 0 8px; }
+.automations-toolbar p, .automation-help, .automation-meta { font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.automation-help { margin-bottom: 20px; }
+.automation-editor { padding: 20px; margin-bottom: 20px; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); }
+.automation-editor h3 { margin: 0 0 18px; }
+.automation-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.automation-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+.automations-page label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; min-width: 0; }
+.automations-page input:not([type="checkbox"]), .automations-page select, .automations-page textarea { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; box-sizing: border-box; }
+.automations-page textarea { resize: vertical; line-height: 1.65; }
+.automations-page .automation-checkbox { flex-direction: row; align-items: center; }
+.automation-list { display: grid; gap: 16px; }
+.automation-card { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.automation-card-heading { justify-content: space-between; }
+.automation-card h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.automation-card p { margin: 10px 0; }
+.automation-status { flex-shrink: 0; border-radius: 6px; background: var(--bg); padding: 4px 8px; font-size: 12px; }
+.automation-status.completed, .automation-notice { color: var(--accent); }
+.automation-status.failed, .automation-error { color: #c34b45; overflow-wrap: anywhere; }
+.automation-status.running, .automation-status.queued { color: var(--accent); }
+.automation-prompt { white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.6; }
+.automation-run-prompt { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; }
+.automation-actions { flex-wrap: wrap; margin-top: 16px; }
+.automation-empty { padding: 48px 16px; text-align: center; color: var(--muted); }
+.automation-pagination { justify-content: center; margin-top: 24px; font-size: 13px; }
+.automations-page button:disabled { opacity: .5; cursor: not-allowed; }
+.automations-page summary { cursor: pointer; font-size: 13px; }
+@media (max-width: 640px) {
+  .automations-page { width: 100vw; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
+  .automations-header { padding: 16px; }
+  .automations-tabs { padding: 10px 16px; }
+  .automations-content { padding: 16px; }
+  .automation-fields { grid-template-columns: 1fr; }
+  .automation-editor { padding: 14px; }
+  .automation-actions button { min-height: 40px; }
+}
