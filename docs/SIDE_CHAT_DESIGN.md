@@ -32,6 +32,7 @@ The interaction borrows the Windows app's split-workspace idea: keep the main ta
 - Primary conversation lists exclude sidecars; the side-chat history API exposes active sidecars with their originating task title.
 - Archiving, restoring, or deleting a primary conversation applies to all sidecars created from it.
 - `pending_prompts.source_reference` preserves structured references when a side message waits in the queue.
+- A queued side-chat job exposes the same confirmed skip-queue action as a primary task and refreshes the side thread after promotion; the shared server endpoint retains ownership checks and durable `skip_queue` semantics.
 - A Fork-created sidecar stores `fork_source_thread_id`, `fork_last_turn_id`, and `fork_source_message_id` while `codex_thread_id` remains empty until the first send. If it is promoted before that send, copied-message references resolve against `fork_source_thread_id` until the new fork thread is created.
 
 ## JSONL resolution
