@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { AutomationError, Automations } from "./automations.js";
+import { registerAutomationRoutes } from "./automation-routes.js";
 import { TerminalManager, TerminalError } from "./terminal-manager.js";
 import { TerminalClient } from "./terminal-client.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
@@ -3154,6 +3156,40 @@ export function createApp(overrides: AppOverrides = {}) {
     });
   });
 
+  const automations = new Automations(db, {
+    validate(userId, input) {
+      try {
+        const selection = resolveAgentSelection(optionsForUser(userId), input.model, input.reasoningEffort, undefined, input.sandbox);
+        let workingDir: string | null = null;
+        if (input.workingDir) {
+          if (!config.hostMode || !hostTenantFor(config, db, userId)) throw new Error("自定义工作目录仅支持已映射系统账户的 host 模式。");
+          workingDir = resolveSubmittedWorkingDir(input.workingDir);
+        }
+        return { input: { ...input, workingDir }, selection };
+      } catch (error) { throw new AutomationError(error instanceof Error ? error.message : "自动任务配置无效。"); }
+    },
+    prepare(userId) {
+      if (!config.hostMode) return;
+      const host = hostTenantFor(config, db, userId);
+      if (!host || !isCodexConfigured(host.codexHome, { uid: host.uid, gid: host.gid })) {
+        throw new Error(host ? CODEX_CONFIG_HINT : "该用户没有对应的系统账户，无法运行 Codex 任务。");
+      }
+    },
+    blocked() {
+      if (shuttingDown) return true;
+      try {
+        const ageMs = Date.now() - fs.statSync(codexUpdateMaintenanceFile).mtimeMs;
+        return ageMs >= 0 && ageMs < 60 * 60 * 1000;
+      } catch { return false; }
+    },
+    dispatch() {
+      publishQueuePositions();
+      if (config.queueAutoStart) setImmediate(() => void pumpQueue());
+    },
+    onError(error) { logger.error({ err: error }, "Automation scheduler failed"); },
+  });
+  registerAutomationRoutes(api, automations);
+
   router.use("/api", api);
   const SHARE_TEXT_LIMIT_BYTES = 2 * 1024 * 1024;
   function shareBytesLabel(bytes: number): string {
@@ -3295,8 +3331,8 @@ export function createApp(overrides: AppOverrides = {}) {
 
   if (config.queueAutoStart) setImmediate(() => void pumpQueue());
   return {
-    app, db, runner, rolloutUsage, config, logger, pumpQueue,
-    beginShutdown: () => { shuttingDown = true; terminals.dispose(); terminalClient?.dispose(); void rolloutUsage.stop(); },
+    app, db, runner, rolloutUsage, config, logger, pumpQueue, automations,
+    beginShutdown: () => { shuttingDown = true; automations.stop(); terminals.dispose(); terminalClient?.dispose(); void rolloutUsage.stop(); },
   };
 }
 
