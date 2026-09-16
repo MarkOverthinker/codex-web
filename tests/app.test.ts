@@ -445,6 +445,17 @@ test("side chat exposes promotion into the primary task list", () => {
   assert.match(appSource, /侧边对话已转为主任务/);
 });
 
+test("side chat exposes skip-queue for its queued active job", () => {
+  const paneSource = fs.readFileSync(path.join(process.cwd(), "src", "side-chat-pane.tsx"), "utf8");
+  const styles = fs.readFileSync(path.join(process.cwd(), "src", "styles.css"), "utf8");
+  assert.match(paneSource, /detail\?\.activeJob\?\.status === "queued"/);
+  assert.match(paneSource, /api\.skipQueuedJob\(jobId\)/);
+  assert.match(paneSource, /跳过排队将立即启动该侧边任务/);
+  assert.match(paneSource, /跳过排队直接执行/);
+  assert.match(paneSource, /await refresh\(current\.conversation\.id, false\)/);
+  assert.match(styles, /\.side-chat-skip-queue \{/);
+});
+
 test("chat font sizing keeps readable bounds and scales from the default", () => {
   assert.equal(normalizeChatFontSize(undefined), CHAT_FONT_SIZE_DEFAULT);
   assert.equal(normalizeChatFontSize("18"), 18);

@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
-import { ArrowUp, ArrowUpRight, Bot, Copy, CornerUpLeft, GitFork, LoaderCircle, Plus, Quote, Square, X } from "lucide-react";
+import { ArrowUp, ArrowUpRight, Bot, Copy, CornerUpLeft, GitFork, LoaderCircle, Plus, Quote, Square, X, Zap } from "lucide-react";
 import {
   api,
   type AgentModelOption,
@@ -116,6 +116,7 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
   const [promoting, setPromoting] = useState(false);
   const [selectionSaving, setSelectionSaving] = useState(false);
   const [contextSaving, setContextSaving] = useState(false);
+  const [skippingQueue, setSkippingQueue] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef(input);
   const detailRef = useRef(detail);
@@ -367,6 +368,21 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
     }
   }
 
+  async function skipQueuedJob(jobId: string) {
+    const current = detailRef.current;
+    if (!current || current.activeJob?.id !== jobId || current.activeJob.status !== "queued" || skippingQueue) return;
+    if (!window.confirm("跳过排队将立即启动该侧边任务。若同一工作目录已有其他任务正在运行，两个 Codex 会话可能同时读写该目录，是否继续？")) return;
+    setSkippingQueue(true);
+    try {
+      await api.skipQueuedJob(jobId);
+      await refresh(current.conversation.id, false);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "侧边任务跳过排队失败");
+    } finally {
+      setSkippingQueue(false);
+    }
+  }
+
   function changeModel(modelId: string) {
     if (!detail || !agentOptions) return;
     const model = agentOptions.models.find((candidate) => candidate.id === modelId);
@@ -461,7 +477,9 @@ export function SideChatPane({ voiceModels, voicePreferenceKey, currentConversat
         : detail?.messages.length
           ? detail.messages.map((message) => <SideMessage key={message.id} message={message} citationFiles={citationFiles} onOpenSourceReference={onOpenSourceReference} />)
           : <div className="side-chat-empty"><Bot size={24} /><strong>{detail ? "独立上下文，随时追问" : "当前任务还没有侧边对话"}</strong><span>{detail ? "可继续当前历史，或从上方切换、新建其他侧边对话。" : "直接输入、引用当前主对话，或点击“新建”开始。"}</span></div>}
-      {busy && <div className="side-chat-running"><LoaderCircle className="spin" size={14} /><span>{detail?.activeJob?.status === "running" ? "正在处理" : "等待执行"}</span></div>}
+      {busy && <div className="side-chat-running"><LoaderCircle className="spin" size={14} /><span>{detail?.activeJob?.status === "running" ? "正在处理" : "等待执行"}</span>
+        {detail?.activeJob?.status === "queued" && <button type="button" className="side-chat-skip-queue" disabled={skippingQueue} onClick={() => void skipQueuedJob(detail.activeJob!.id)}><Zap size={12} /><span>{skippingQueue ? "正在启动" : "跳过排队直接执行"}</span></button>}
+      </div>}
     </div>
     <form className="side-chat-composer" onSubmit={submit}>
       <div className="side-chat-context-actions">
