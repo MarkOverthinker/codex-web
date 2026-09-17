@@ -265,8 +265,12 @@ categories, move a directory into one, pin categories, reorder pinned
 categories, and hide categories you do not want in the sidebar; category
 definitions, directory assignment, pin order, and hidden categories are
 persisted on the server while category expanded/collapsed state and desktop
-sidebar visibility stay in the browser. On desktop, use the panel button in
-the top bar to hide or restore the task sidebar.
+sidebar visibility stay in the browser. On desktop, use the collapse button
+beside the sidebar logo or the panel button in the top bar to hide the task
+sidebar; the top-bar button restores it at its saved width. Collapsing moves
+keyboard focus to the restore button, and the preference does not affect the
+mobile task drawer. Composer permission controls follow the selected theme,
+including the red warning treatment for full-access mode.
 Inside a category, tasks default to most-recently-active first. You can
 long-press and drag its tasks to choose a persistent custom order (normal
 swiping still scrolls the list); tasks created after a saved order stay visible

@@ -431,6 +431,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
   const closeMobileSidebar = useCallback(() => setSidebarOpen(false), []);
   useMobileDrawer(sidebarOpen, closeMobileSidebar);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readLocalStorageValue(SIDEBAR_COLLAPSED_KEY) === "true");
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const [sideChatOpen, setSideChatOpen] = useState(false);
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -2494,6 +2495,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     const next = !sidebarCollapsed;
     setSidebarCollapsed(next);
     writeLocalStorageValue(SIDEBAR_COLLAPSED_KEY, String(next));
+    if (next) sidebarToggleRef.current?.focus();
   }
 
   async function toggleCategoryPinned(view: TaskListCategoryView) {
@@ -2749,6 +2751,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     <aside id="primary-sidebar" className={`sidebar ${sidebarOpen ? "open" : ""}`} style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
       <div className="sidebar-top">
         <div className="wordmark"><span className="brand-mark small"><Zap size={15} /></span><span className="brand-copy"><strong>Codex Web</strong><small>SELF-HOSTED CODEX WORKSTATION</small></span></div>
+        <button type="button" className="icon-button sidebar-collapse-toggle" aria-label="收起侧栏" aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title="收起侧栏" onClick={toggleDesktopSidebar}><PanelLeftClose size={18} /></button>
         <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="关闭"><X size={19} /></button>
       </div>
       {workingDirSettings?.enabled
@@ -3151,7 +3154,7 @@ function Workspace({ session, onLogout, onSessionChange, themePreference, onThem
     <PathBrowserDialog request={pathBrowser} onClose={() => setPathBrowser(null)} />
 
     <main className={`workspace ${currentDetail?.pendingPrompts.length ? "has-pending-queue" : ""}`} style={{ "--chat-column-width": `${chatColumnWidth}px` } as CSSProperties}>
-      <header className="desktop-header"><div className="desktop-header-leading"><button type="button" className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} onClick={toggleDesktopSidebar}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></div></header>
+      <header className="desktop-header"><div className="desktop-header-leading"><button ref={sidebarToggleRef} type="button" className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} aria-controls="primary-sidebar" aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "隐藏侧栏"} onClick={toggleDesktopSidebar}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><div className="desktop-header-copy"><span>CODEX WEB</span><strong>AI 工作台</strong></div></div></header>
       <header className="mobile-header"><button className="icon-button" onClick={() => setSidebarOpen(true)} aria-label="打开任务列表" aria-controls="primary-sidebar" aria-expanded={sidebarOpen}><Menu size={22} /></button><div className="mobile-title"><strong>{currentDetail?.conversation.title ?? "Codex Web"}</strong><small>{sending ? "任务执行中 · 可继续排队" : "你的 AI 工作台"}</small></div><button type="button" className="icon-button" onClick={() => void newConversation()} aria-label="新建任务"><Plus size={22} /></button><div id="mobile-chat-tools" /></header>
       {currentDetail ? <LiveActivitiesContext.Provider value={activities}><Chat detail={currentDetail} reasoningSteps={reasoningSteps} taskDurationSeconds={taskDurationSeconds} sending={sending} loadingOlderMessages={loadingOlderMessages} messagesRef={messagesRef} onMessagesScroll={handleMessagesScroll} onJumpToUserMessage={jumpToUserMessage} onEditMessage={(message) => void beginMessageEdit(message)} onForkSideChat={forkMessageToSideChat} onAskAgent={askAgentAbout} onAskSideChat={askSideChatAbout} onToggleSideChat={toggleSideChat} sideChatOpen={sideChatOpen} onToggleFileExplorer={toggleFileExplorer} fileExplorerOpen={fileExplorerOpen} onOpenBilling={() => setBillingPanelOpen(true)} onNewConversationFromSource={(messageId, excerpt) => newConversationFromSourceRef.current(messageId, excerpt)} onOpenSnippet={openCodeSnippet} onOpenSourceReference={openSourceReference} userInitials={account.initials} chatFontSize={chatFontSize} workingDirSettings={workingDirSettings} workingDirSaving={workingDirSaving} onWorkingDirChange={handleChatWorkingDirChange} onBrowseWorkingDir={(initialPath) => setPathBrowser({ mode: "dir", title: "选择工作目录", confirmLabel: "使用该目录", initialPath, onSelect: (paths) => { const path = paths[0] ?? null; if (path) handleChatWorkingDirChange(path); } })} onPreview={openFilePreview} onSkipQueue={skipQueuedJob} skipQueueBusy={skippingQueue} /></LiveActivitiesContext.Provider>
         : loadingConversation ? <ConversationLoading />
