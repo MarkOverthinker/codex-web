@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const approvedBinaryFiles = new Set([
   "android/gradle/wrapper/gradle-wrapper.jar",
+  "docs/screenshots/desktop.png",
+  "docs/screenshots/mobile.png",
+  "docs/screenshots/review.png",
   "public/apple-touch-icon.png",
   "public/favicon.ico",
 ]);
