@@ -39,6 +39,17 @@ test("privacy checks allow examples and retain third-party attribution", () => {
   assert.deepEqual(textPrivacyProblems("hidden-operator", "licenses/vendor/NOTICE", { forbiddenLiterals: ["HIDDEN-OPERATOR"] }), ["operator-specific private value"]);
 });
 
+test("only explicitly reviewed product screenshot paths are allowed", (context) => {
+  const project = fixture(context);
+  for (const name of ["desktop.png", "mobile.png", "review.png", "unreviewed.png"]) {
+    project.write(`docs/screenshots/${name}`, Buffer.from([0, 1, 2]));
+  }
+  project.git("add", ".");
+  assert.deepEqual(checkPrivacy({ cwd: project.cwd, staged: true }), [
+    { filename: "docs/screenshots/unreviewed.png", rule: "binary content requires explicit privacy review" },
+  ]);
+});
+
 test("privacy check scans staged bytes, not a cleaned working copy", (context) => {
   const project = fixture(context);
   project.write("README.md", privateHome);
