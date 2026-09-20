@@ -46,7 +46,8 @@ if [[ ! -d "$tenant_root" ]]; then
   echo "找不到租户根目录 $tenant_root；如使用自定义路径请设置 TENANT_ROOT。" >&2
   exit 2
 fi
-if ! command -v codex >/dev/null 2>&1; then
+codex_bin="$(command -v codex || true)"
+if [[ -z "$codex_bin" ]]; then
   echo "未找到 codex；请先安装 Codex CLI。" >&2
   exit 2
 fi
@@ -154,7 +155,7 @@ if [[ "$owner_uid" -ne "$(id -u)" ]]; then
   fi
 fi
 
-login_args=(codex login)
+login_args=("$codex_bin" login)
 [[ "$mode" == "device" ]] && login_args+=(--device-auth)
 echo "租户 $tenant 当前登录：$(describe_auth "$tenant_home/auth.json")"
 echo "本次登录使用临时 CODEX_HOME $staging，成功后才会覆盖 $tenant_home/auth.json；桌面端 ~/.codex 不受影响。"

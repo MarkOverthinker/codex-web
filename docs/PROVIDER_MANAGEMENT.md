@@ -21,6 +21,8 @@ CODEX_HOME=<TENANT_ROOT>/<user-id>/host-codex-home codex login --device-auth
 
 登录后无需重启 codex-web：app-server 会在下一次任务时重新读取 `auth.json`。一个 Web home 同时只能有一个启用的官方 OAuth 源（见下方“通用限制”）。
 
+每个 Web 用户各自持有一份 `auth.json`，因此官方 OAuth 需要**逐用户**登录：给成员开通时，先用 `sudo ./scripts/relogin-host-codex.sh` 体检，再对该成员的 user-id 执行 `--device`。成员也可以用同一个 ChatGPT 账号登录（会在该账号下多出一个独立会话），但各 Web home 之间不共享凭据，也不会互相吊销。关闭“API 源管理”的用户不使用数据库源，需要自己在 `config.toml` 中维护 `requires_openai_auth = true` 的源。
+
 API 源管理按 Web 用户独立保存，默认关闭。关闭时，codex-web 不读取数据库中的 provider 记录，也不会写入或生成 Web 专用 `config.toml`、`models_cache.json`；模型菜单直接读取该用户 Codex Home 中由用户自行维护的 `models_cache.json` 或 `models.json`，任务执行沿用用户自己的 `config.toml`。
 
 在个人设置中打开“API 源管理”后，才会启用本文后续的数据库源、模型目录和配置生成流程。关闭管理不会删除数据库记录或改写现有文件；再次打开时，已有管理记录可能重新生成受管理的配置，请确认记录内容与本地文件一致。
