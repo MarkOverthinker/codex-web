@@ -125,7 +125,7 @@ read_owned_file() {
     cat "$file"
     return
   fi
-  if [[ "$sudo_ready" == true ]] && sudo -n cat "$file" 2>/dev/null; then
+  if [[ "$sudo_ready" == true ]] && sudo cat "$file" 2>/dev/null; then
     return
   fi
   return 1
@@ -168,6 +168,11 @@ report_tenant() {
 }
 
 if [[ "$mode" == "status" ]]; then
+  # 状态查询不主动索要口令，但 sudo 凭据仍在缓存里时就用上它，
+  # 否则其他租户的文件一律显示 unreadable，无法查看修复结果。
+  if [[ "$sudo_ready" != true ]] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo_ready=true
+  fi
   if [[ -n "$tenant" ]]; then
     [[ -d "${tenant_root}/$tenant/host-codex-home" ]] || { echo "找不到租户 $tenant。" >&2; exit 2; }
     report_tenant "$tenant"
@@ -197,7 +202,11 @@ owner="$(tenant_owner "$tenant")"
 owner_uid="${owner%%:*}"; owner_gid="${owner##*:}"
 
 if [[ "$owner_uid" -ne "$(id -u)" ]]; then
-  [[ "$(id -u)" -eq 0 ]] || echo "请以仓库属主身份运行；脚本会用 sudo 切换到租户用户 $owner_uid。" >&2
+  if [[ "$(id -u)" -eq 0 ]]; then
+    echo "提示：当前是 root，脚本将以租户用户 $owner_uid 执行登录。" >&2
+  else
+    echo "提示：目标租户属主是 uid $owner_uid，脚本会用 sudo 切换用户，需要 sudo 口令。" >&2
+  fi
   command -v sudo >/dev/null 2>&1 || { echo "未找到 sudo。" >&2; exit 2; }
   sudo -v
   sudo_ready=true
@@ -245,10 +254,16 @@ if ! run_login; then
   exit 1
 fi
 
-node -e '
-  const auth = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+# 临时 home 属于租户用户，本进程可能读不到；沿用 read_owned_file 的提权路径，
+# 否则会出现"登录成功但校验读不到文件"的假失败。
+staging_auth="$(read_owned_file "$staging/auth.json" || true)"
+if [[ -z "$staging_auth" ]] || ! printf '%s' "$staging_auth" | node -e '
+  const auth = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
   if (auth.auth_mode !== "chatgpt" || !auth.tokens?.refresh_token) process.exit(1);
-' "$staging/auth.json" || { echo "登录未产生可用的 ChatGPT 凭据，已保留 $tenant_home/auth.json 不变。" >&2; exit 1; }
+'; then
+  echo "登录未产生可用的 ChatGPT 凭据，已保留 $tenant_home/auth.json 不变；临时 home 仍在 $staging。" >&2
+  exit 1
+fi
 
 if [[ "$owner_uid" -eq "$(id -u)" ]]; then
   install -m 600 "$staging/auth.json" "$tenant_home/auth.json"
