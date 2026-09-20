@@ -22,6 +22,8 @@ Store exact operator-specific hostnames, deployment paths and sensitive operatio
 
 Keep this file private (`chmod 600 .privacy.local.json`). Do not copy real secrets into it or into test fixtures. The file is local only and is not available to public CI. Missing policy means only generic rules run; malformed policy fails closed.
 
+Machine account names are deployment identifiers, so every Web user except the owner account belongs in that list. `scripts/add-tenant.mjs` appends a new user to the policy when it creates the account, and `node scripts/sync-privacy-usernames.mjs` re-syncs the list from the local database (add `--dry-run` to preview). Both only edit the ignored local file, so the public repository learns nothing about who is hosted; the owner account name stays out of the list because it is already the published contributor identity.
+
 ## Before every publication
 
 1. Review `git status --short` and stage only intended files. Do not use a blanket add in a checkout containing unrelated work.

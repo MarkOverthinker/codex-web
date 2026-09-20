@@ -159,3 +159,38 @@ test("outgoing checks accept public changes with normal Git identities", (contex
   assert.deepEqual(checkOutgoing({ cwd: project.cwd, input }), []);
   assert.throws(() => checkOutgoing({ cwd: project.cwd, input: "invalid input" }), /Invalid pre-push input/);
 });
+
+const { syncPrivacyUsernames, nonOwnerUsernames } = await import("../scripts/sync-privacy-usernames.mjs");
+const { DatabaseSync } = await import("node:sqlite");
+
+test("tenant usernames are appended to the local privacy policy", (context) => {
+  const project = fixture(context);
+  assert.deepEqual(syncPrivacyUsernames(project.cwd, ["alice", "bob"]), ["alice", "bob"]);
+  assert.deepEqual(readPrivacyPolicy(project.cwd).forbiddenLiterals, ["alice", "bob"]);
+  assert.equal(fs.statSync(path.join(project.cwd, ".privacy.local.json")).mode & 0o777, 0o600);
+
+  // Existing operator terms survive, repeats are not duplicated, blanks are ignored.
+  project.write(".privacy.local.json", JSON.stringify({ forbiddenLiterals: ["private-host", "ALICE"] }));
+  assert.deepEqual(syncPrivacyUsernames(project.cwd, ["alice", "bob", "  "]), ["bob"]);
+  assert.deepEqual(readPrivacyPolicy(project.cwd).forbiddenLiterals, ["private-host", "ALICE", "bob"]);
+});
+
+test("a dry run reports new terms without writing them", (context) => {
+  const project = fixture(context);
+  assert.deepEqual(syncPrivacyUsernames(project.cwd, ["alice"], { dryRun: true }), ["alice"]);
+  assert.equal(fs.existsSync(path.join(project.cwd, ".privacy.local.json")), false);
+});
+
+test("the owner account is not treated as a private term", (context) => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-users-"));
+  context.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
+  const sqlite = new DatabaseSync(path.join(dataRoot, "codex-web.sqlite"));
+  try {
+    sqlite.exec("CREATE TABLE users(id TEXT, username TEXT, role TEXT)");
+    sqlite.exec("INSERT INTO users VALUES ('1','owner-user','owner'),('2','member-one','member'),('3','member-two','member')");
+  } finally {
+    sqlite.close();
+  }
+  assert.deepEqual(nonOwnerUsernames(dataRoot), ["member-one", "member-two"]);
+  assert.deepEqual(nonOwnerUsernames(path.join(dataRoot, "missing")), []);
+});

@@ -10,6 +10,7 @@ import { AppDatabase } from "../dist-server/server/db.js";
 import { ensureTenant } from "../dist-server/server/paths.js";
 import { assignTenantIdentity } from "../dist-server/server/tenant-identities.js";
 import { isCodexConfigured, resolveSystemUser, prepareHostTenant } from "../dist-server/server/host-mode.js";
+import { syncPrivacyUsernames } from "./sync-privacy-usernames.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const containerized = process.env.CONTAINERIZED === "true";
@@ -87,6 +88,16 @@ if (containerized) {
   execFileSync(process.execPath, [path.join(scriptDir, "apply-tenant-permissions.mjs")], { stdio: "inherit" });
   execFileSync(process.execPath, [path.join(scriptDir, "seed-host-codex.mjs")], { stdio: "inherit" });
 }
+
+// Machine account names are deployment identifiers: keep them out of the public
+// repository by adding the new user to the ignored local privacy policy.
+try {
+  const added = syncPrivacyUsernames(path.dirname(scriptDir), [username]);
+  if (added.length) console.log(`Local privacy policy now also forbids: ${added.join(", ")}`);
+} catch (error) {
+  console.warn(`Could not update .privacy.local.json: ${error instanceof Error ? error.message : error}`);
+}
+
 console.log(`Done. ${username} can log in at ${config.basePath || "/"}/ now.`);
 
 function addHostSystemUser(username) {
