@@ -139,7 +139,8 @@ fi
 # codex login deletes the credential of the CODEX_HOME it runs against, so a
 # failed or abandoned login must not be able to log the tenant out. The
 # scratch home lives outside TENANT_ROOT because that directory is root-owned.
-staging="$(mktemp -d "${TMPDIR:-/tmp}/codex-web-relogin-$tenant-XXXXXX")"
+staging="$(mktemp -d "${TMPDIR:-/tmp}/codex-web-relogin-$tenant-XXXXXX" 2>/dev/null \
+  || mktemp -d "/tmp/codex-web-relogin-$tenant-XXXXXX")"
 chmod 700 "$staging"
 if [[ "$owner_uid" -ne "$(id -u)" ]]; then
   if [[ "$(id -u)" -eq 0 ]]; then
