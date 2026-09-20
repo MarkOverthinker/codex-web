@@ -19,7 +19,7 @@ CODEX_HOME=<TENANT_ROOT>/<user-id>/host-codex-home codex login --device-auth
 
 注意 `codex login` 会先删除它所用 `CODEX_HOME` 中现有的凭据，失败或被中断会让该 home 掉线；仓库脚本 `scripts/relogin-host-codex.sh` 因此在临时 home 中登录，校验成功后才覆盖 `auth.json`。脚本不带参数时按租户列出登录状态（`stale` 表示访问令牌已过期，`unreadable` 表示需要 sudo 读取其他租户文件）。
 
-授权端点会拒绝受限地区的直连（403 `unsupported_country_region_territory`）。若该主机需要代理才能访问 ChatGPT，请在带代理变量的 shell 中运行脚本：`sudo`/`su` 会重置环境变量，脚本会把调用方的 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`/`SOCKS_PROXY`/`NO_PROXY`（含小写形式）显式传给登录进程；未检测到代理变量时会给出提示。
+授权端点会拒绝受限地区的直连（403 `unsupported_country_region_territory`）。`sudo`/`su` 都会重置环境变量并丢掉代理设置，因此脚本做了三层处理：以 `sudo ./scripts/…` 启动时从调用方进程的 `/proc/<pid>/environ` 读回代理；把 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`/`SOCKS_PROXY`/`NO_PROXY`（含小写形式）显式传给降权后的登录进程；登录前先探测一次 `auth.openai.com`，命中地区限制时立即报错退出，不会先打印设备码。最省事的做法仍是以仓库属主身份运行（脚本内部按需调用 sudo）。
 
 登录后无需重启 codex-web：app-server 会在下一次任务时重新读取 `auth.json`。一个 Web home 同时只能有一个启用的官方 OAuth 源（见下方“通用限制”）。
 

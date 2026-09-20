@@ -52,6 +52,70 @@ if [[ -z "$codex_bin" ]]; then
   exit 2
 fi
 
+# ChatGPT 的授权端点会拒绝受限地区的直连（403
+# unsupported_country_region_territory）。sudo 和 su 都会重置环境变量，把调用方
+# 的代理设置丢掉，因此这里做三件事：必要时从调用方进程恢复、显式传给登录进程、
+# 登录前先探测一次端点。
+proxy_vars=(
+  HTTPS_PROXY HTTP_PROXY ALL_PROXY SOCKS_PROXY NO_PROXY
+  https_proxy http_proxy all_proxy socks_proxy no_proxy
+)
+
+# 被 `sudo ./scripts/...` 启动时，本进程的环境已经被 sudo 清空；调用方 shell
+# 里仍有代理设置，而此刻我们是 root，可以从 /proc/<pid>/environ 读回来。
+recover_proxy_from_caller() {
+  [[ "$(id -u)" -eq 0 && -n "${SUDO_UID:-}" ]] || return 0
+  local pid="${PPID}" depth=0 dump name value
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$depth" -lt 6 ]]; do
+    if [[ -r "/proc/$pid/environ" && "$(stat -c %u "/proc/$pid" 2>/dev/null)" == "$SUDO_UID" ]]; then
+      dump="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)"
+      if [[ "$dump" == *"proxy="* || "$dump" == *"PROXY="* ]]; then
+        for name in "${proxy_vars[@]}"; do
+          value="$(printf '%s\n' "$dump" | sed -n "s/^${name}=//p" | head -n 1)"
+          if [[ -n "$value" ]]; then export "$name=$value"; fi
+        done
+        return 0
+      fi
+    fi
+    pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    depth=$((depth + 1))
+  done
+}
+
+collect_proxy_env() {
+  proxy_env=()
+  local name
+  for name in "${proxy_vars[@]}"; do
+    if [[ -n "${!name:-}" ]]; then proxy_env+=("$name=${!name}"); fi
+  done
+}
+
+recover_proxy_from_caller
+collect_proxy_env
+
+# 预检：该端点只接受 POST，可达时会返回 405；受限地区直连返回 403。
+probe_auth_endpoint() {
+  command -v curl >/dev/null 2>&1 || return 0
+  local result code body
+  result="$(curl -s -m 15 -w $'\n%{http_code}' https://auth.openai.com/api/accounts/deviceauth/token 2>/dev/null || true)"
+  code="${result##*$'\n'}"
+  body="${result%$'\n'*}"
+  [[ "$code" == "403" ]] || return 0
+  if [[ "$body" == *unsupported_country_region_territory* ]]; then
+    echo "预检失败：请求 auth.openai.com 时直连出口被地区限制拒绝（unsupported_country_region_territory）。" >&2
+    if [[ "${#proxy_env[@]}" -eq 0 ]]; then
+      echo "当前进程没有代理变量（sudo/su 会清空环境）。请在本机带 HTTPS_PROXY/HTTP_PROXY 的 shell 中运行，或改用：" >&2
+      echo "  sudo --preserve-env=HTTPS_PROXY,HTTP_PROXY,ALL_PROXY,SOCKS_PROXY -- $0 ${tenant:-<user-id>} --device" >&2
+      echo "也可以先以仓库属主身份（不加 sudo）运行本脚本，脚本内部会按需调用 sudo。" >&2
+    else
+      echo "已检测到代理变量但仍被拒，请检查代理是否可用。" >&2
+    fi
+    exit 1
+  fi
+  echo "提示：auth.openai.com 预检返回 403，继续尝试登录。" >&2
+}
+
+
 sudo_ready=false
 
 # Read a tenant file that may be owned by another tenant UID.
@@ -125,6 +189,8 @@ if [[ -z "$tenant" ]]; then
   echo "--device/--browser 需要一个租户 user-id；先运行本脚本不带参数查看列表。" >&2
   exit 2
 fi
+
+probe_auth_endpoint
 tenant_home="${tenant_root}/$tenant/host-codex-home"
 [[ -d "$tenant_home" ]] || { echo "找不到 $tenant_home。" >&2; exit 2; }
 owner="$(tenant_owner "$tenant")"
@@ -143,7 +209,7 @@ fi
 # A Codex Web task sets TMPDIR inside its own job runtime, which is reclaimed
 # with the job; a scratch home must outlive the process that started it.
 staging_root="${TMPDIR:-/tmp}"
-[[ "$staging_root" == *"/.runtime/jobs/"* ]] && staging_root="/tmp"
+if [[ "$staging_root" == *"/.runtime/jobs/"* ]]; then staging_root="/tmp"; fi
 staging="$(mktemp -d "$staging_root/codex-web-relogin-$tenant-XXXXXX" 2>/dev/null \
   || mktemp -d "/tmp/codex-web-relogin-$tenant-XXXXXX")"
 chmod 700 "$staging"
@@ -156,18 +222,9 @@ if [[ "$owner_uid" -ne "$(id -u)" ]]; then
 fi
 
 login_args=("$codex_bin" login)
-[[ "$mode" == "device" ]] && login_args+=(--device-auth)
+if [[ "$mode" == "device" ]]; then login_args+=(--device-auth); fi
 echo "租户 $tenant 当前登录：$(describe_auth "$tenant_home/auth.json")"
 echo "本次登录使用临时 CODEX_HOME $staging，成功后才会覆盖 $tenant_home/auth.json；桌面端 ~/.codex 不受影响。"
-
-# ChatGPT 的授权端点会拒绝来自受限地区的直连（403
-# unsupported_country_region_territory），而两台 host 在 sudo/su 之后都会重置
-# 环境变量，把调用方的代理设置丢掉；所以这里把它们显式传给登录进程。
-proxy_env=()
-for name in HTTPS_PROXY HTTP_PROXY ALL_PROXY SOCKS_PROXY NO_PROXY \
-            https_proxy http_proxy all_proxy socks_proxy no_proxy; do
-  [[ -n "${!name:-}" ]] && proxy_env+=("$name=${!name}")
-done
 
 run_login() {
   local cmd=(env "CODEX_HOME=$staging" "${proxy_env[@]}" "${login_args[@]}")
