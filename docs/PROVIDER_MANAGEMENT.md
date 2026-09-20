@@ -4,6 +4,23 @@
 
 宿主模式使用独立的 `TENANT_ROOT/<user-id>/host-codex-home`。首次初始化复制系统用户的配置、认证、技能和必要的历史快照；后续启动、源管理、登录刷新只更新 Web 目录。桌面端的默认源和认证文件保持独立。需要重新登录 Web 时，以该系统用户身份设置这个专用 `CODEX_HOME` 后运行 `codex login`；桌面端登录变化不会自动覆盖 Web 的登录。
 
+### 官方 OAuth 为什么必须为 Web 单独登录
+
+首次初始化复制的是桌面端 `auth.json` 的一次性快照，两个 Codex Home 因此从同一份 ChatGPT 刷新令牌出发。ChatGPT 每次刷新都会轮换刷新令牌，并拒绝再次使用已消费的令牌：任何一侧先用它刷新，另一侧手里的副本立即失效，之后只会报 `Your access token could not be refreshed because your refresh token was revoked.`（后续请求的响应体为 `code: token_revoked`）。桌面端重新登录不会修复 Web：只在 Web home 尚无 `config.toml` 时才做初始化复制，之后不会再导入认证文件。
+
+修复方式是在 Web 专用 `CODEX_HOME` 中完成一次独立登录：
+
+```bash
+# 以该系统用户身份执行；<user-id> 为 Web 用户目录名
+CODEX_HOME=<TENANT_ROOT>/<user-id>/host-codex-home codex login
+# 浏览器无法回调到本机时改用设备码登录
+CODEX_HOME=<TENANT_ROOT>/<user-id>/host-codex-home codex login --device-auth
+```
+
+注意 `codex login` 会先删除它所用 `CODEX_HOME` 中现有的凭据，失败或被中断会让该 home 掉线；仓库脚本 `scripts/relogin-host-codex.sh` 因此在临时 home 中登录，校验成功后才覆盖 `auth.json`。脚本不带参数时按租户列出登录状态（`stale` 表示访问令牌已过期，`unreadable` 表示需要 sudo 读取其他租户文件）。
+
+登录后无需重启 codex-web：app-server 会在下一次任务时重新读取 `auth.json`。一个 Web home 同时只能有一个启用的官方 OAuth 源（见下方“通用限制”）。
+
 API 源管理按 Web 用户独立保存，默认关闭。关闭时，codex-web 不读取数据库中的 provider 记录，也不会写入或生成 Web 专用 `config.toml`、`models_cache.json`；模型菜单直接读取该用户 Codex Home 中由用户自行维护的 `models_cache.json` 或 `models.json`，任务执行沿用用户自己的 `config.toml`。
 
 在个人设置中打开“API 源管理”后，才会启用本文后续的数据库源、模型目录和配置生成流程。关闭管理不会删除数据库记录或改写现有文件；再次打开时，已有管理记录可能重新生成受管理的配置，请确认记录内容与本地文件一致。
