@@ -160,15 +160,33 @@ login_args=("$codex_bin" login)
 echo "租户 $tenant 当前登录：$(describe_auth "$tenant_home/auth.json")"
 echo "本次登录使用临时 CODEX_HOME $staging，成功后才会覆盖 $tenant_home/auth.json；桌面端 ~/.codex 不受影响。"
 
+# ChatGPT 的授权端点会拒绝来自受限地区的直连（403
+# unsupported_country_region_territory），而两台 host 在 sudo/su 之后都会重置
+# 环境变量，把调用方的代理设置丢掉；所以这里把它们显式传给登录进程。
+proxy_env=()
+for name in HTTPS_PROXY HTTP_PROXY ALL_PROXY SOCKS_PROXY NO_PROXY \
+            https_proxy http_proxy all_proxy socks_proxy no_proxy; do
+  [[ -n "${!name:-}" ]] && proxy_env+=("$name=${!name}")
+done
+
 run_login() {
-  local cmd=(env "CODEX_HOME=$staging" "${login_args[@]}")
+  local cmd=(env "CODEX_HOME=$staging" "${proxy_env[@]}" "${login_args[@]}")
   if [[ "$owner_uid" -eq "$(id -u)" ]]; then
     "${cmd[@]}"
   else
     sudo -u "#$owner_uid" -H "${cmd[@]}"
   fi
 }
-run_login
+if ! run_login; then
+  echo "" >&2
+  echo "登录未完成，$tenant_home/auth.json 保持原样。" >&2
+  if [[ "${#proxy_env[@]}" -eq 0 ]]; then
+    echo "当前环境未设置代理变量。若报 403 unsupported_country_region_territory，说明请求是直连出去的（本机直连 ChatGPT 授权端点会被拒），请先 export HTTPS_PROXY/HTTP_PROXY 再重试。" >&2
+  else
+    echo "已按当前代理设置重试仍失败时，可改用本机浏览器回调：$0 --browser $tenant。" >&2
+  fi
+  exit 1
+fi
 
 node -e '
   const auth = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
